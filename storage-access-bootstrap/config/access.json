@@ -1,0 +1,28 @@
+{
+  "apiVersion": "storage.sunmoonai.com/v1alpha1",
+  "kind": "ObjectStorageAccess",
+  "metadata": {
+    "name": "research-admin-backend"
+  },
+  "spec": {
+    "provider": "platform-s3",
+    "environment": "development",
+    "app": "research-app",
+    "backend": "research-admin-backend",
+    "namespace": "app-platform-dev",
+    "secretName": "research-admin-backend-s3",
+    "configMapName": "research-admin-backend-s3",
+    "region": "us-east-1",
+    "forcePathStyle": true,
+    "useTLS": false,
+    "deletionPolicy": "Retain",
+    "buckets": [
+      {
+        "name": "development-research-admin-assets",
+        "permissions": ["read", "write", "delete", "list"],
+        "versioning": true,
+        "objectLock": false
+      }
+    ]
+  }
+}
