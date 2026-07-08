@@ -75,7 +75,7 @@ Phase 0:  Walking Skeleton
 Phase 0.5: Minimal evaluation/golden harness
 Phase 1:  Semantic freeze and message boundary
 Phase 2:  EventSink and projection
-Phase 3+: Larger V1 platform
+Phase 3+: Larger M1 platform
 ```
 
 Phase 0 must validate physical assumptions before platform buildout:
@@ -223,7 +223,7 @@ This script becomes the first golden case in Phase 0.5.
 
 - Do not copy old MoocManus files into the new source tree.
 - Do not implement full Planner-ReAct before Phase 0 passes.
-- Do not introduce `TransportMessage` in V1.
+- Do not introduce `TransportMessage` in M1.
 - Do not route graph control with DomainEvent/UIEvent.
 - Do not run long agent work inside the FastAPI request lifecycle.
 - Do not connect user traffic until golden set passes.

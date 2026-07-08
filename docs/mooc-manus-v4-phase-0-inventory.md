@@ -18,7 +18,7 @@ Strict constraints that affect Phase 0:
 - DomainEvent is append-only truth.
 - UIEvent is rebuildable projection.
 - Redis Pub/Sub/SSE is transport only, not truth source.
-- TransportMessage envelope is V2 and must not be added to V1 domain.
+- TransportMessage envelope is M2 and must not be added to M1 domain.
 - Graph routing must use state/edge/Command/interrupt, not events.
 - Tool side effects must be idempotent under checkpoint replay.
 
@@ -102,8 +102,8 @@ Open dependency question:
 
 ```text
 Use LangGraph's official Postgres checkpointer package if available in the environment;
-otherwise create a temporary V1 CheckpointPort wrapper only for the skeleton, then replace
-with the official checkpointer before V1 release gate.
+otherwise create a temporary M1 CheckpointPort wrapper only for the skeleton, then replace
+with the official checkpointer before the M1 release gate.
 ```
 
 ## 4. Existing Runtime Hooks
@@ -221,7 +221,7 @@ This script becomes the first golden case in Phase 0.5.
 
 - Do not copy old MoocManus files into the target source.
 - Do not implement full Planner-ReAct before Phase 0 acceptance passes.
-- Do not introduce TransportMessage in V1.
+- Do not introduce TransportMessage in M1.
 - Do not route graph control through DomainEvent/UIEvent.
 - Do not build UI polish during Phase 0.
 - Do not connect user traffic until golden set passes.

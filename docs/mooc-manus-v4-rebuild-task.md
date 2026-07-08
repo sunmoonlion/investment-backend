@@ -27,7 +27,7 @@ Do not reuse old MoocManus as the engineering base:
 
 Strict v4 rule: validation comes before platform buildout. Walking Skeleton is Phase 0 and must run before semantic freeze and full domain modeling.
 
-## 1. V1 Target
+## 1. M1 Target
 
 Build one working vertical slice:
 
@@ -44,11 +44,11 @@ FastAPI request
 
 The first graph must be deliberately tiny. It should validate checkpoint, SSE reconciliation, and side-effect idempotency before the larger Planner-ReAct implementation begins.
 
-## 2. V1/V2 Scope Discipline
+## 2. M1/M2 Scope Discipline
 
-V1 includes only what is needed for a single graph to run, recover, stream, and be evaluated.
+M1 includes only what is needed for a single graph to run, recover, stream, and be evaluated.
 
-V1 must include:
+M1 must include:
 
 - Walking Skeleton.
 - Minimal golden/eval harness.
@@ -61,7 +61,7 @@ V1 must include:
 - Checkpoint + interrupt + resume.
 - ACL boundary rules.
 
-V1 explicitly does not include:
+M1 explicitly does not include:
 
 - TransportMessage envelope.
 - Full four event categories.
@@ -115,7 +115,7 @@ Minimum implementation checklist:
 
 - [ ] Add `langgraph` dependency.
 - [ ] Add `langchain-core` dependency.
-- [ ] Choose/check V1 Postgres checkpointer dependency.
+- [ ] Choose/check M1 Postgres checkpointer dependency.
 - [ ] Add minimal run/session/event tables needed by the skeleton.
 - [ ] Add a minimal Celery task that runs the graph.
 - [ ] Add ask-user interrupt path.
@@ -172,8 +172,8 @@ Hard rules:
 Source: v4 §10.4, §18, §24.
 
 - [ ] Define `RunLineage`.
-- [ ] Define V1 `DomainEvent`.
-- [ ] Define V1 `UIEvent`.
+- [ ] Define M1 `DomainEvent`.
+- [ ] Define M1 `UIEvent`.
 - [ ] Define `EventSink`.
 - [ ] Define `TimelineProjector`.
 - [ ] Persist `session_events` with `category`, `payload_schema_version`, `lineage`, `payload`, `metadata`.
@@ -214,7 +214,7 @@ Source: v4 §12.
 - [ ] Add session-scoped memory repository.
 - [ ] Add compaction/summary service.
 
-V1 only:
+M1 only:
 
 - Session memory and summarization.
 - LongTermMemory interface placeholder only.
@@ -254,7 +254,7 @@ Acceptance:
 - Waiting tasks survive process restart.
 - Resume continues from interrupt point.
 
-## 12. Phase 7: V1 Release Gate
+## 12. Phase 7: M1 Release Gate
 
 - [ ] Single graph passes golden set.
 - [ ] Old project golden samples are compared as behavior reference.
@@ -263,7 +263,7 @@ Acceptance:
 
 Acceptance:
 
-- V1 is demoable, recoverable, measurable, and protected by tests.
+- M1 is demoable, recoverable, measurable, and protected by tests.
 
 ## 13. Important Paths
 
