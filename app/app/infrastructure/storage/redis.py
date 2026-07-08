@@ -24,6 +24,9 @@ class RedisClient:
                 db=self._settings.redis_db,
                 password=self._settings.redis_password,
                 decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                health_check_interval=30,
             )
             if self._settings.redis_user:
                 kw["username"] = self._settings.redis_user
