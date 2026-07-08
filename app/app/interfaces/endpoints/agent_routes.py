@@ -58,7 +58,10 @@ async def create_run(
         idempotency_key=request.idempotency_key,
         agent_profile_key=request.agent_profile_key,
     )
-    return await service.create_run(command)
+    try:
+        return await service.create_run(command)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/runs/{run_id}/resume")

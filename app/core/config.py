@@ -11,8 +11,10 @@ class Settings(BaseSettings):
 
     # 数据库（读 DATABASE_URL，自动补 +asyncpg 驱动前缀）
     database_url: str = "postgresql+asyncpg://research:research@localhost:5432/research"
+    # 可选：Alembic 迁移专用账号。运行时仍使用 DATABASE_URL。
+    migration_database_url: str | None = None
 
-    @field_validator("database_url", mode="before")
+    @field_validator("database_url", "migration_database_url", mode="before")
     @classmethod
     def ensure_asyncpg(cls, v: str) -> str:
         if isinstance(v, str) and v.startswith("postgresql://"):

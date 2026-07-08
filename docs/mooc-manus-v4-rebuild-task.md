@@ -42,7 +42,7 @@ FastAPI request
   -> last_event_id reconnect补发 works
 ```
 
-The first graph must be deliberately tiny. It should validate checkpoint, SSE reconciliation, and side-effect idempotency before the larger Planner-ReAct implementation begins.
+The first graph must be deliberately tiny. It should validate checkpoint, SSE reconciliation, and side-effect idempotency before the larger M1 graph runtime begins.
 
 ## 2. M1/M2 Scope Discipline
 
@@ -70,6 +70,9 @@ M1 must include:
 - Run state machine, idempotency_key, session lock.
 - Reducer and tool side-effect idempotency.
 - Checkpoint + interrupt + resume.
+- Lightweight AgentProfile / EffectiveAgentConfig switching inside the single graph.
+- Context / State / Memory / Workspace / Database / Object Storage layer checks.
+- Strategy / Visitor / Handler Registry constraints at the supported variation points.
 - ACL boundary rules.
 
 M1 explicitly does not include:
@@ -84,6 +87,7 @@ M1 explicitly does not include:
 - Deep RAGFlow integration.
 - Full multi-tenant SecurityContext propagation.
 - EvidenceAssembler.
+- Workspace/Project entity and `workspaces` / `projects` tables.
 
 M2 starts only after the M1 release gate. It is still part of the complete v4
 roadmap, but must be triggered by real product/load needs rather than pulled
@@ -101,6 +105,7 @@ M2 roadmap:
 - Full multi-tenant SecurityContext propagation, quotas, and stronger isolation.
 - Long-term memory Store integration beyond the M1 interface/placeholder.
 - EvidenceAssembler and multi-source evidence packaging.
+- Workspace/Project as a product organization layer for sessions, files, knowledge bindings, default AgentProfile, and permissions.
 - Production data scaling: partitioning, archiving, retention, and governance.
 
 ## 3. Phase -1: App Platform Boundary
@@ -143,23 +148,24 @@ defer decision.
 | §7 Ports | Define domain ports for LLM, tools, checkpoint, memory, event sink, sandbox, files, knowledge. | TransportPort stays M2. |
 | §8 Control/Data plane | Use code/YAML constants for M1 effective config. | Versioned GraphSpec/AgentProfile publishing. |
 | §9 Principles/ACL | Add import boundary checks and naming rules. | Expand governance as platform grows. |
+| §9.6.1 / §26.1 Layering | Add no-mixing tests for Context, State, Memory, Workspace, Database, Object Storage. M1 reserves `project_id` only as an optional placeholder and does not create Workspace entities. | Workspace/Project product organization layer and object/file governance. |
 | §10 Domain models | Implement UserInput, StoredMessage, minimal Commands, RunLineage, DomainEvent/UIEvent, Plan/Step. | Full event class families and Command bus. |
 | §11 Message mapping | Implement BaseMessage <-> StoredMessage serializer, validators, upcaster skeleton. | Broader schema migration tooling. |
 | §12 Memory | Implement AgentMemory/MemoryPolicy and session summary/compaction. Leave LongTermMemory interface placeholder. | Long-term Store extraction/retrieval/attribution. |
 | §13 RAGFlow | Define KnowledgePort and optional read-only retrieve adapter boundary. | Deep RAGFlow ask/ingest/KnowledgeAgent/EvidenceAssembler. |
-| §14 LangGraph runtime | Build Phase 0 two-node graph first, then Planner-ReAct single graph with idempotent reducers. | Supervisor/multi-agent. |
+| §14 LangGraph runtime | Build Phase 0 two-node graph first, then the first M1 graph with `BaseAgentState`, graph-specific state, and idempotent reducers. Planner-ReAct is only the first concrete graph shape, not the platform architecture. | Additional graph shapes, GraphRegistry, Supervisor/multi-agent. |
 | §15 Replay safety | Implement reducer idempotency, tool_call_id side-effect cache, session lock, idempotency_key, resume token. | GraphRegistry/run version pinning. |
 | §16 Errors/budget | Implement AgentError and RunBudget checks. | Provider-level routing optimization. |
 | §17 HITL | Implement ask_user interrupt/resume and waiting/running state transitions. | Approval UI and advanced HITL modes. |
 | §18 Events/SSE | Implement DBEventSink, TimelineProjector, session_events schema, UIEvent replay, LiveDelta/final reconciliation. | TransportMessage envelope, CQRS read models, TraceSink. |
 | §19 Tools | Implement ToolExecutionPort, permissions, ToolResultHandlerRegistry, default/simple handlers. | Full tool suite, approval UI, advanced artifact flows. |
-| §20 Multi-agent | Single Planner-ReAct graph only. | Supervisor and specialized agents. |
+| §20 AgentProfile / Multi-agent | M1 supports lightweight AgentProfile switching inside one graph runtime: different prompt/tools/permissions/model/memory policy without forking graph code. | AgentRegistry, GraphRegistry, Supervisor and specialized agents. |
 | §21 SecurityContext | Add fixed/single-tenant SecurityContext structure and pass through queue/tools. | Full tenant propagation, quotas, isolation. |
 | §22 Sandbox | Add SandboxPort and local/dev side-effect implementation; design K8sPodSandbox boundary. | Pooling, quota, gVisor/Kata, sandbox manager. |
 | §23 Model/Prompt | Add LLMPort and one provider adapter or deterministic fake for tests; prompt constants with prompt_id. | Multi-provider gateway/fallback/prompt registry. |
 | §24 Persistence | Add sessions, agent_runs, session_events, optional tool_side_effects; include schema_version/lineage fields. | agent_memories/long_term_memories/session_files scaling and partitioning. |
 | §25 Config | Code/YAML config only. | Versioned config publishing. |
-| §26 Runtime boundary | Runtime package exposes facade only. | Extract runtime to service if load requires. |
+| §26 Runtime boundary / patterns | Runtime package exposes facade only. Use Protocol + registry + small handlers for ToolResultHandler, TimelineProjector, MemoryPolicy, LLMPort, SandboxPort, and future EvidenceAssembler. | Extract runtime to service if load requires; deeper strategy sets when product needs them. |
 | §27 Safety | Add prompt-injection and tool-permission checks at adapters. | Stronger governance/audit flows. |
 | §28 Observability/eval | Structured logs with RunLineage; golden harness starts from Phase 0. | TraceSink and expanded eval metrics. |
 | §29 Tests | Unit/integration/golden tests for M1 gates. | Production-scale eval suites. |
@@ -189,7 +195,7 @@ Current limitation:
 
 Explicit non-goals:
 
-- Do not implement the full Planner-ReAct graph.
+- Do not implement the full first M1 graph runtime before the walking skeleton is green.
 - Do not introduce GraphRegistry, TransportMessage, CQRS read models, or multi-agent orchestration.
 - Do not build long-term memory; only add the minimum stable hooks needed by the skeleton.
 - Do not route user traffic to this path until the M1 release gate passes.
@@ -467,31 +473,48 @@ Previously blocked validation:
 
 Source: v4 §28.3 and §35 task 0.5.
 
-- [ ] Turn Phase 0 validation script into the first golden case.
-- [ ] Add fixture format for golden tasks.
-- [ ] Add LLM recording/replay harness placeholder, even if Phase 0 graph uses no LLM.
-- [ ] Add CI/test command that can run the golden case deterministically.
+- [x] Turn the Phase 0 walking skeleton behavior into the first golden case.
+- [x] Add fixture format for golden tasks.
+- [x] Add LLM recording/replay harness placeholder, even if Phase 0 graph uses no LLM.
+- [x] Add CI/test command that can run the golden case deterministically.
 
 Acceptance:
 
-- A future prompt/graph/tool change can be checked against at least one golden case.
-- No live LLM call is required for this first validation.
+- [x] A future prompt/graph/tool change can be checked against at least one golden case.
+- [x] No live LLM call is required for this first validation.
+
+Current golden cases, 2026-07-08:
+
+```bash
+cd /home/zymun/research-app/research-admin-backend/app
+uv run python scripts/run_agent_golden.py
+uv run python scripts/run_agent_golden.py --fixture tests/golden/first_m1_graph.json
+uv run pytest
+```
+
+Result:
+
+- `tests/golden/phase0_walking_skeleton.json` fixes the Phase 0 inputs, expected resumed state, expected DomainEvent -> UIEvent projection, and expected timeline.
+- `tests/golden/first_m1_graph.json` fixes the first M1 graph input, plan shape, assistant output, and zero-live-LLM expectation.
+- `scripts/run_agent_golden.py` dispatches fixture types without Postgres, Redis, Celery, or live LLM calls.
+- `tests/test_agent_golden.py` makes both fixtures part of the normal test suite.
+- `pytest`: 39 passed.
 
 ## 6. Phase 1: Semantic Freeze and Message Boundary
 
 Source: v4 §9.2, §10, §11, §31.1.
 
-- [ ] Define `UserInput`.
-- [ ] Define `StoredMessage`.
-- [ ] Define minimal `CreateRunCommand`, `ResumeRunCommand`, `CancelRunCommand`.
-- [ ] Define serializer/upcaster skeleton.
-- [ ] Use LangChain Core `BaseMessage` only behind adapters/ACL.
-- [ ] Add tests for message sequence validity.
-- [ ] Add import-boundary checks:
+- [x] Define `UserInput`.
+- [x] Define `StoredMessage`.
+- [x] Define minimal `CreateRunCommand`, `ResumeRunCommand`, `CancelRunCommand`.
+- [x] Define serializer/upcaster skeleton.
+- [x] Use LangChain Core `BaseMessage` only behind adapters/ACL.
+- [x] Add tests for message sequence validity.
+- [x] Add import-boundary checks:
   - domain models cannot import `langgraph` or `langchain_core`.
   - application services cannot directly import `langgraph`.
   - LangGraph/LangChain types live only in runtime/adapters/mappers.
-- [ ] Add ADR-001, ADR-002, ADR-003, ADR-010, ADR-022.
+- [x] Add ADR-001, ADR-002, ADR-003, ADR-010, ADR-022.
 
 Hard rules:
 
@@ -500,16 +523,25 @@ Hard rules:
 - `Event` names facts that already happened.
 - Domain models must not import LangGraph.
 
+Current implementation snapshot, 2026-07-08:
+
+- `StoredMessage` and `MessageRole` live in `app/domain/agent/models.py`.
+- `CancelRunCommand` lives with `CreateRunCommand` and `ResumeRunCommand` in `app/domain/agent/commands.py`.
+- `upcast_stored_message` is the first schema-version gate for stored messages.
+- LangChain `BaseMessage` conversion is isolated in `app/infrastructure/agent/message_mapper.py`.
+- `tests/test_agent_message_boundary.py` covers current-schema upcast, LangChain adapter mapping, command naming, and import-boundary checks.
+- ADR-001, ADR-002, ADR-003, ADR-010, and ADR-022 record the accepted semantic-boundary decisions.
+
 ## 7. Phase 2: EventSink and Projection
 
 Source: v4 §10.4, §18, §24.
 
-- [ ] Define `RunLineage`.
-- [ ] Define M1 `DomainEvent`.
-- [ ] Define M1 `UIEvent`.
-- [ ] Define `EventSink`.
-- [ ] Define `TimelineProjector`.
-- [ ] Persist `session_events` with `category`, `payload_schema_version`, `lineage`, `payload`, `metadata`.
+- [x] Define `RunLineage`.
+- [x] Define M1 `DomainEvent`.
+- [x] Define M1 `UIEvent`.
+- [x] Define `EventSink`.
+- [x] Define `TimelineProjector`.
+- [x] Persist `session_events` with `category`, `payload_schema_version`, `lineage`, `payload`, `metadata`.
 - [ ] Add LiveDelta/final UIEvent reconciliation path.
 - [ ] Add ADR-013 and ADR-019.
 
@@ -544,59 +576,149 @@ Acceptance:
 
 Source: v4 §12.
 
-- [ ] Define `AgentMemory`.
-- [ ] Define `MemoryPolicy`.
-- [ ] Add session-scoped memory repository.
-- [ ] Add compaction/summary service.
-- [ ] Add memory tests for windowing, summary, schema_version, and safety flags.
+- [x] Define `AgentMemory`.
+- [x] Define `MemoryPolicy`.
+- [x] Add session-scoped memory repository.
+- [x] Add compaction/summary service.
+- [x] Add memory tests for windowing, summary, schema_version, and safety flags.
 
 M1 only:
 
 - Session memory and summarization.
 - LongTermMemory interface placeholder only.
 
-## 10. Phase 5: Planner-ReAct Graph
+Current implementation snapshot, 2026-07-08:
 
-Source: v4 §14, §15, §16, §19.
+- `AgentMemory`, `MemorySourceRef`, `MemoryScope`, `MemoryKind`, `MemoryWindow`, `MemoryPolicy`, and `WindowMemoryPolicy` live in `app/domain/agent/memory.py`.
+- `AgentMemoryService` builds a session memory window through a policy and repository.
+- `InMemoryAgentMemoryRepository` is the M1 in-process repository used by tests; no `agent_memories` table is introduced yet.
+- `tests/test_agent_memory.py` covers windowing, summaries, source/provenance, confidence, scope, sensitive filtering, schema_version, and keeping long-term memory out of the M1 session window.
+- Validation:
+  - `uv run pytest`: 17 passed.
+  - `uv run pyright`: 0 errors.
 
-- [ ] Define `AgentState`.
-- [ ] Add idempotent reducers.
-- [ ] Add `GraphRuntimeService` facade.
-- [ ] Add Planner-ReAct graph.
-- [ ] Add `RunBudget`.
-- [ ] Add `AgentError`.
-- [ ] Add `ToolResultHandlerRegistry`.
-- [ ] Add default handler and first tool handler.
-- [ ] Add `ToolExecutionPort`.
-- [ ] Add `LLMPort` and one provider/fake adapter.
-- [ ] Add tool permissions.
-- [ ] Add tool side-effect idempotency by `tool_call_id`.
-- [ ] Add tests for reducer idempotency.
+## 9.1 Phase 4A: Lightweight AgentProfile and Effective Config
+
+Source: v4 §0.1, §8, §20, §24.1, §31, §35.
+
+This is M1 scope. It is not multi-agent orchestration and not AgentRegistry.
+The goal is that one graph runtime can be concretized for different
+business agent shapes without forking graph code.
+
+- [x] Define `AgentProfile` and `EffectiveAgentConfig` domain/config models.
+- [x] Add a small built-in profile catalog, code or YAML backed.
+- [x] Keep `agent_profile_key` on `CreateRunCommand` and `agent_runs`.
+- [x] Record `agent_profile_version` on runs.
+- [x] Resolve profile at run start into prompt/model/tools/permissions/memory policy/ragflow binding.
+- [x] Add tests that two profiles select different effective config while using the same graph.
+- [x] Add permission test proving a profile can deny a tool.
 
 Hard rules:
 
+- M1 AgentProfile switching does not mean Supervisor, handoff, or multiple agents.
+- Do not add AgentRegistry or GraphRegistry in M1.
+- Do not let business code fork graph implementation per profile.
+- Profile resolution must happen before graph execution and be passed as effective config.
+
+Current implementation snapshot, 2026-07-08:
+
+- `AgentProfile`, `EffectiveAgentConfig`, and `MemoryPolicyConfig` live in `app/domain/agent/profiles.py`.
+- `build_builtin_profile_catalog()` provides `default_research` and `literature_review`.
+- `AgentRunService.create_run()` resolves the requested profile before persisting the run.
+- `agent_profile_key` and `agent_profile_version` are returned by the create-run API path.
+- `tests/test_agent_profile.py` covers profile switching, unknown-profile rejection, version persistence, and tool deny behavior.
+- Validation:
+  - `uv run pytest`: 10 passed.
+  - `uv run pyright`: 0 errors.
+  - `ENV=production LOG_LEVEL=WARNING uv run python -u scripts/validate_agent_phase0.py`: passed against remote Postgres/Redis.
+
+## 10. Phase 5: First M1 Graph Runtime
+
+Source: v4 §14, §15, §16, §19.
+
+- [x] Define `BaseAgentState` for orchestration-independent execution fields.
+- [x] Define the first graph-specific state, e.g. `PlannerReactState`, only for fields specific to that graph shape.
+- [x] Add idempotent reducers.
+- [x] Add `GraphRuntimeService` facade.
+- [x] Add the first M1 graph. Planner-ReAct may be the first concrete shape, but generic runtime code must not be named after it.
+- [x] Add `RunBudget`.
+- [x] Add `AgentError`.
+- [x] Add `ToolResultHandlerRegistry`.
+- [x] Add default handler and first tool handler.
+- [x] Add `ToolExecutionPort`.
+- [x] Add `LLMPort` and one provider/fake adapter.
+- [x] Add tool permissions.
+- [x] Add tool side-effect idempotency by `tool_call_id`.
+- [x] Add tests for reducer idempotency.
+
+Hard rules:
+
+- `BaseAgentState` owns common fields such as ids, messages, tool results, artifacts, status, budget, and lineage.
+- Graph-specific state owns only orchestration-specific fields such as plan/current step.
+- Changing graph shape later must add a new graph-specific state, not rename or overload the base state.
 - Nodes return state patches.
 - Side effects go through ports/services/sinks.
 - Runner must not branch with `if/elif` by `tool_name`.
+- New tools add ToolResultHandlers, not runner branches.
+
+Current implementation snapshot, 2026-07-08:
+
+- `BaseAgentState`, `PlannerReactState`, `ArtifactRef`, `merge_versioned_dict`, `append_unique_by_id`, and `validate_base_state_layering` live in `app/infrastructure/graph/state.py`.
+- Common state uses references for artifacts and memory, not object bodies or memory dumps.
+- `tests/test_agent_graph_state.py` covers stale-plan rejection, replay-idempotent append, and State no-mixing checks.
+- `TimelineProjector` now uses event-type handlers with a default fallback instead of a hard-coded map-only flow.
+- `ToolExecutionResult`, `ArtifactRef`, `ToolResultProjection`, `ToolExecutionPort`, and `ToolResultHandler` live in `app/domain/agent/tools.py`.
+- `ToolResultHandlerRegistry` lives in `app/application/agent/tool_result_handlers.py` with default and file handlers.
+- Tool handlers project tool output into LLM-visible `StoredMessage`, `ArtifactRef`, and `DomainEvent` without runner `tool_name` branches.
+- `LLMPort`, `LLMContext`, `LLMRequest`, `LLMResponse`, and `EvidenceRef` live in `app/domain/agent/llm.py`.
+- `DeterministicFakeLLM` lives in `app/infrastructure/agent/fake_llm.py` and provides a no-network provider for tests/golden cases.
+- `SandboxPort`, `SandboxRequest`, and `SandboxResult` live in `app/domain/agent/sandbox.py`.
+- `DeterministicFakeSandbox` lives in `app/infrastructure/agent/fake_sandbox.py`; it never executes a real shell.
+- AgentProfile permission tests cover sandbox/tool allow-deny behavior.
+- `RunBudget`, `AgentError`, and `AgentErrorCode` live in `app/domain/agent/runtime.py`.
+- Budget tests cover immutable usage updates and structured `budget_exceeded` errors.
+- `GraphRuntimeService` lives in `app/application/agent/graph_runtime_service.py` and owns generic config/stream result handling without importing LangGraph.
+- `LangGraphRuntimeService` lives in `app/infrastructure/graph/langgraph_runtime.py` and translates resume input into LangGraph `Command`.
+- `ToolSideEffectService` lives in `app/application/agent/side_effect_service.py` and records side effects once by `tool_call_id`.
+- `AgentRepository.record_side_effect_once()` is the Postgres-backed store for the existing `tool_side_effects` table.
+- `build_first_m1_graph()` lives in `app/infrastructure/graph/first_m1_graph.py`; the file/builder use neutral first-graph naming while graph-specific state remains `PlannerReactState`.
+- First M1 graph tests cover input normalization, plan creation/update, assistant summary output, structured budget error, and no-mixing rejection at node boundary.
+- `tests/golden/first_m1_graph.json` is the first deterministic golden case for the M1 graph skeleton.
+- Validation:
+  - `uv run pytest`: 39 passed.
+  - `uv run pyright`: 0 errors.
+  - `uv run python scripts/run_agent_golden.py --fixture tests/golden/first_m1_graph.json`: passed.
+  - `ENV=production LOG_LEVEL=WARNING uv run python -u scripts/validate_agent_phase0.py`: passed against remote Postgres/Redis.
 
 ## 11. Phase 6: Durable HITL
 
 Source: v4 §17.
 
-- [ ] Implement ask_user interrupt.
-- [ ] Emit `HumanInputRequested`.
-- [ ] Project to `TimelineWaitInputDisplayed`.
-- [ ] Resume with `ResumeRunCommand`.
-- [ ] Validate resume token and session state.
+- [x] Implement ask_user interrupt.
+- [x] Emit `HumanInputRequested`.
+- [x] Project to `TimelineWaitInputDisplayed`.
+- [x] Resume with `ResumeRunCommand`.
+- [x] Validate resume token and session state.
 
 Acceptance:
 
 - Waiting tasks survive process restart.
 - Resume continues from interrupt point.
 
+Current implementation snapshot, 2026-07-08:
+
+- The Phase 0 graph uses LangGraph interrupt to stop at ask-user and persists `status='waiting'` plus `resume_token`.
+- `HumanInputRequested` projects to `TimelineWaitInputDisplayed`.
+- `AgentRunService.resume_run()` rejects missing runs, non-waiting runs, missing stored resume tokens, and token mismatches before dispatching the resume command.
+- Resume still runs through the Phase 0 Celery graph task and LangGraph `Command(resume=...)` adapter.
+- Validation:
+  - `uv run pytest`: 39 passed.
+  - `uv run pyright`: 0 errors.
+  - Real process kill/restart validation remains a release-gate script gap; checkpoint recovery across separate Postgres/checkpointer connections has already passed.
+
 ## 12. Phase 7: M1 Release Gate
 
-- [ ] Single graph passes golden set.
+- [x] Single graph passes golden set.
 - [ ] Old project golden samples are compared as behavior reference.
 - [ ] Phase 0 checkpoint/SSE/replay acceptance still passes.
 - [ ] Deployment templates support the M1 runtime:
@@ -635,7 +757,7 @@ Scope:
   - Redis URL/session lock/SSE settings
   - Celery broker URL injection
   - feature flag to keep v4 traffic disabled until release gate passes
-  - model/tool provider credentials only when the Planner-ReAct phase needs them
+  - model/tool provider credentials only when the first M1 graph runtime phase needs them
 - [ ] Keep `nodebullworker-research-web-backend` out of LangGraph execution.
 - [ ] Record image tags, deploy command, cluster, validation commands, and known deploy gaps in `docs/mooc-manus-v4-handoff.md`.
 
@@ -719,12 +841,70 @@ Minimum M1 tests:
 - Keep changes scoped to `research-admin-backend` until a phase explicitly needs frontend or k8s. Phase 7/8 explicitly includes k8s deployment closure.
 - Do not copy old MoocManus source.
 - Do not add a `state` table.
+- Do not add `workspaces` or `projects` tables in M1. `project_id`, if needed, is a placeholder field only.
 - Do not put TransportMessage in M1 domain.
 - Do not implement GraphRegistry in M1.
 - Do not route graph control through events.
 - Do not expose raw LangGraph events to frontend consumers.
 - Do not write long-term memory automatically before its M2 governance exists.
 - Do not connect user traffic before the M1 release gate passes.
+
+## 15.1 Context / State / Memory / Workspace / Storage Layer Gate
+
+Source: v4 §4.2, §9.6.1, §12.1, §26.1, ADR-029.
+
+Decision record: `docs/adr/ADR-029-context-state-memory-workspace-storage-layers.md`.
+
+Every new model/table/port/test must identify which layer it belongs to:
+
+```text
+Context: temporary LLM input package; not a source of truth.
+State: graph execution state; persisted only through checkpointer snapshots.
+Memory: recallable experience/fact/summary with source, confidence, TTL/sensitivity, and scope.
+Workspace/Project: M2 product organization layer; M1 does not create the entity or table.
+Database: structured facts, metadata, event stream, permissions, indexes, references.
+Object Storage: large objects such as files, screenshots, exports, tool artifacts, long logs.
+```
+
+M1 implementation checks:
+
+- [x] AgentState tests prove state contains small execution facts/references, not file bodies, full event history, or long-term memory dumps.
+- [x] Memory tests prove memory entries carry source/provenance, confidence, scope, and safety flags.
+- [x] Object-ref tests prove tool artifact fields are URI/ref/hash/metadata, not large object bodies.
+- [x] Context assembly tests prove Context is not persisted as a durable truth source.
+- [ ] Workspace/Project remains M2: no `workspaces`/`projects` table or product entity in M1.
+
+## 15.2 Strategy / Visitor / Handler Registry Gate
+
+Source: v4 §26.2 and ADR-030.
+
+Decision record: `docs/adr/ADR-030-strategy-visitor-handler-registry.md`.
+
+Use classic patterns only at real variation points. Prefer Protocol + registry +
+small handlers over inheritance-heavy designs.
+
+M1 variation points:
+
+- [x] `ToolResultHandlerRegistry`: tool result -> LLM-visible content, artifact refs, DomainEvent, UI card.
+- [x] `TimelineProjector`: DomainEvent -> UIEvent through event-type handlers/visitors.
+- [x] `MemoryPolicy`: windowing, summary, long-term write candidate, recall filter.
+- [x] `AgentProfile` / `EffectiveAgentConfig`: prompt, tools, permissions, model, memory policy, ragflow binding.
+- [x] `LLMPort`: provider adapter boundary; M1 may use one provider or deterministic fake.
+- [x] `SandboxPort`: local/dev or K8s Pod adapter boundary.
+
+M2-reserved variation points:
+
+- `EvidenceAssembler` sub-strategies for RAG/memory/file/artifact evidence packaging.
+- Multi-provider fallback/routing.
+- AgentRegistry/GraphRegistry versioned rollout.
+
+Hard rules:
+
+- graph runner does not branch by `tool_name` or `event_type`.
+- New tools add a handler; they do not modify the runner main flow.
+- New UI projections add projector handlers; they do not modify EventSink.
+- New memory behavior adds MemoryPolicy; it does not mutate AgentMemory into a strategy holder.
+- Registries need default/fallback handlers and structured errors for unknown types.
 
 ## 16. Progress Recording Template
 
@@ -777,7 +957,7 @@ For every completed task or pause point, update the handoff or this file with:
 Implement the full v4 plan in order. This file is the authoritative
 implementation backlog.
 
-Do not skip ahead to M2 or the full Planner-ReAct graph before Phase 0 is
+Do not skip ahead to M2 or the full first M1 graph runtime before Phase 0 is
 green. Do not stop after Phase 0 either; Phase 0 proves the base, then the
 work continues through the M1 phases and finally M2 when justified.
 

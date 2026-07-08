@@ -1,0 +1,49 @@
+{
+  "name": "first_m1_graph",
+  "type": "first_m1_graph",
+  "description": "Deterministic golden case for the first small M1 graph skeleton.",
+  "llm": {
+    "mode": "none",
+    "expected_calls": 0
+  },
+  "graph": {
+    "initial_state": {
+      "session_id": "golden-session",
+      "run_id": "golden-run",
+      "user_input": {
+        "text": "hello"
+      },
+      "budget": {
+        "max_steps": 3
+      }
+    },
+    "expected_state": {
+      "status": "completed",
+      "plan": {
+        "id": "plan:golden-run",
+        "version": 2,
+        "steps": [
+          {
+            "id": "step-1",
+            "title": "Respond to the user input",
+            "status": "completed"
+          }
+        ]
+      },
+      "current_step_id": "step-1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello",
+          "sequence_no": 1
+        },
+        {
+          "role": "assistant",
+          "content": "m1-first-graph:hello",
+          "sequence_no": 2
+        }
+      ]
+    }
+  },
+  "expected_timeline": []
+}

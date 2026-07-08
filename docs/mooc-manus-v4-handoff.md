@@ -1,7 +1,7 @@
 # MoocManus v4 Handoff
 
 Date: 2026-07-08
-Status: Phase 0 implementation started
+Status: Phase 0 / 0.5 implemented, Phase 1 started, task backlog resynced with latest v4 plan
 
 ## 0. Pause Snapshot
 
@@ -20,7 +20,8 @@ k8s                          87bf2e6  master
 ```
 
 Current local changes include the first Phase 0 Walking Skeleton application
-code plus refreshed handoff/task documentation.
+code, the Phase 0.5 golden harness, Phase 1 semantic-boundary code, and refreshed
+handoff/task documentation.
 
 Resume rule:
 
@@ -29,11 +30,13 @@ Resume rule:
 3. Keep other research-app subrepos on `master` unless a phase explicitly needs them.
 4. Keep `/home/zym/k8s` or `/home/zymun/k8s` on the active work branch only when deployment changes are required.
 5. Read this handoff first, then read `docs/mooc-manus-v4-rebuild-task.md`.
-6. Start with Phase 0 Walking Skeleton.
+6. Continue from Phase 1 ADRs or the next smallest Phase 2 task; do not skip the newly resynced M1 constraints.
 
 ## 1. Overall State
 
-MoocManus v4 Phase 0 application code has started.
+MoocManus v4 Phase 0 application code has started and the backlog has been
+resynced with the latest v4 plan changes made after the master/codex branch
+switch.
 
 Completed so far:
 
@@ -63,14 +66,40 @@ Completed so far:
 - `scripts/validate_agent_phase0.py` is the repeatable Phase 0 validation entrypoint.
 - HTTP `/api/agent/sessions/{session_id}/events` full replay and cursor replay are covered by the Phase 0 validation script.
 - SSE endpoint replays persisted UIEvents after `last_event_id` before subscribing to Redis.
-- Unit tests cover interrupt/resume and TimelineProjector.
+- Phase 0.5 has the first deterministic golden case in `tests/golden/phase0_walking_skeleton.json`.
+- The first M1 graph skeleton has a deterministic golden case in `tests/golden/first_m1_graph.json`.
+- `scripts/run_agent_golden.py` runs golden fixtures without Postgres, Redis, Celery, or live LLM calls.
+- Phase 1 semantic boundary has started: `StoredMessage`, `MessageRole`, `CancelRunCommand`, stored-message upcaster, and LangChain message mapper exist.
+- Import-boundary tests ensure domain agent code does not import LangGraph/LangChain and application agent code does not import LangGraph.
+- `docs/mooc-manus-v4-rebuild-task.md` now reflects the latest v4 additions:
+  M1 lightweight AgentProfile / EffectiveAgentConfig switching,
+  Context / State / Memory / Workspace / Database / Object Storage layer gates,
+  and Strategy / Visitor / Handler Registry implementation constraints.
+- ADR-001, ADR-002, ADR-003, ADR-010, ADR-022, ADR-029, and ADR-030 exist under `docs/adr/`.
+- Lightweight M1 AgentProfile / EffectiveAgentConfig switching is implemented with built-in `default_research` and `literature_review` profiles.
+- Create-run resolves profile key/version before persisting the run and returns the selected profile identity.
+- `BaseAgentState` and `PlannerReactState` exist under `app/infrastructure/graph/state.py`; generic state is not named after the first concrete graph shape.
+- State reducers cover stale-version rejection and replay-idempotent append.
+- `TimelineProjector` now uses event-type handlers with a default fallback.
+- M1 `AgentMemory` / `MemoryPolicy` exist with a session-window service and in-memory repository; no memory table has been introduced yet.
+- `ToolResultHandlerRegistry` exists with default and file handlers; tool results project into LLM `StoredMessage`, artifact refs, and DomainEvent without runner tool-name branching.
+- `LLMPort` exists with `LLMContext` and `DeterministicFakeLLM`; tests/golden can stay offline.
+- `SandboxPort` exists with `DeterministicFakeSandbox`; it does not execute real shell commands.
+- `RunBudget` and `AgentError` exist with structured `budget_exceeded` and run-error serialization.
+- `GraphRuntimeService` exists as an application facade without LangGraph imports; `LangGraphRuntimeService` is the infrastructure adapter for LangGraph `Command` resume.
+- `ToolSideEffectService` wraps side-effect idempotency by `tool_call_id`; Phase 0 forced replay still leaves one side-effect row.
+- `build_first_m1_graph()` exists as a deliberately small M1 graph skeleton with neutral first-graph naming; graph-specific state remains isolated in `PlannerReactState`.
+- First M1 graph tests cover input normalization, plan creation/update, assistant summary output, structured budget error, and no-mixing rejection at node boundary.
+- `AgentRunService.resume_run()` validates waiting status, stored resume token presence, and token equality before dispatching resume.
+- Unit tests cover interrupt/resume, TimelineProjector, AgentProfile, message boundaries, graph state reducers, State no-mixing, Memory no-mixing, tool result handler projection, Context no-mixing, sandbox permissions, budget/error handling, runtime facade behavior, side-effect idempotency, first M1 graph behavior, golden fixtures, and resume-state guards.
 
 Not done yet:
 
 - Real Celery process kill/restart validation is not scripted yet. The underlying Postgres checkpoint recovery prerequisite has passed across separate connections.
 - Real network-level SSE disconnect/reconnect validation is not scripted yet. HTTP `/events` full replay and `after_event_id` replay are covered by the Phase 0 validation script; the SSE endpoint's replay-before-subscribe path exists.
-- No golden harness exists.
-- No Planner-ReAct graph exists.
+- Golden harness is minimal but present for the Phase 0 walking skeleton and first M1 graph skeleton. Broader old-project golden samples are not imported yet.
+- Context/State/Memory/Workspace/Storage no-mixing gates have State, Memory, artifact/object-ref, and Context coverage.
+- The first M1 graph skeleton exists, but it is not wired into a production route/Celery release path and is not yet a full Planner-ReAct product graph. Planner-ReAct remains only the likely first concrete graph shape, not the platform architecture.
 - No k8s deployment changes for MoocManus v4 have been made yet.
 
 ## 2. Source Of Truth
@@ -130,11 +159,11 @@ Old source is read-only reference and golden sample source only:
 /home/zym/imooc/imooc-mas/mooc-manus
 ```
 
-Do not import, deploy, copy, or fallback to the old Planner-ReAct flow.
+Do not import, deploy, copy, or fallback to the old hand-written Planner-ReAct flow.
 
 ## 4. Strict v4 Order
 
-Do not start by building the full domain model or full Planner-ReAct graph.
+Do not start by building the full domain model or full first M1 graph runtime.
 Also do not treat Phase 0 as the final objective.
 
 The objective is to implement the full v4 plan in research-app, in v4 order:
@@ -237,6 +266,23 @@ cd /home/zymun/research-app/research-admin-backend/app
 ENV=production LOG_LEVEL=WARNING uv run python -u scripts/validate_agent_phase0.py
 ```
 
+Repeatable Phase 0.5 golden command:
+
+```bash
+cd /home/zymun/research-app/research-admin-backend/app
+uv run python scripts/run_agent_golden.py
+uv run pytest
+```
+
+Current local deterministic test command:
+
+```bash
+cd /home/zymun/research-app/research-admin-backend/app
+uv run pytest
+uv run pyright
+uv run python -m compileall app core scripts
+```
+
 ## 7. Phase 0 Implementation Target
 
 Build the smallest real vertical slice.
@@ -301,7 +347,7 @@ This script becomes the first golden case in Phase 0.5.
 ## 9. Guardrails
 
 - Do not copy old MoocManus files into the new source tree.
-- Do not implement full Planner-ReAct before Phase 0 passes.
+- Do not implement the full first M1 graph runtime before Phase 0 passes.
 - Do not introduce `TransportMessage` in M1.
 - Do not route graph control with DomainEvent/UIEvent.
 - Do not run long agent work inside the FastAPI request lifecycle.
