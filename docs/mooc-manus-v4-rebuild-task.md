@@ -1119,11 +1119,12 @@ After Phase 0 passes:
 1. Turn the Phase 0 validation into the first golden case.
 2. Continue through Phases 1-7 until M1 is demoable, recoverable, measurable,
    deployable, protected by tests, and ready for controlled user traffic.
-3. Add the M1 Agent UI slice in `research-web-frontend` using `mooc-manus/ui` as a shell/interaction golden sample:
-   - call `/api/agent/**` on `research-admin-backend`;
-   - render UIEvent timeline;
-   - render LiveDelta typewriter/progress stream;
-   - support interrupt/resume;
-   - keep Node web-backend out of the Agent path.
-4. Keep the traffic gate closed until the broader product golden set is approved for user traffic.
-5. Revisit the M2 roadmap item by item with evidence from real usage.
+3. Validate the M1 Agent UI slice now added in `research-web-frontend`:
+   - it calls `/api/agent/**` on `research-admin-backend`;
+   - it renders the persisted UIEvent timeline;
+   - it renders LiveDelta as live feedback only;
+   - it supports interrupt/resume with `resume_token`;
+   - it keeps Node web-backend out of the Agent path.
+4. Build/push `research-web-frontend:1.0.1`, deploy it through k8s, and verify the page can reach the FastAPI ingress configured by `NEXT_PUBLIC_API_URL`.
+5. Keep the traffic gate closed until the broader product golden set is approved for user traffic.
+6. Revisit the M2 roadmap item by item with evidence from real usage.
