@@ -115,7 +115,8 @@ Not done yet:
 - Golden harness is present for the Phase 0 walking skeleton, first M1 graph skeleton, and first old-project behavior reference. Broader old-project golden samples are not imported yet.
 - Context/State/Memory/Workspace/Storage no-mixing gates have State, Memory, artifact/object-ref, and Context coverage.
 - The first M1 graph skeleton exists, but it is not wired into a production route/Celery release path and is not yet a full Planner-ReAct product graph. Planner-ReAct remains only the likely first concrete graph shape, not the platform architecture.
-- k8s template changes for MoocManus v4 have a controlled KIND validation record. `validate-resources` passed on 2026-07-09, and API/worker deployed with image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`.
+- k8s template changes for MoocManus v4 have a controlled KIND validation record. `validate-resources` passed on 2026-07-09, and API/worker deployed with temporary image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`; the clean target tag is `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1`.
+- Harbor cleanup on 2026-07-09 kept `research-admin-backend:1.0.1` and removed the temporary `codex-1-v4-20260709*` tags from `app-images/research-admin-backend`.
 - Deployed validation passed on 2026-07-09: API -> Celery -> LangGraph -> Postgres events/checkpoint -> Redis/SSE completed the HITL wait/resume flow; HTTP replay and SSE replay returned the expected cursor-tail timeline.
 - K8S-side deployment docs now mirror the `info-app` pattern:
   `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`

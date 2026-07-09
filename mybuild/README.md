@@ -5,7 +5,7 @@
 - **构建上下文**：子模块根目录（`research-admin-backend/`）
 - **源码位置**：`app/` 子目录（pyproject.toml、uv.lock、应用代码）
 - **构建方式**：多阶段构建（python:slim 安装依赖 → python:slim 运行时）
-- **镜像名称**：`research-admin-backend:1.0.0`（本地）；CI 使用 git SHA tag
+- **镜像名称**：`research-admin-backend:1.0.1`（本地）；CI 使用 git SHA tag
 
 ## 文件说明
 
@@ -23,7 +23,7 @@
 # 在子模块根目录执行
 docker build -f mybuild/Dockerfile \
   --build-arg REGISTRY=harbor.sunmoonai.com:30443/k8s-images \
-  -t research-admin-backend:1.0.0 .
+  -t research-admin-backend:1.0.1 .
 ```
 
 ## 使用脚本构建

@@ -772,7 +772,8 @@ Current implementation snapshot, 2026-07-09:
 - The old-project reference checks behavior only: current graph must create a plan, include at least one executable step, complete a step, and emit an assistant-facing output.
 - `scripts/agent_golden.py` handles this as `old_project_behavior_reference`; it does not import, copy, or fallback to the old Planner-ReAct code.
 - Remote Phase 0 validation passed again on 2026-07-09 after the Redis ACL user was re-upserted and the session lock path was confirmed.
-- Controlled KIND deployment passed on 2026-07-09 with image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`.
+- Controlled KIND deployment passed on 2026-07-09 with temporary image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`; the clean target tag is `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1`.
+- Harbor now retains `research-admin-backend:1.0.1` as the clean target tag; temporary `codex-1-v4-20260709*` tags were removed from `app-images/research-admin-backend`.
 - Deployed validation passed through API -> Celery -> LangGraph -> Postgres events/checkpoint -> Redis/SSE:
   - session_id `6d948c7f-389d-496d-b067-f00778b4e9ff`
   - run_id `dbdd68ec-60b7-46a4-8ac9-7a581bf860bd`

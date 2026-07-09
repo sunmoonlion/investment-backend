@@ -3,7 +3,7 @@
 
 set -e
 
-IMAGE_NAME="research-admin-backend:1.0.0"
+IMAGE_NAME="research-admin-backend:1.0.1"
 CONTAINER_NAME="research-admin-backend"
 
 echo "停止并删除旧容器..."
