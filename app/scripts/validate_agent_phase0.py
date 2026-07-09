@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import uuid
 from dataclasses import dataclass
@@ -175,6 +176,10 @@ async def validate_run_flow(*, replay: bool) -> ValidationResult:
 
 async def validate_http_replay(result: ValidationResult) -> None:
     print(json.dumps({"step": "http_replay:start", "session_id": result.session_id}, ensure_ascii=False), flush=True)
+    os.environ["AGENT_V4_TRAFFIC_ENABLED"] = "true"
+    from core.config import get_settings
+
+    get_settings.cache_clear()
     from app.main import app
 
     transport = httpx.ASGITransport(app=app)

@@ -100,6 +100,7 @@ Completed so far:
 - `LiveDelta` exists for non-persisted live updates; `DBEventSink` publishes it with `final_event_id` so clients can reconcile with the final persisted UIEvent.
 - The SSE endpoint subscribes to both `{AGENT_REDIS_KEY_PREFIX}:session:{session_id}:events` and `{AGENT_REDIS_KEY_PREFIX}:session:{session_id}:deltas` after replaying persisted UIEvents.
 - k8s `research-admin-backend` ConfigMap/Secret templates now include M1 runtime env wiring for session TTL, agent session lock TTL, v4 traffic flag, Celery queue, Celery broker/result backend, frontend URL, and Casdoor settings.
+- Agent v4 API routes are guarded by `AGENT_V4_TRAFFIC_ENABLED`; source defaults are closed (`false`) and deployment must explicitly enable the flag for controlled validation or release.
 - Backend and k8s worker defaults now agree on `CELERY_QUEUE=research.admin.default`.
 - Old-project behavior reference is compared without importing or copying old source code.
 - `build_first_m1_graph()` exists as a deliberately small M1 graph skeleton with neutral first-graph naming; graph-specific state remains isolated in `PlannerReactState`.
@@ -370,6 +371,7 @@ This script becomes the first golden case in Phase 0.5.
 - Do not route graph control with DomainEvent/UIEvent.
 - Do not run long agent work inside the FastAPI request lifecycle.
 - Do not connect user traffic until golden set passes.
+- Keep `AGENT_V4_TRAFFIC_ENABLED=false` unless running controlled validation or an approved release.
 
 ## 10. Resume Checklist
 

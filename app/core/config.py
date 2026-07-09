@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # Session
     session_ttl_seconds: int = 3600
     agent_session_lock_ttl_seconds: int = 300
-    agent_v4_traffic_enabled: bool = True
+    agent_v4_traffic_enabled: bool = False
     agent_redis_key_prefix: str = "research:agent"
 
     # Celery（应用层只读 CELERY_BROKER_URL；k8s 按 Deployment 注入 producer/worker 账号）

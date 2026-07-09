@@ -18,8 +18,19 @@ from app.infrastructure.agent.repositories import AgentRepository
 from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.postgres import get_db_session
 from app.infrastructure.storage.redis import get_redis
+from core.config import get_settings
 
-router = APIRouter(prefix="/agent", tags=["Agent"])
+
+def require_agent_v4_traffic_enabled() -> None:
+    if not get_settings().agent_v4_traffic_enabled:
+        raise HTTPException(status_code=404, detail="Agent v4 traffic is disabled")
+
+
+router = APIRouter(
+    prefix="/agent",
+    tags=["Agent"],
+    dependencies=[Depends(require_agent_v4_traffic_enabled)],
+)
 
 
 class CreateSessionResponse(BaseModel):

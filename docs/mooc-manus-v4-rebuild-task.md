@@ -754,7 +754,7 @@ Current implementation snapshot, 2026-07-08:
   - ConfigMap/Secret additions are generated through the existing k8s template/generate flow, not hard-coded in application code.
 - [x] `deploy-research-app-all.sh validate-resources --cluster KIND` or equivalent dry validation succeeds.
 - [x] A controlled KIND deployment verifies pods, logs, API health, Celery worker startup, and the Phase 0/M1 validation flow against deployed services.
-- [ ] No user traffic is routed until the golden set passes.
+- [x] No user traffic is routed until the golden set passes.
 - [x] Required ADRs exist:
   - ADR-001, ADR-002, ADR-003
   - ADR-009, ADR-010
@@ -780,11 +780,12 @@ Current implementation snapshot, 2026-07-09:
   - HTTP replay and SSE replay both returned the cursor-tail events.
 - Required M1 ADRs now exist: ADR-001, ADR-002, ADR-003, ADR-009, ADR-010, ADR-013, ADR-015, ADR-016, ADR-019, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025, ADR-026, and ADR-027.
 - k8s `research-admin-backend` ConfigMap/Secret templates now expose M1 runtime variables for session TTL, Redis session lock TTL, v4 traffic flag, Celery queue, Celery broker/result backend, frontend URL, and Casdoor settings.
+- Agent v4 API routes are guarded by `AGENT_V4_TRAFFIC_ENABLED`; the backend default and `.env.example` default are `false`, so traffic stays closed unless deployment explicitly enables the flag.
 - Backend `Settings.celery_queue` and k8s worker ConfigMap default to `research.admin.default`.
 - Local k8s YAML generation wrote the expected ConfigMap/Secret output.
 - `KUBECONFIG=$HOME/.kube/kind-config ./deploy-research-app-all.sh validate-resources --cluster KIND` passed on 2026-07-09 when run outside the sandbox. The earlier sandboxed run was blocked by kubectl connectivity, not by k8s templates.
 - Validation:
-  - `uv run pytest`: 52 passed.
+  - `uv run pytest`: 54 passed.
   - `uv run pyright`: 0 errors.
   - `uv run python -m compileall app core scripts`: passed.
 
