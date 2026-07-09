@@ -12,6 +12,7 @@ class SessionStatus(StrEnum):
     waiting = "waiting"
     completed = "completed"
     failed = "failed"
+    budget_exceeded = "budget_exceeded"
 
 
 class RunStatus(StrEnum):
@@ -21,6 +22,7 @@ class RunStatus(StrEnum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    budget_exceeded = "budget_exceeded"
 
 
 class MessageRole(StrEnum):
@@ -64,5 +66,13 @@ class UIEvent(BaseModel):
     id: str | None = None
     type: str
     payload: dict = Field(default_factory=dict)
+    lineage: RunLineage
+    schema_version: int = 1
+
+
+class LiveDelta(BaseModel):
+    type: str = "LiveDelta"
+    payload: dict = Field(default_factory=dict)
+    final_event_id: str
     lineage: RunLineage
     schema_version: int = 1

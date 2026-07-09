@@ -40,13 +40,21 @@ class CeleryProducer:
         logger.info("已投递 ping 任务 task_id=%s queue=%s", async_result.id, queue)
         return async_result.id
 
-    def dispatch_agent_graph(self, run_id: str, user_input: str | None = None) -> str:
+    def dispatch_agent_graph(
+        self,
+        run_id: str,
+        user_input: str | None = None,
+        security_context: dict | None = None,
+    ) -> str:
         """投递 Phase 0 agent graph 任务，返回 Celery task_id。"""
         self._ensure_ready()
         from app.tasks.agent_graph import run_agent_graph
 
         queue = get_settings().celery_queue
-        async_result = run_agent_graph.apply_async(args=[run_id, user_input], queue=queue)
+        async_result = run_agent_graph.apply_async(
+            args=[run_id, user_input, security_context],
+            queue=queue,
+        )
         logger.info(
             "已投递 agent graph 任务 task_id=%s run_id=%s queue=%s",
             async_result.id,

@@ -1,0 +1,44 @@
+{
+  "name": "old_project_planner_react_reference",
+  "type": "old_project_behavior_reference",
+  "description": "Behavior-reference golden case distilled from the old MoocManus Planner-ReAct flow without importing old source.",
+  "source_reference": {
+    "root": "/home/zymun/imooc/imooc-mas/mooc-manus",
+    "files": [
+      "api/app/domain/services/flows/planner_react.py",
+      "api/app/domain/services/agents/planner.py",
+      "api/app/domain/models/plan.py",
+      "api/app/domain/models/event.py"
+    ],
+    "old_behavior": [
+      "Planner-ReAct creates a Plan from user input.",
+      "A Plan contains executable Steps.",
+      "Execution completes a current Step before final summary.",
+      "The user-visible stream includes assistant-facing progress/output events."
+    ]
+  },
+  "llm": {
+    "mode": "none",
+    "expected_calls": 0
+  },
+  "graph": {
+    "initial_state": {
+      "session_id": "old-ref-session",
+      "run_id": "old-ref-run",
+      "user_input": {
+        "text": "Create a short research plan"
+      },
+      "budget": {
+        "max_steps": 3
+      }
+    },
+    "behavior_contract": {
+      "requires_plan": true,
+      "minimum_steps": 1,
+      "requires_completed_step": true,
+      "requires_assistant_message": true,
+      "assistant_message_prefix": "m1-first-graph:"
+    }
+  },
+  "expected_timeline": []
+}

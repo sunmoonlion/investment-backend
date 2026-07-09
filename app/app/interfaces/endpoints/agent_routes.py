@@ -7,6 +7,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.agent.redis_keys import (
+    session_deltas_channel,
+    session_events_channel,
+)
 from app.application.agent.run_service import AgentRunService
 from app.domain.agent.commands import CreateRunCommand, ResumeRunCommand
 from app.domain.agent.models import UserInput
@@ -111,7 +115,11 @@ async def stream_events(session_id: str, last_event_id: str | None = None):
 
         redis = get_redis().client
         pubsub = redis.pubsub()
-        await pubsub.subscribe(f"agent:session:{session_id}:events")
+        channels = [
+            session_events_channel(session_id),
+            session_deltas_channel(session_id),
+        ]
+        await pubsub.subscribe(*channels)
         try:
             async for message in pubsub.listen():
                 if message["type"] != "message":
@@ -120,7 +128,7 @@ async def stream_events(session_id: str, last_event_id: str | None = None):
                 data = json.loads(payload)
                 yield to_sse(data)
         finally:
-            await pubsub.unsubscribe(f"agent:session:{session_id}:events")
+            await pubsub.unsubscribe(*channels)
             await pubsub.aclose()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

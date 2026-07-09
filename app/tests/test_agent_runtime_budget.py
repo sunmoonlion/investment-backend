@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from app.domain.agent.runtime import AgentError, AgentErrorCode, RunBudget
+import pytest
+
+from app.domain.agent.runtime import (
+    AgentError,
+    AgentErrorCode,
+    RunBudget,
+    validate_run_status_transition,
+)
 
 
 def test_run_budget_allows_usage_at_limit() -> None:
@@ -41,3 +48,21 @@ def test_agent_error_serializes_for_run_storage() -> None:
         "retryable": False,
         "details": {"tool_name": "shell"},
     }
+
+
+def test_run_status_state_machine_allows_m1_lifecycle() -> None:
+    validate_run_status_transition("created", "running")
+    validate_run_status_transition("running", "waiting")
+    validate_run_status_transition("waiting", "running")
+    validate_run_status_transition("running", "completed")
+    validate_run_status_transition("running", "budget_exceeded")
+
+
+def test_run_status_state_machine_rejects_terminal_reopen() -> None:
+    with pytest.raises(ValueError, match="invalid run status transition"):
+        validate_run_status_transition("completed", "running")
+
+
+def test_run_status_state_machine_rejects_unknown_status() -> None:
+    with pytest.raises(ValueError):
+        validate_run_status_transition("created", "missing")

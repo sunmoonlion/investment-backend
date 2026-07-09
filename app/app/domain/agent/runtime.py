@@ -4,6 +4,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from app.domain.agent.models import RunStatus
+
 
 class AgentErrorCode(StrEnum):
     budget_exceeded = "budget_exceeded"
@@ -27,6 +29,32 @@ class AgentError(BaseModel):
             "retryable": self.retryable,
             "details": self.details,
         }
+
+
+RUN_STATUS_TRANSITIONS: dict[RunStatus, set[RunStatus]] = {
+    RunStatus.created: {RunStatus.running, RunStatus.failed, RunStatus.cancelled},
+    RunStatus.running: {
+        RunStatus.waiting,
+        RunStatus.completed,
+        RunStatus.failed,
+        RunStatus.cancelled,
+        RunStatus.budget_exceeded,
+    },
+    RunStatus.waiting: {RunStatus.running, RunStatus.failed, RunStatus.cancelled},
+    RunStatus.completed: set(),
+    RunStatus.failed: set(),
+    RunStatus.cancelled: set(),
+    RunStatus.budget_exceeded: set(),
+}
+
+
+def validate_run_status_transition(current: str, target: str) -> None:
+    current_status = RunStatus(current)
+    target_status = RunStatus(target)
+    if current_status == target_status:
+        return
+    if target_status not in RUN_STATUS_TRANSITIONS[current_status]:
+        raise ValueError(f"invalid run status transition: {current_status}->{target_status}")
 
 
 class RunBudget(BaseModel):

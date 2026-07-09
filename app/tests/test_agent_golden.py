@@ -23,3 +23,18 @@ def test_first_m1_graph_golden_case_is_deterministic() -> None:
     assert result.name == "first_m1_graph"
     assert result.llm_calls == 0
     assert result.resumed_state == case["graph"]["expected_state"]
+
+
+def test_old_project_planner_react_reference_case_is_compared() -> None:
+    case = load_golden_case(Path("tests/golden/old_project_planner_react_reference.json"))
+
+    result = run_golden_case(case)
+
+    assert result.name == "old_project_planner_react_reference"
+    assert result.llm_calls == 0
+    assert result.resumed_state == {
+        "status": "completed",
+        "plan_step_count": 1,
+        "completed_step_count": 1,
+        "assistant_message_count": 1,
+    }

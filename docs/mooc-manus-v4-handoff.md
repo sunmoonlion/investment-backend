@@ -60,7 +60,7 @@ Completed so far:
 - Alembic supports optional `MIGRATION_DATABASE_URL` so DDL can use a migration account while runtime uses `DATABASE_URL`.
 - Remote Alembic migration was applied with the Postgres admin/migration account.
 - Runtime DB grants were applied for `sunmoonai_dev` and `research_admin_user`.
-- Redis ACL user `research_admin_backend` was recreated/updated with `agent:*` key/channel access.
+- Redis ACL user `research_admin_backend` was recreated/updated with `research:*` key access and `research:agent:*` channel access.
 - Postgres checkpoint resume across separate DB/checkpointer connections passed.
 - Remote Postgres/Redis Phase 0 integration flow passed through waiting/resume/completed.
 - `scripts/validate_agent_phase0.py` is the repeatable Phase 0 validation entrypoint.
@@ -68,6 +68,7 @@ Completed so far:
 - SSE endpoint replays persisted UIEvents after `last_event_id` before subscribing to Redis.
 - Phase 0.5 has the first deterministic golden case in `tests/golden/phase0_walking_skeleton.json`.
 - The first M1 graph skeleton has a deterministic golden case in `tests/golden/first_m1_graph.json`.
+- The old Planner-ReAct behavior is represented by `tests/golden/old_project_planner_react_reference.json` as a read-only behavior reference.
 - `scripts/run_agent_golden.py` runs golden fixtures without Postgres, Redis, Celery, or live LLM calls.
 - Phase 1 semantic boundary has started: `StoredMessage`, `MessageRole`, `CancelRunCommand`, stored-message upcaster, and LangChain message mapper exist.
 - Import-boundary tests ensure domain agent code does not import LangGraph/LangChain and application agent code does not import LangGraph.
@@ -75,7 +76,7 @@ Completed so far:
   M1 lightweight AgentProfile / EffectiveAgentConfig switching,
   Context / State / Memory / Workspace / Database / Object Storage layer gates,
   and Strategy / Visitor / Handler Registry implementation constraints.
-- ADR-001, ADR-002, ADR-003, ADR-010, ADR-022, ADR-029, and ADR-030 exist under `docs/adr/`.
+- Required M1 ADRs now exist under `docs/adr/`: ADR-001, ADR-002, ADR-003, ADR-009, ADR-010, ADR-013, ADR-015, ADR-016, ADR-019, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025, ADR-026, and ADR-027. ADR-029 and ADR-030 record the later v4 refinements for storage boundaries and Strategy/Visitor/Handler Registry constraints.
 - Lightweight M1 AgentProfile / EffectiveAgentConfig switching is implemented with built-in `default_research` and `literature_review` profiles.
 - Create-run resolves profile key/version before persisting the run and returns the selected profile identity.
 - `BaseAgentState` and `PlannerReactState` exist under `app/infrastructure/graph/state.py`; generic state is not named after the first concrete graph shape.
@@ -88,19 +89,36 @@ Completed so far:
 - `RunBudget` and `AgentError` exist with structured `budget_exceeded` and run-error serialization.
 - `GraphRuntimeService` exists as an application facade without LangGraph imports; `LangGraphRuntimeService` is the infrastructure adapter for LangGraph `Command` resume.
 - `ToolSideEffectService` wraps side-effect idempotency by `tool_call_id`; Phase 0 forced replay still leaves one side-effect row.
+- `RedisSessionLock` protects graph execution by `session_id` with `AGENT_SESSION_LOCK_TTL_SECONDS`; remote Phase 0 validation passes with the lock enabled.
+- `RedisSessionLock.renew()` extends the TTL only for the current owner token; graph worker renews before and after graph execution.
+- Lock release uses Redis `GET`/`DEL` instead of Lua `EVAL` because the runtime Redis ACL currently disallows `EVAL`.
+- On 2026-07-09, the `research_admin_backend` Redis ACL user was re-upserted after an authentication mismatch, and remote Phase 0 validation passed again.
+- ADR-026 records the Redis/SSE/session-lock decision, including the current no-`EVAL` ACL constraint.
+- `SecurityContext` exists as a fixed single-tenant M1 placeholder and is carried by create/resume/cancel commands through the Celery graph task boundary.
+- Graph worker logs use `lineage_log_extra()` so loaded/start/waiting/completed/failed/lock-busy records carry `RunLineage` fields.
+- M1 run state transitions are explicit and enforced by `AgentRepository.set_run_status()` before DB updates.
+- `LiveDelta` exists for non-persisted live updates; `DBEventSink` publishes it with `final_event_id` so clients can reconcile with the final persisted UIEvent.
+- The SSE endpoint subscribes to both `{AGENT_REDIS_KEY_PREFIX}:session:{session_id}:events` and `{AGENT_REDIS_KEY_PREFIX}:session:{session_id}:deltas` after replaying persisted UIEvents.
+- k8s `research-admin-backend` ConfigMap/Secret templates now include M1 runtime env wiring for session TTL, agent session lock TTL, v4 traffic flag, Celery queue, Celery broker/result backend, frontend URL, and Casdoor settings.
+- Backend and k8s worker defaults now agree on `CELERY_QUEUE=research.admin.default`.
+- Old-project behavior reference is compared without importing or copying old source code.
 - `build_first_m1_graph()` exists as a deliberately small M1 graph skeleton with neutral first-graph naming; graph-specific state remains isolated in `PlannerReactState`.
 - First M1 graph tests cover input normalization, plan creation/update, assistant summary output, structured budget error, and no-mixing rejection at node boundary.
 - `AgentRunService.resume_run()` validates waiting status, stored resume token presence, and token equality before dispatching resume.
-- Unit tests cover interrupt/resume, TimelineProjector, AgentProfile, message boundaries, graph state reducers, State no-mixing, Memory no-mixing, tool result handler projection, Context no-mixing, sandbox permissions, budget/error handling, runtime facade behavior, side-effect idempotency, first M1 graph behavior, golden fixtures, and resume-state guards.
+- Unit tests cover interrupt/resume, TimelineProjector, AgentProfile, message boundaries, graph state reducers, State no-mixing, Memory no-mixing, tool result handler projection, Context no-mixing, sandbox permissions, budget/error handling, run state transitions, runtime facade behavior, side-effect idempotency, Redis session lock/renewal behavior, LiveDelta/final UIEvent reconciliation, SecurityContext queue-boundary propagation, RunLineage log fields, first M1 graph behavior, golden fixtures, and resume-state guards.
 
 Not done yet:
 
 - Real Celery process kill/restart validation is not scripted yet. The underlying Postgres checkpoint recovery prerequisite has passed across separate connections.
 - Real network-level SSE disconnect/reconnect validation is not scripted yet. HTTP `/events` full replay and `after_event_id` replay are covered by the Phase 0 validation script; the SSE endpoint's replay-before-subscribe path exists.
-- Golden harness is minimal but present for the Phase 0 walking skeleton and first M1 graph skeleton. Broader old-project golden samples are not imported yet.
+- Golden harness is present for the Phase 0 walking skeleton, first M1 graph skeleton, and first old-project behavior reference. Broader old-project golden samples are not imported yet.
 - Context/State/Memory/Workspace/Storage no-mixing gates have State, Memory, artifact/object-ref, and Context coverage.
 - The first M1 graph skeleton exists, but it is not wired into a production route/Celery release path and is not yet a full Planner-ReAct product graph. Planner-ReAct remains only the likely first concrete graph shape, not the platform architecture.
-- No k8s deployment changes for MoocManus v4 have been made yet.
+- k8s template changes for MoocManus v4 have a controlled KIND validation record. `validate-resources` passed on 2026-07-09, and API/worker deployed with image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`.
+- Deployed validation passed on 2026-07-09: API -> Celery -> LangGraph -> Postgres events/checkpoint -> Redis/SSE completed the HITL wait/resume flow; HTTP replay and SSE replay returned the expected cursor-tail timeline.
+- K8S-side deployment docs now mirror the `info-app` pattern:
+  `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
+  and `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`.
 
 ## 2. Source Of Truth
 

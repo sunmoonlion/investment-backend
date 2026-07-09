@@ -121,8 +121,8 @@ M2 roadmap:
   - `/home/zym/imooc-mas/mooc-manus`
   - `/home/zym/imooc/imooc-mas/mooc-manus`
 - [x] Confirm Python agent runtime belongs to `research-admin-backend` and Celery worker, not Node BullMQ.
-- [ ] Keep this boundary documented in ADR-027.
-- [ ] Keep deployment requirements documented in this task file and the handoff.
+- [x] Keep this boundary documented in ADR-027.
+- [x] Keep deployment requirements documented in this task file and the handoff.
 
 Acceptance:
 
@@ -496,9 +496,10 @@ Result:
 
 - `tests/golden/phase0_walking_skeleton.json` fixes the Phase 0 inputs, expected resumed state, expected DomainEvent -> UIEvent projection, and expected timeline.
 - `tests/golden/first_m1_graph.json` fixes the first M1 graph input, plan shape, assistant output, and zero-live-LLM expectation.
+- `tests/golden/old_project_planner_react_reference.json` records the old Planner-ReAct behavior reference without importing old source.
 - `scripts/run_agent_golden.py` dispatches fixture types without Postgres, Redis, Celery, or live LLM calls.
-- `tests/test_agent_golden.py` makes both fixtures part of the normal test suite.
-- `pytest`: 39 passed.
+- `tests/test_agent_golden.py` makes all golden fixtures part of the normal test suite.
+- `pytest`: 52 passed.
 
 ## 6. Phase 1: Semantic Freeze and Message Boundary
 
@@ -542,8 +543,8 @@ Source: v4 §10.4, §18, §24.
 - [x] Define `EventSink`.
 - [x] Define `TimelineProjector`.
 - [x] Persist `session_events` with `category`, `payload_schema_version`, `lineage`, `payload`, `metadata`.
-- [ ] Add LiveDelta/final UIEvent reconciliation path.
-- [ ] Add ADR-013 and ADR-019.
+- [x] Add LiveDelta/final UIEvent reconciliation path.
+- [x] Add ADR-013 and ADR-019.
 
 Hard rules:
 
@@ -556,21 +557,46 @@ Hard rules:
 
 Source: v4 §6, §15.3, §31.1.
 
-- [ ] API creates run and returns `run_id` immediately.
-- [ ] API enqueues graph-runner Celery task.
-- [ ] Worker owns graph execution.
-- [ ] Add run state machine:
+- [x] API creates run and returns `run_id` immediately.
+- [x] API enqueues graph-runner Celery task when Celery is configured.
+- [x] Worker owns graph execution.
+- [x] Add run state machine:
   `created -> running -> waiting <-> running -> completed/failed/cancelled/budget_exceeded`.
-- [ ] Add `idempotency_key` handling.
-- [ ] Add Redis session lock with TTL/renewal.
-- [ ] Add fixed/single-tenant `SecurityContext` placeholder and pass it through the queue/tool boundary.
-- [ ] Add structured logs with `RunLineage`.
-- [ ] Add Redis Pub/Sub for UIEvent/LiveDelta SSE.
+- [x] Add `idempotency_key` handling.
+- [x] Add Redis session lock with TTL.
+- [x] Add Redis session lock renewal.
+- [x] Add fixed/single-tenant `SecurityContext` placeholder and pass it through the queue/tool boundary.
+- [x] Add structured logs with `RunLineage`.
+- [x] Add Redis Pub/Sub for UIEvent SSE.
+- [x] Add LiveDelta Redis Pub/Sub/reconciliation.
 
 Acceptance:
 
 - No long agent run executes inside HTTP request lifecycle.
 - Duplicate API submit does not create duplicate active runs.
+
+Current implementation snapshot, 2026-07-09:
+
+- `AgentRunService.create_run()` returns `run_id` immediately and dispatches `app.tasks.agent_graph.run` through Celery when `CELERY_BROKER_URL` is configured.
+- `AgentRepository.create_run()` de-duplicates `(session_id, idempotency_key)` before inserting a new `agent_runs` row.
+- `run_agent_graph` owns graph execution in the Celery worker path; FastAPI does not execute the long graph inline.
+- `RedisSessionLock` lives in `app/infrastructure/agent/session_lock.py` and uses `{AGENT_REDIS_KEY_PREFIX}:session:{session_id}:lock` with `AGENT_REDIS_KEY_PREFIX=research:agent` and `AGENT_SESSION_LOCK_TTL_SECONDS`.
+- The worker acquires the session lock before setting the run to `running`; lock contention records `RunFailed` with `code='session_locked'`.
+- `RedisSessionLock.renew()` extends TTL only when the caller still owns the token; the worker renews before and after graph execution.
+- Lock release intentionally uses Redis `GET`/`DEL` instead of Lua `EVAL` because the current runtime Redis ACL disallows `EVAL`.
+- `SecurityContext` lives in `app/domain/agent/security.py` as a fixed single-tenant M1 placeholder.
+- `CreateRunCommand`, `ResumeRunCommand`, and `CancelRunCommand` carry `SecurityContext`; `AgentRunService` serializes it through the Celery graph task boundary.
+- `run_agent_graph` validates the received security context before execution and includes it in Phase 0 start/input/tool-start DomainEvent payloads.
+- `lineage_log_extra()` lives in `app/application/agent/run_logging.py`; graph worker logs include `session_id`, `run_id`, `root_run_id`, and `parent_run_id` at loaded/start/waiting/completed/failed/lock-busy points.
+- `validate_run_status_transition()` defines the M1 run state machine and `AgentRepository.set_run_status()` enforces it before updating `agent_runs.status`.
+- `DBEventSink` publishes projected UIEvents to Redis Pub/Sub for the SSE endpoint and publishes `LiveDelta` messages to `{AGENT_REDIS_KEY_PREFIX}:session:{session_id}:deltas`.
+- Each `LiveDelta` includes `final_event_id`, allowing clients to reconcile live updates with the persisted final UIEvent.
+- The SSE endpoint subscribes to both `events` and `deltas` channels after replaying persisted UIEvents.
+- Validation:
+  - `uv run pytest`: 52 passed.
+  - `uv run pyright`: 0 errors.
+  - `uv run python -m compileall app core scripts`: passed.
+  - `ENV=production LOG_LEVEL=WARNING uv run python -u scripts/validate_agent_phase0.py`: passed against remote Postgres/Redis.
 
 ## 9. Phase 4: AgentMemory
 
@@ -685,7 +711,7 @@ Current implementation snapshot, 2026-07-08:
 - First M1 graph tests cover input normalization, plan creation/update, assistant summary output, structured budget error, and no-mixing rejection at node boundary.
 - `tests/golden/first_m1_graph.json` is the first deterministic golden case for the M1 graph skeleton.
 - Validation:
-  - `uv run pytest`: 39 passed.
+  - `uv run pytest`: 52 passed.
   - `uv run pyright`: 0 errors.
   - `uv run python scripts/run_agent_golden.py --fixture tests/golden/first_m1_graph.json`: passed.
   - `ENV=production LOG_LEVEL=WARNING uv run python -u scripts/validate_agent_phase0.py`: passed against remote Postgres/Redis.
@@ -712,24 +738,24 @@ Current implementation snapshot, 2026-07-08:
 - `AgentRunService.resume_run()` rejects missing runs, non-waiting runs, missing stored resume tokens, and token mismatches before dispatching the resume command.
 - Resume still runs through the Phase 0 Celery graph task and LangGraph `Command(resume=...)` adapter.
 - Validation:
-  - `uv run pytest`: 39 passed.
+  - `uv run pytest`: 52 passed.
   - `uv run pyright`: 0 errors.
   - Real process kill/restart validation remains a release-gate script gap; checkpoint recovery across separate Postgres/checkpointer connections has already passed.
 
 ## 12. Phase 7: M1 Release Gate
 
 - [x] Single graph passes golden set.
-- [ ] Old project golden samples are compared as behavior reference.
-- [ ] Phase 0 checkpoint/SSE/replay acceptance still passes.
-- [ ] Deployment templates support the M1 runtime:
+- [x] Old project golden samples are compared as behavior reference.
+- [x] Phase 0 checkpoint/SSE/replay acceptance still passes.
+- [x] Deployment templates support the M1 runtime:
   - API deployment has required config/env for agent sessions, Postgres checkpoint/event tables, Redis/SSE, and Celery producer.
   - `celeryworker-research-admin-backend` runs the same backend image and starts the graph-runner Celery worker.
   - The application reads `CELERY_BROKER_URL`; k8s injects producer credentials for API and worker credentials for Worker.
   - ConfigMap/Secret additions are generated through the existing k8s template/generate flow, not hard-coded in application code.
-- [ ] `deploy-research-app-all.sh validate-resources --cluster KIND` or equivalent dry validation succeeds.
-- [ ] A controlled KIND deployment verifies pods, logs, API health, Celery worker startup, and the Phase 0/M1 validation flow against deployed services.
+- [x] `deploy-research-app-all.sh validate-resources --cluster KIND` or equivalent dry validation succeeds.
+- [x] A controlled KIND deployment verifies pods, logs, API health, Celery worker startup, and the Phase 0/M1 validation flow against deployed services.
 - [ ] No user traffic is routed until the golden set passes.
-- [ ] Required ADRs exist:
+- [x] Required ADRs exist:
   - ADR-001, ADR-002, ADR-003
   - ADR-009, ADR-010
   - ADR-013, ADR-015, ADR-016
@@ -740,6 +766,28 @@ Acceptance:
 
 - M1 is demoable, recoverable, measurable, deployable, and protected by tests.
 
+Current implementation snapshot, 2026-07-09:
+
+- `tests/golden/old_project_planner_react_reference.json` cites old read-only source files under `/home/zymun/imooc/imooc-mas/mooc-manus`.
+- The old-project reference checks behavior only: current graph must create a plan, include at least one executable step, complete a step, and emit an assistant-facing output.
+- `scripts/agent_golden.py` handles this as `old_project_behavior_reference`; it does not import, copy, or fallback to the old Planner-ReAct code.
+- Remote Phase 0 validation passed again on 2026-07-09 after the Redis ACL user was re-upserted and the session lock path was confirmed.
+- Controlled KIND deployment passed on 2026-07-09 with image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`.
+- Deployed validation passed through API -> Celery -> LangGraph -> Postgres events/checkpoint -> Redis/SSE:
+  - session_id `6d948c7f-389d-496d-b067-f00778b4e9ff`
+  - run_id `dbdd68ec-60b7-46a4-8ac9-7a581bf860bd`
+  - timeline `TimelineRunStarted`, `TimelineWaitInputDisplayed`, `TimelineUserInputReceived`, `TimelineToolStarted`, `TimelineToolCompleted`, `TimelineRunCompleted`
+  - HTTP replay and SSE replay both returned the cursor-tail events.
+- Required M1 ADRs now exist: ADR-001, ADR-002, ADR-003, ADR-009, ADR-010, ADR-013, ADR-015, ADR-016, ADR-019, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025, ADR-026, and ADR-027.
+- k8s `research-admin-backend` ConfigMap/Secret templates now expose M1 runtime variables for session TTL, Redis session lock TTL, v4 traffic flag, Celery queue, Celery broker/result backend, frontend URL, and Casdoor settings.
+- Backend `Settings.celery_queue` and k8s worker ConfigMap default to `research.admin.default`.
+- Local k8s YAML generation wrote the expected ConfigMap/Secret output.
+- `KUBECONFIG=$HOME/.kube/kind-config ./deploy-research-app-all.sh validate-resources --cluster KIND` passed on 2026-07-09 when run outside the sandbox. The earlier sandboxed run was blocked by kubectl connectivity, not by k8s templates.
+- Validation:
+  - `uv run pytest`: 52 passed.
+  - `uv run pyright`: 0 errors.
+  - `uv run python -m compileall app core scripts`: passed.
+
 ## 12.1 Phase 8: Deployment Closure
 
 This phase is intentionally late: do not start by reshaping k8s before the
@@ -749,17 +797,22 @@ tracked, and the handoff records exactly what was deployed or deferred.
 
 Scope:
 
-- [ ] Update `/home/zym/k8s/sunmoonai/app-platform/research-app` only for real runtime needs discovered by M1.
+- [x] Update `/home/zym/k8s/sunmoonai/app-platform/research-app` only for real runtime needs discovered by M1.
 - [ ] Ensure `research-admin-backend` image contains the LangGraph runtime, API endpoints, Alembic migrations, and Celery tasks.
-- [ ] Ensure `celeryworker-research-admin-backend` starts the correct worker command/queue for graph execution.
-- [ ] Add or update ConfigMap/Secret templates for M1-only variables:
+- [x] Ensure `celeryworker-research-admin-backend` starts the correct worker command/queue for graph execution.
+- [x] Add or update ConfigMap/Secret templates for M1-only variables:
   - checkpoint/event database URL or existing database secret wiring
   - Redis URL/session lock/SSE settings
   - Celery broker URL injection
   - feature flag to keep v4 traffic disabled until release gate passes
   - model/tool provider credentials only when the first M1 graph runtime phase needs them
-- [ ] Keep `nodebullworker-research-web-backend` out of LangGraph execution.
-- [ ] Record image tags, deploy command, cluster, validation commands, and known deploy gaps in `docs/mooc-manus-v4-handoff.md`.
+- [x] Keep `nodebullworker-research-web-backend` out of LangGraph execution.
+- [x] Record image tags, deploy command, cluster, validation commands, and known deploy gaps in `docs/mooc-manus-v4-handoff.md` and k8s-side docs.
+
+K8S platform docs:
+
+- `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
+- `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`
 
 Validation:
 
@@ -872,7 +925,7 @@ M1 implementation checks:
 - [x] Memory tests prove memory entries carry source/provenance, confidence, scope, and safety flags.
 - [x] Object-ref tests prove tool artifact fields are URI/ref/hash/metadata, not large object bodies.
 - [x] Context assembly tests prove Context is not persisted as a durable truth source.
-- [ ] Workspace/Project remains M2: no `workspaces`/`projects` table or product entity in M1.
+- [x] Workspace/Project remains M2: no `workspaces`/`projects` table or product entity in M1.
 
 ## 15.2 Strategy / Visitor / Handler Registry Gate
 

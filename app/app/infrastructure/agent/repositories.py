@@ -9,6 +9,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.agent.models import DomainEvent, RunLineage, UIEvent
+from app.domain.agent.runtime import validate_run_status_transition
 
 
 class AgentRepository:
@@ -107,6 +108,20 @@ class AgentRepository:
         resume_token: str | None = None,
         error: str | None = None,
     ) -> None:
+        current = await self.session.execute(
+            text(
+                """
+                select status
+                from agent_runs
+                where id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        current_status = current.scalar_one_or_none()
+        if current_status is None:
+            raise ValueError(f"run not found: {run_id}")
+        validate_run_status_transition(str(current_status), status)
         await self.session.execute(
             text(
                 """

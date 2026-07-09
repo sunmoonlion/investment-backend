@@ -30,7 +30,10 @@ class AgentRunService:
         producer = get_celery_producer()
         run_id = run["id"]
         if producer.enabled:
-            producer.dispatch_agent_graph(run_id)
+            producer.dispatch_agent_graph(
+                run_id,
+                security_context=command.security_context.model_dump(),
+            )
             run["enqueued"] = True
         else:
             run["enqueued"] = False
@@ -55,7 +58,11 @@ class AgentRunService:
             raise ValueError("invalid resume_token")
         producer = get_celery_producer()
         if producer.enabled:
-            producer.dispatch_agent_graph(command.run_id, command.user_input.text)
+            producer.dispatch_agent_graph(
+                command.run_id,
+                command.user_input.text,
+                security_context=command.security_context.model_dump(),
+            )
             enqueued = True
         else:
             enqueued = False
