@@ -121,7 +121,13 @@ M2 roadmap:
   - `/home/zym/imooc-mas/mooc-manus`
   - `/home/zym/imooc/imooc-mas/mooc-manus`
 - [x] Confirm Python agent runtime belongs to `research-admin-backend` and Celery worker, not Node BullMQ.
+- [x] Confirm the v4 frontend pairing decision:
+  - `research-admin-backend` is the single Python application backend in M1, not only an admin-only backend.
+  - `/api/admin/**` is the management API face for `research-admin-frontend`.
+  - `/api/agent/**` is the end-user Agent API face for `research-web-frontend` (Next.js) to consume directly.
+  - `research-web-backend` / Node BFF stays out of the M1 Agent critical path.
 - [x] Keep this boundary documented in ADR-027.
+- [x] Keep frontend pairing documented in v4 §5.6 / ADR-031 / ADR-032 and mirrored in this task file.
 - [x] Keep deployment requirements documented in this task file and the handoff.
 
 Acceptance:
@@ -129,6 +135,8 @@ Acceptance:
 - No old project is deployed, imported, or used as fallback.
 - New code lands only in the target source tree.
 - Deployment changes, when required by M1, land in `/home/zym/k8s/sunmoonai/app-platform/research-app`.
+- Agent frontend work, when explicitly started, lands in `research-web-frontend` and consumes only `/api/agent/**`.
+- Admin frontend work, when explicitly started, lands in `research-admin-frontend` and consumes only `/api/admin/**`.
 
 ## 3.1 v4 Coverage Matrix
 
@@ -142,6 +150,7 @@ defer decision.
 | §3 Old project | Use old project only for golden samples and behavior reference. | None. |
 | §4 Architecture boundaries | Create domain/application/infrastructure/runtime package boundaries. | Runtime may later extract to service. |
 | §5 App Platform | Use research-admin-backend + Celery worker; leave Node BullMQ out of graph execution. | K8s/sandbox hardening and possible dedicated sandbox service. |
+| §5.6 Frontend pairing | Treat `research-admin-backend` as the M1 Python application backend with two API faces: `/api/admin/**` for admin UI and `/api/agent/**` for end-user Agent UI. `research-web-frontend` (Next.js) talks directly to `/api/agent/**`; Node web-backend is not in the Agent critical path. | Node BFF only when SSR/SEO, cross-app aggregation, or Node-side auth gateway is justified. Physical split into admin-api / agent-api only when scaling/security/release cadence demands it. |
 | §5 Deployment | Reuse research-app deploy-all entrypoint; deploy API + Celery worker with shared image and separated runtime env. | Autoscaling, sandbox manager, and stronger runtime isolation. |
 | §6 Execution topology | API creates run, enqueues Celery, worker executes graph, Redis/SSE streams UIEvent/LiveDelta. | RabbitMQ/IntegrationEvent only when cross-app events are needed. |
 | §6.5 Walking Skeleton | Mandatory first vertical slice with checkpoint/interruption/SSE/idempotency validation. | None. |
@@ -158,6 +167,7 @@ defer decision.
 | §16 Errors/budget | Implement AgentError and RunBudget checks. | Provider-level routing optimization. |
 | §17 HITL | Implement ask_user interrupt/resume and waiting/running state transitions. | Approval UI and advanced HITL modes. |
 | §18 Events/SSE | Implement DBEventSink, TimelineProjector, session_events schema, UIEvent replay, LiveDelta/final reconciliation. | TransportMessage envelope, CQRS read models, TraceSink. |
+| §18 Frontend event contract | Frontend consumers receive UIEvent and LiveDelta only; no raw LangGraph events or legacy overloaded Event payloads. | TransportMessage envelope and richer read models wait for M2. |
 | §19 Tools | Implement ToolExecutionPort, permissions, ToolResultHandlerRegistry, default/simple handlers. | Full tool suite, approval UI, advanced artifact flows. |
 | §20 AgentProfile / Multi-agent | M1 supports lightweight AgentProfile switching inside one graph runtime: different prompt/tools/permissions/model/memory policy without forking graph code. | AgentRegistry, GraphRegistry, Supervisor and specialized agents. |
 | §21 SecurityContext | Add fixed/single-tenant SecurityContext structure and pass through queue/tools. | Full tenant propagation, quotas, isolation. |
@@ -172,6 +182,76 @@ defer decision.
 | §30 Directory | Follow recommended package layout without introducing M2-only modules early. | Add M2 modules when triggered. |
 | §31 Roadmap | Execute Phase 0 -> 0.5 -> 1..7. | Execute M2-A..I by trigger. |
 | §32 ADRs | Write required M1 ADRs. | Write/update M2 ADRs when M2 starts. |
+| ADR-031 / ADR-032 | Mirror frontend pairing and mooc-manus/ui absorption into the implementation backlog. | Revisit if M2 introduces a Node BFF or separates Python API services. |
+
+## 3.2 Frontend Pairing And UI Absorption Boundary
+
+Source: v4 §5.6, §18, ADR-031, ADR-032.
+
+Decision:
+
+```text
+research-admin-backend is the M1 Python application backend.
+It exposes two audience-facing API surfaces:
+
+  /api/admin/**  -> management API face, consumed by research-admin-frontend
+  /api/agent/**  -> end-user Agent API face, consumed directly by research-web-frontend
+
+research-web-backend / Node BFF is not part of the M1 Agent critical path.
+```
+
+Rationale:
+
+- Agent execution, checkpoint, interrupt/resume, SSE replay, UIEvent projection, and LiveDelta reconciliation all live in the Python/LangGraph runtime.
+- Adding Node web-backend as a BFF in M1 would duplicate streaming/reconnect semantics and create another place where event ordering can drift.
+- The `admin` name in `research-admin-backend` is treated as a platform language-stack label, not as an audience boundary. Audience boundaries are enforced by route prefix, auth scope, and audit.
+
+Implementation rules:
+
+- `research-web-frontend` may call only `/api/agent/**` for Agent product flows.
+- `research-admin-frontend` may call only `/api/admin/**` for management flows.
+- End-user tokens must not reach `/api/admin/**`.
+- Staff-initiated end-user runs require explicit impersonation/audit fields before they are allowed.
+- Do not route Agent run/start/resume/SSE through `research-web-backend` in M1.
+- If a future Node BFF appears, it is a proxy/SSR/auth aggregation layer only and never becomes the source of truth for session state, events, checkpoint, memory, or run status.
+
+`mooc-manus/ui` absorption boundary:
+
+```text
+Absorb into research-web-frontend:
+  - Next/React/Tailwind/Radix/shadcn shell style.
+  - VNC sandbox viewer interaction.
+  - SSE typewriter timeline shape.
+  - Tool call cards.
+  - Markdown and file preview patterns.
+  - Interrupt / waiting-for-human interaction states.
+
+Do not copy:
+  - legacy overloaded Event payloads.
+  - direct raw LangGraph event consumption.
+  - old session/message/memory dict shapes.
+  - any backend coupling that bypasses /api/agent/**.
+```
+
+Frontend event contract:
+
+- Timeline consumes persisted `UIEvent` projections only.
+- Live typing/progress consumes `LiveDelta` only.
+- Frontend deduplicates by `UIEvent.id`.
+- SSE reconnect uses `last_event_id` and replays only persisted UIEvents.
+- `LiveDelta` may be dropped; final UIEvent is the reconciliation source.
+- Frontend tests must prove no raw LangGraph event leaks into UI consumption.
+
+Acceptance:
+
+- A local or deployed `research-web-frontend` page can:
+  1. create an Agent session via `/api/agent/sessions`;
+  2. start a run via `/api/agent/sessions/{session_id}/runs`;
+  3. subscribe to `/api/agent/sessions/{session_id}/stream`;
+  4. render UIEvent timeline entries and LiveDelta increments separately;
+  5. resume an interrupt via `/api/agent/runs/{run_id}/resume`;
+  6. reconnect with `last_event_id` without duplicate or missing persisted UIEvents.
+- No frontend code calls raw LangGraph event endpoints or `research-web-backend` for Agent run control.
 
 ## 4. Phase 0: Walking Skeleton
 
@@ -900,14 +980,18 @@ Minimum M1 tests:
 
 ## 15. Implementation Rules
 
-- Keep changes scoped to `research-admin-backend` until a phase explicitly needs frontend or k8s. Phase 7/8 explicitly includes k8s deployment closure.
+- Keep backend runtime changes scoped to `research-admin-backend` until a phase explicitly needs frontend or k8s. Phase 7/8 explicitly includes k8s deployment closure.
+- Frontend work is allowed only when the slice explicitly targets the Agent UI contract. In M1, Agent UI work belongs to `research-web-frontend` and consumes `/api/agent/**` directly.
 - Do not copy old MoocManus source.
+- Do not copy old `mooc-manus/ui` data consumption logic; use it only for shell/interaction golden samples.
 - Do not add a `state` table.
 - Do not add `workspaces` or `projects` tables in M1. `project_id`, if needed, is a placeholder field only.
 - Do not put TransportMessage in M1 domain.
 - Do not implement GraphRegistry in M1.
 - Do not route graph control through events.
 - Do not expose raw LangGraph events to frontend consumers.
+- Do not expose `/api/admin/**` to end-user Agent UI flows.
+- Do not route Agent run/start/resume/SSE through `research-web-backend` in M1.
 - Do not write long-term memory automatically before its M2 governance exists.
 - Do not connect user traffic before the M1 release gate passes.
 
@@ -1035,5 +1119,11 @@ After Phase 0 passes:
 1. Turn the Phase 0 validation into the first golden case.
 2. Continue through Phases 1-7 until M1 is demoable, recoverable, measurable,
    deployable, protected by tests, and ready for controlled user traffic.
-3. Keep the traffic gate closed until the broader product golden set is approved for user traffic.
-4. Revisit the M2 roadmap item by item with evidence from real usage.
+3. Add the M1 Agent UI slice in `research-web-frontend` using `mooc-manus/ui` as a shell/interaction golden sample:
+   - call `/api/agent/**` on `research-admin-backend`;
+   - render UIEvent timeline;
+   - render LiveDelta typewriter/progress stream;
+   - support interrupt/resume;
+   - keep Node web-backend out of the Agent path.
+4. Keep the traffic gate closed until the broader product golden set is approved for user traffic.
+5. Revisit the M2 roadmap item by item with evidence from real usage.
