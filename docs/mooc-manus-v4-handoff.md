@@ -110,14 +110,15 @@ Completed so far:
 
 Not done yet:
 
-- Real Celery process kill/restart validation is not scripted yet. The underlying Postgres checkpoint recovery prerequisite has passed across separate connections.
-- Real network-level SSE disconnect/reconnect validation is not scripted yet. HTTP `/events` full replay and `after_event_id` replay are covered by the Phase 0 validation script; the SSE endpoint's replay-before-subscribe path exists.
 - Golden harness is present for the Phase 0 walking skeleton, first M1 graph skeleton, and first old-project behavior reference. Broader old-project golden samples are not imported yet.
 - Context/State/Memory/Workspace/Storage no-mixing gates have State, Memory, artifact/object-ref, and Context coverage.
 - The first M1 graph skeleton exists, but it is not wired into a production route/Celery release path and is not yet a full Planner-ReAct product graph. Planner-ReAct remains only the likely first concrete graph shape, not the platform architecture.
 - k8s template changes for MoocManus v4 have a controlled KIND validation record. `validate-resources` passed on 2026-07-09, and API/worker deployed with temporary image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`; the clean target tag is `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1`.
-- Harbor cleanup on 2026-07-09 kept `research-admin-backend:1.0.1` and removed the temporary `codex-1-v4-20260709*` tags from `app-images/research-admin-backend`.
+- Harbor cleanup on 2026-07-09 kept rebuilt `research-admin-backend:1.0.1` (`sha256:2db6d53e7a6560cda6d08e518b1e472fbbac9b2661a1233a09957f22e17c3f45`) and removed the temporary `codex-1-v4-20260709*` tags from `app-images/research-admin-backend`.
+- The `1.0.1` image import check passed for `app.main`, `app.tasks.agent_graph`, agent routes, Alembic, default traffic gate, and Celery queue.
 - Deployed validation passed on 2026-07-09: API -> Celery -> LangGraph -> Postgres events/checkpoint -> Redis/SSE completed the HITL wait/resume flow; HTTP replay and SSE replay returned the expected cursor-tail timeline.
+- Deployed worker restart validation passed on 2026-07-09: `scripts/validate_deployed_agent_worker_restart.py` created a waiting run, restarted `celeryworker-research-admin-backend`, resumed the run, and verified the same timeline plus HTTP/SSE replay.
+- Final deployed images are `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1` for both API and worker, and final `AGENT_V4_TRAFFIC_ENABLED=false`; POST `/api/agent/sessions` returns `404` while the traffic gate is closed.
 - K8S-side deployment docs now mirror the `info-app` pattern:
   `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
   and `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`.

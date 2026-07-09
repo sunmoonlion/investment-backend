@@ -190,7 +190,6 @@ Must validate:
 
 Current limitation:
 
-- Phase 0 has validated Postgres checkpoint persistence across connections, which is the important worker-restart prerequisite. A real Celery process kill/restart validation is still useful once the broker/worker process is part of the local validation harness.
 - The runtime database user remains least-privilege and has no schema DDL permission. Alembic uses optional `MIGRATION_DATABASE_URL` for migrations.
 
 Explicit non-goals:
@@ -403,10 +402,10 @@ Acceptance:
 
 ```text
 1. Trigger graph -> ask_user -> interrupt -> session.status=waiting. DONE: remote Postgres/Redis integration path passed.
-2. Kill/restart worker -> resume continues from checkpoint. PARTIAL: cross-connection Postgres checkpoint resume passes; real Celery process restart remains to script.
+2. Kill/restart worker -> resume continues from checkpoint. DONE: `scripts/validate_deployed_agent_worker_restart.py` restarts the deployed Celery worker and resumes the waiting run.
 3. User input resumes graph -> tool node executes -> side effect happens once. DONE: remote Postgres/Redis integration path passed.
 4. Forced replay after tool node -> side effect is not repeated. DONE: `tool_side_effects` stayed at one row for the same `tool_call_id`.
-5. SSE reconnect with last_event_id -> timeline complete, no missing/duplicate events. PARTIAL: replay-before-subscribe code exists and HTTP `/events?after_event_id=` replay is covered; real network-level SSE disconnect/reconnect script is still pending.
+5. SSE reconnect with last_event_id -> timeline complete, no missing/duplicate events. DONE: deployed HTTP replay and service-level SSE replay return the expected cursor-tail events.
 ```
 
 Validation script shape:
@@ -461,7 +460,7 @@ Result:
   - HTTP `/api/agent/sessions/{session_id}/events` full replay and cursor replay passed through ASGI
   - forced replay kept `tool_side_effects` count at `1`
 - `scripts/validate_agent_phase0.py`: passed against remote Postgres/Redis.
-- The SSE endpoint serializes persisted UIEvents safely and replays them before subscribing to Redis. The remaining gap is a real network-level SSE disconnect/reconnect test against a running server, not ASGITransport's in-process stream.
+- The SSE endpoint serializes persisted UIEvents safely and replays them before subscribing to Redis. Deployed service-level SSE replay passed through `kubectl port-forward`.
 - Redis ACL user `research_admin_backend` was recreated/updated and can publish to `agent:*` channels.
 
 Previously blocked validation:
@@ -740,7 +739,7 @@ Current implementation snapshot, 2026-07-08:
 - Validation:
   - `uv run pytest`: 52 passed.
   - `uv run pyright`: 0 errors.
-  - Real process kill/restart validation remains a release-gate script gap; checkpoint recovery across separate Postgres/checkpointer connections has already passed.
+  - Real Celery worker restart validation now passes through `scripts/validate_deployed_agent_worker_restart.py`.
 
 ## 12. Phase 7: M1 Release Gate
 
@@ -773,12 +772,20 @@ Current implementation snapshot, 2026-07-09:
 - `scripts/agent_golden.py` handles this as `old_project_behavior_reference`; it does not import, copy, or fallback to the old Planner-ReAct code.
 - Remote Phase 0 validation passed again on 2026-07-09 after the Redis ACL user was re-upserted and the session lock path was confirmed.
 - Controlled KIND deployment passed on 2026-07-09 with temporary image `harbor.sunmoonai.com:30443/app-images/research-admin-backend:codex-1-v4-20260709-5`; the clean target tag is `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1`.
-- Harbor now retains `research-admin-backend:1.0.1` as the clean target tag; temporary `codex-1-v4-20260709*` tags were removed from `app-images/research-admin-backend`.
+- Harbor now retains `research-admin-backend:1.0.1` as the clean target tag with digest `sha256:2db6d53e7a6560cda6d08e518b1e472fbbac9b2661a1233a09957f22e17c3f45`; temporary `codex-1-v4-20260709*` tags were removed from `app-images/research-admin-backend`.
+- The `1.0.1` image was rebuilt from the current codex-1 source and passed an image-level import check for `app.main`, `app.tasks.agent_graph`, agent routes, Alembic, default traffic gate, and Celery queue.
 - Deployed validation passed through API -> Celery -> LangGraph -> Postgres events/checkpoint -> Redis/SSE:
-  - session_id `6d948c7f-389d-496d-b067-f00778b4e9ff`
-  - run_id `dbdd68ec-60b7-46a4-8ac9-7a581bf860bd`
+  - session_id `3e0ade1f-63e2-4952-8136-8a8964059ea8`
+  - run_id `74cbe3e3-ab5c-42cd-8bbc-7e2c36b04307`
   - timeline `TimelineRunStarted`, `TimelineWaitInputDisplayed`, `TimelineUserInputReceived`, `TimelineToolStarted`, `TimelineToolCompleted`, `TimelineRunCompleted`
   - HTTP replay and SSE replay both returned the cursor-tail events.
+- Deployed worker restart validation passed through API -> Celery restart -> resume -> LangGraph -> Postgres events/checkpoint -> Redis/SSE:
+  - session_id `f8f05926-a98a-434e-886d-4f9f33c346ef`
+  - run_id `767dcc2d-3a06-4535-9dcf-d1e3dfe4667f`
+  - `kubectl rollout restart deployment/celeryworker-research-admin-backend -n app-platform-dev`
+  - resume completed with the same expected timeline; HTTP replay and SSE replay both returned cursor-tail events.
+- Final deployed `research-admin-backend` and `celeryworker-research-admin-backend` images are `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1`.
+- Final deployed `AGENT_V4_TRAFFIC_ENABLED=false`; POST `/api/agent/sessions` returns `404` while the gate is closed.
 - Required M1 ADRs now exist: ADR-001, ADR-002, ADR-003, ADR-009, ADR-010, ADR-013, ADR-015, ADR-016, ADR-019, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025, ADR-026, and ADR-027.
 - k8s `research-admin-backend` ConfigMap/Secret templates now expose M1 runtime variables for session TTL, Redis session lock TTL, v4 traffic flag, Celery queue, Celery broker/result backend, frontend URL, and Casdoor settings.
 - Agent v4 API routes are guarded by `AGENT_V4_TRAFFIC_ENABLED`; the backend default and `.env.example` default are `false`, so traffic stays closed unless deployment explicitly enables the flag.
@@ -800,7 +807,7 @@ tracked, and the handoff records exactly what was deployed or deferred.
 Scope:
 
 - [x] Update `/home/zym/k8s/sunmoonai/app-platform/research-app` only for real runtime needs discovered by M1.
-- [ ] Ensure `research-admin-backend` image contains the LangGraph runtime, API endpoints, Alembic migrations, and Celery tasks.
+- [x] Ensure `research-admin-backend` image contains the LangGraph runtime, API endpoints, Alembic migrations, and Celery tasks.
 - [x] Ensure `celeryworker-research-admin-backend` starts the correct worker command/queue for graph execution.
 - [x] Add or update ConfigMap/Secret templates for M1-only variables:
   - checkpoint/event database URL or existing database secret wiring
@@ -1028,5 +1035,5 @@ After Phase 0 passes:
 1. Turn the Phase 0 validation into the first golden case.
 2. Continue through Phases 1-7 until M1 is demoable, recoverable, measurable,
    deployable, protected by tests, and ready for controlled user traffic.
-3. Close Phase 8 deployment work before routing user traffic.
+3. Keep the traffic gate closed until the broader product golden set is approved for user traffic.
 4. Revisit the M2 roadmap item by item with evidence from real usage.
