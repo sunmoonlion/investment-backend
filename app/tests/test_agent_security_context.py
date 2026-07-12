@@ -78,9 +78,9 @@ async def test_create_run_dispatches_security_context(monkeypatch: MonkeyPatch) 
 
     assert result["enqueued"] is True
     assert producer.calls == [
-        {
-            "run_id": "run-1",
-            "user_input": None,
+            {
+                "run_id": "run-1",
+                "user_input": "start",
             "security_context": {
                 "tenant_id": "single-tenant",
                 "actor_id": "user-1",

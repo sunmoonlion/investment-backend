@@ -16,28 +16,49 @@ class AgentRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create_session(self) -> str:
+    async def create_session(self, *, owner_actor_id: str | None = None) -> str:
         session_id = str(uuid.uuid4())
         await self.session.execute(
             text(
                 """
-                insert into agent_sessions (id, status)
-                values (:id, 'created')
+                insert into agent_sessions (id, status, owner_actor_id)
+                values (:id, 'created', :owner_actor_id)
                 """
             ),
-            {"id": session_id},
+            {"id": session_id, "owner_actor_id": owner_actor_id},
         )
         await self.session.commit()
         return session_id
+
+    async def assert_session_owner(self, *, session_id: str, owner_actor_id: str) -> None:
+        result = await self.session.execute(
+            text(
+                """
+                select owner_actor_id
+                from agent_sessions
+                where id = :session_id
+                """
+            ),
+            {"session_id": session_id},
+        )
+        stored_owner = result.scalar_one_or_none()
+        if stored_owner is None or str(stored_owner) != owner_actor_id:
+            raise PermissionError("agent session belongs to another actor")
 
     async def create_run(
         self,
         *,
         session_id: str,
+        owner_actor_id: str | None,
         idempotency_key: str | None,
         agent_profile_key: str | None,
         agent_profile_version: int = 1,
     ) -> dict[str, Any]:
+        if owner_actor_id is not None:
+            await self.assert_session_owner(
+                session_id=session_id,
+                owner_actor_id=owner_actor_id,
+            )
         if idempotency_key:
             existing = await self.session.execute(
                 text(
@@ -89,9 +110,11 @@ class AgentRepository:
         result = await self.session.execute(
             text(
                 """
-                select id, session_id, thread_id, status, resume_token
-                from agent_runs
-                where id = :run_id
+                select r.id, r.session_id, r.thread_id, r.status, r.resume_token,
+                       s.owner_actor_id
+                from agent_runs r
+                join agent_sessions s on s.id = r.session_id
+                where r.id = :run_id
                 """
             ),
             {"run_id": run_id},

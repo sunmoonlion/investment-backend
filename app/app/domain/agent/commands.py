@@ -8,6 +8,7 @@ from app.domain.agent.security import SecurityContext
 
 class CreateRunCommand(BaseModel):
     session_id: str
+    owner_actor_id: str | None = None
     user_input: UserInput = UserInput()
     idempotency_key: str | None = None
     agent_profile_key: str | None = None
@@ -16,6 +17,7 @@ class CreateRunCommand(BaseModel):
 
 class ResumeRunCommand(BaseModel):
     run_id: str
+    owner_actor_id: str | None = None
     resume_token: str
     user_input: UserInput
     idempotency_key: str | None = None

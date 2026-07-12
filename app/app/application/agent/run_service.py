@@ -16,13 +16,14 @@ class AgentRunService:
         self.repository = repository
         self.profile_catalog = profile_catalog
 
-    async def create_session(self) -> str:
-        return await self.repository.create_session()
+    async def create_session(self, *, owner_actor_id: str | None = None) -> str:
+        return await self.repository.create_session(owner_actor_id=owner_actor_id)
 
     async def create_run(self, command: CreateRunCommand) -> dict:
         effective_config = self.profile_catalog.resolve(command.agent_profile_key)
         run = await self.repository.create_run(
             session_id=command.session_id,
+            owner_actor_id=command.owner_actor_id,
             idempotency_key=command.idempotency_key,
             agent_profile_key=effective_config.profile_key,
             agent_profile_version=effective_config.profile_version,
@@ -32,6 +33,7 @@ class AgentRunService:
         if producer.enabled:
             producer.dispatch_agent_graph(
                 run_id,
+                command.user_input.text,
                 security_context=command.security_context.model_dump(),
             )
             run["enqueued"] = True
@@ -50,6 +52,8 @@ class AgentRunService:
         run = await self.repository.get_run(command.run_id)
         if not run:
             raise ValueError("run not found")
+        if command.owner_actor_id is not None and str(run.get("owner_actor_id")) != command.owner_actor_id:
+            raise PermissionError("run belongs to another actor")
         if run.get("status") != RunStatus.waiting:
             raise ValueError("run is not waiting for input")
         if not run.get("resume_token"):
