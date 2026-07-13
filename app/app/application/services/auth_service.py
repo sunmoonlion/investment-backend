@@ -22,8 +22,8 @@ from core.config import Settings, get_settings
 
 SESSION_COOKIE = "sunmoonai_research_admin_sid"
 TRANSACTION_COOKIE = "sunmoonai_research_admin_oidc_tx"
-SESSION_PREFIX = "sunmoonai:auth:research:admin:session:"
-TRANSACTION_PREFIX = "sunmoonai:auth:research:admin:oidc:"
+SESSION_PREFIX = "research:auth:admin:session:"
+TRANSACTION_PREFIX = "research:auth:admin:oidc:"
 ADMIN_SCOPE = "research:admin"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -255,4 +255,3 @@ class AuthService:
     def require_scopes(principal: Principal, required: set[str] | frozenset[str]) -> None:
         if not principal.has_scopes(required):
             raise ForbiddenError("Required scope missing")
-
