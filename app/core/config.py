@@ -79,6 +79,42 @@ class Settings(BaseSettings):
     agent_v4_traffic_enabled: bool = False
     agent_redis_key_prefix: str = "research:agent"
 
+    # Independent Research worker -> Knowledge retrieval relation.
+    knowledge_retrieval_url: str | None = Field(
+        default=None,
+        validation_alias="KNOWLEDGE_RETRIEVAL_URL",
+    )
+    knowledge_retrieval_service_application: str = Field(
+        default="sunmoonai-research-knowledge-retrieve",
+        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_APPLICATION",
+    )
+    knowledge_retrieval_service_discovery_url: str | None = Field(
+        default=None,
+        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_DISCOVERY_URL",
+    )
+    knowledge_retrieval_service_backchannel_endpoint: str | None = Field(
+        default=None,
+        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_BACKCHANNEL_ENDPOINT",
+    )
+    knowledge_retrieval_service_client_id: str | None = Field(
+        default=None,
+        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_CLIENT_ID",
+    )
+    knowledge_retrieval_service_client_secret: str | None = Field(
+        default=None,
+        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_CLIENT_SECRET",
+    )
+    knowledge_retrieval_service_scope: str = Field(
+        default="knowledge:retrieve",
+        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_SCOPE",
+    )
+    knowledge_retrieval_timeout_seconds: float = Field(
+        default=20.0,
+        gt=0,
+        le=120,
+        validation_alias="KNOWLEDGE_RETRIEVAL_TIMEOUT_SECONDS",
+    )
+
     @model_validator(mode="after")
     def validate_security_configuration(self) -> "Settings":
         raw_origins = self.frontend_allowed_origins or self.frontend_base_url
@@ -151,6 +187,14 @@ class Settings(BaseSettings):
     @property
     def celery_enabled(self) -> bool:
         return bool(self.celery_broker_url)
+
+    @property
+    def knowledge_retrieval_enabled(self) -> bool:
+        return bool(
+            self.knowledge_retrieval_url
+            and self.knowledge_retrieval_service_client_id
+            and self.knowledge_retrieval_service_client_secret
+        )
 
     model_config = SettingsConfigDict(
         env_file=".env",
