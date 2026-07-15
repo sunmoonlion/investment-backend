@@ -178,6 +178,18 @@ class AgentRepository:
     async def append_event(self, event: DomainEvent | UIEvent, category: str) -> str:
         event_id = str(uuid.uuid4())
         lineage = event.lineage.model_dump()
+        # The sequence is the per-session replay cursor.  A max()+1 read alone
+        # races when API/worker processes append domain and UI events together.
+        # A transaction-scoped advisory lock serializes only writers for this
+        # session while keeping the existing schema and cursor contract.
+        await self.session.execute(
+            text(
+                """
+                select pg_advisory_xact_lock(hashtextextended(:session_id, 0))
+                """
+            ),
+            {"session_id": event.lineage.session_id},
+        )
         result = await self.session.execute(
             text(
                 """

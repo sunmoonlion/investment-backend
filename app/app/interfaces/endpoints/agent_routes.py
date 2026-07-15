@@ -165,27 +165,45 @@ async def stream_events(
         return f"id: {payload.get('id') or ''}\nevent: {payload.get('type', 'message')}\ndata: {data}\n\n"
 
     async def event_generator():
-        async with get_postgres().session_factory() as session:
-            repository = AgentRepository(session)
-            for event in await repository.list_ui_events(
-                session_id=session_id,
-                after_event_id=last_event_id,
-            ):
-                yield to_sse(event)
-
         redis = get_redis().client
         pubsub = redis.pubsub()
         channels = [
             session_events_channel(session_id),
             session_deltas_channel(session_id),
         ]
+        # Subscribe before reading the durable snapshot.  Otherwise an event
+        # committed between the DB query and Redis subscribe is lost forever.
         await pubsub.subscribe(*channels)
+        replayed_event_ids: set[str] = set()
         try:
+            async with get_postgres().session_factory() as session:
+                repository = AgentRepository(session)
+                for event in await repository.list_ui_events(
+                    session_id=session_id,
+                    after_event_id=last_event_id,
+                ):
+                    event_id = str(event.get("id") or "")
+                    if event_id:
+                        replayed_event_ids.add(event_id)
+                    yield to_sse(event)
+
             async for message in pubsub.listen():
                 if message["type"] != "message":
                     continue
                 payload = message["data"]
                 data = json.loads(payload)
+                channel = message.get("channel")
+                if isinstance(channel, bytes):
+                    channel = channel.decode()
+                # The durable UI-event snapshot and the live event channel can
+                # overlap.  Deduplicate only UI events; LiveDelta carries the
+                # same final_event_id but is a distinct client signal.  Do not
+                # retain every later live ID: Redis Pub/Sub is at-most-once and
+                # an ever-growing set would leak memory on a long-lived stream.
+                if channel == session_events_channel(session_id):
+                    event_id = str(data.get("id") or "")
+                    if event_id and event_id in replayed_event_ids:
+                        continue
                 yield to_sse(data)
         finally:
             await pubsub.unsubscribe(*channels)
