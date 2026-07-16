@@ -8,7 +8,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from app.infrastructure.graph.runtime_selection_spike import (
+    InMemoryDurableDispatchJournal,
     InMemoryIdempotencyLedger,
+    InMemoryRuntimeControlPlane,
+    RuntimeSpikeCancelled,
+    RuntimeSpikeRejected,
     RuntimeSpikeState,
     build_runtime_selection_spike_graph,
 )
@@ -92,3 +96,102 @@ def test_waiting_checkpoint_resumes_with_pinned_graph_version() -> None:
     completed = old_graph.invoke(Command(resume="approved"), runtime_config)
     assert completed["graph_version"] == "runtime-spike-v1"
     assert completed["completed"] is True
+
+
+def test_same_thread_rejects_second_non_terminal_run() -> None:
+    ledger = InMemoryIdempotencyLedger()
+    control_plane = InMemoryRuntimeControlPlane()
+    checkpointer = InMemorySaver()
+    graph = build_runtime_selection_spike_graph(
+        side_effects=ledger,
+        checkpointer=checkpointer,
+        control_plane=control_plane,
+    )
+
+    graph.invoke(initial("shared-thread", "run-a"), config("checkpoint-a"))
+
+    with pytest.raises(RuntimeSpikeRejected, match="thread already has active run"):
+        graph.invoke(initial("shared-thread", "run-b"), config("checkpoint-b"))
+
+    completed = graph.invoke(Command(resume="approved"), config("checkpoint-a"))
+    assert completed["completed"] is True
+
+    graph.invoke(initial("shared-thread", "run-b"), config("checkpoint-b"))
+    assert control_plane.runs["run-b"].status == "waiting"
+
+
+def test_cancelled_run_stops_before_side_effect_and_releases_thread() -> None:
+    ledger = InMemoryIdempotencyLedger()
+    control_plane = InMemoryRuntimeControlPlane()
+    graph = build_runtime_selection_spike_graph(
+        side_effects=ledger,
+        control_plane=control_plane,
+    )
+    runtime_config = config("cancel-checkpoint")
+
+    graph.invoke(initial("cancel-thread", "run-cancel"), runtime_config)
+    control_plane.request_cancel("run-cancel")
+
+    with pytest.raises(RuntimeSpikeCancelled, match="run cancelled"):
+        graph.invoke(Command(resume="approved"), runtime_config)
+
+    assert control_plane.runs["run-cancel"].status == "cancelled"
+    assert ledger.physical_executions == 0
+
+    replacement = build_runtime_selection_spike_graph(
+        side_effects=ledger,
+        control_plane=control_plane,
+    )
+    replacement.invoke(
+        initial("cancel-thread", "run-after-cancel"),
+        config("replacement-checkpoint"),
+    )
+    assert control_plane.runs["run-after-cancel"].status == "waiting"
+
+
+def test_cursor_reconciliation_returns_every_event_after_disconnect() -> None:
+    ledger = InMemoryIdempotencyLedger()
+    control_plane = InMemoryRuntimeControlPlane()
+    graph = build_runtime_selection_spike_graph(
+        side_effects=ledger,
+        control_plane=control_plane,
+    )
+    runtime_config = config("cursor-checkpoint")
+
+    graph.invoke(initial("cursor-thread", "run-cursor"), runtime_config)
+    disconnected_after = control_plane.events[-1].cursor
+    graph.invoke(Command(resume="approved"), runtime_config)
+
+    recovered = control_plane.events_after(disconnected_after)
+    assert [event.type for event in recovered] == [
+        "RunStarted",
+        "RunCompleted",
+    ]
+    assert [event.cursor for event in recovered] == list(
+        range(disconnected_after + 1, disconnected_after + 1 + len(recovered))
+    )
+
+
+def test_broker_failure_keeps_durable_dispatch_intent_for_retry() -> None:
+    journal = InMemoryDurableDispatchJournal()
+    sent: list[str] = []
+    journal.record("run-dispatch")
+
+    def unavailable_broker(run_id: str) -> str:
+        raise ConnectionError(f"broker unavailable for {run_id}")
+
+    with pytest.raises(ConnectionError, match="broker unavailable"):
+        journal.dispatch("run-dispatch", unavailable_broker)
+
+    assert journal.pending_run_ids() == ["run-dispatch"]
+    assert journal.intents["run-dispatch"].attempts == 1
+
+    def recovered_broker(run_id: str) -> str:
+        sent.append(run_id)
+        return "task-1"
+
+    assert journal.dispatch("run-dispatch", recovered_broker) == "task-1"
+    assert journal.dispatch("run-dispatch", recovered_broker) == "task-1"
+    assert sent == ["run-dispatch"]
+    assert journal.pending_run_ids() == []
+    assert journal.intents["run-dispatch"].attempts == 2
