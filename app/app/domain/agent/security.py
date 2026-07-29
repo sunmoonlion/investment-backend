@@ -11,5 +11,5 @@ class SecurityContext(BaseModel):
     schema_version: int = 1
 
     @classmethod
-    def single_tenant(cls) -> "SecurityContext":
+    def single_tenant(cls) -> SecurityContext:
         return cls()

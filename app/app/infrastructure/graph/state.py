@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, NotRequired, Sequence, TypedDict
+from collections.abc import Sequence
+from typing import Any, NotRequired, TypedDict
 
 from app.domain.agent.models import StoredMessage
 

@@ -78,5 +78,5 @@ def configure_celery(*, require_broker: bool = False) -> bool:
 if os.environ.get("CELERY_BROKER_URL"):
     configure_celery()
 
-import app.tasks.ping  # noqa: E402, F401 — register tasks
 import app.tasks.agent_graph  # noqa: E402, F401 — register tasks
+import app.tasks.ping  # noqa: E402, F401 — register tasks

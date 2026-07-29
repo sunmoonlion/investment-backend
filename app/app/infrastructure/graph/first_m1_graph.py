@@ -7,7 +7,10 @@ from langgraph.graph import END, START, StateGraph
 
 from app.domain.agent.models import MessageRole, StoredMessage
 from app.domain.agent.runtime import RunBudget
-from app.infrastructure.graph.state import PlannerReactState, validate_base_state_layering
+from app.infrastructure.graph.state import (
+    PlannerReactState,
+    validate_base_state_layering,
+)
 
 
 def normalize_input_node(state: PlannerReactState) -> PlannerReactState:

@@ -27,7 +27,6 @@ from app.infrastructure.graph.runtime_selection_spike import (
     build_runtime_selection_spike_graph,
 )
 
-
 KillPoint = Literal["before_commit", "after_commit"]
 
 

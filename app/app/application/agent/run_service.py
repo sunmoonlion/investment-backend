@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.application.agent.profile_catalog import AgentProfileCatalog, builtin_profile_catalog
+from app.application.agent.profile_catalog import (
+    AgentProfileCatalog,
+    builtin_profile_catalog,
+)
 from app.domain.agent.commands import CreateRunCommand, ResumeRunCommand
 from app.domain.agent.models import RunStatus
 from app.infrastructure.agent.repositories import AgentRepository

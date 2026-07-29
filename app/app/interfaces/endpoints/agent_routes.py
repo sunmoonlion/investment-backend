@@ -17,12 +17,10 @@ from app.domain.agent.models import UserInput
 from app.domain.agent.security import SecurityContext
 from app.domain.security import Principal
 from app.infrastructure.agent.repositories import AgentRepository
-from app.infrastructure.storage.postgres import get_postgres
-from app.infrastructure.storage.postgres import get_db_session
+from app.infrastructure.storage.postgres import get_db_session, get_postgres
 from app.infrastructure.storage.redis import get_redis
-from core.config import get_settings
-
 from app.interfaces.middleware.auth import require_research_admin
+from core.config import get_settings
 
 
 def require_agent_v4_traffic_enabled() -> None:

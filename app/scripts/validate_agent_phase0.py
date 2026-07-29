@@ -26,7 +26,6 @@ from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.redis import get_redis
 from app.tasks.agent_graph import _run_agent_graph, _stream_graph
 
-
 EXPECTED_TIMELINE = [
     "TimelineRunStarted",
     "TimelineWaitInputDisplayed",

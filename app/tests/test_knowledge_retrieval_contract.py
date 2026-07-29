@@ -21,7 +21,6 @@ from app.infrastructure.external.knowledge_retrieval import (
     KnowledgeRetrievalProtocolError,
 )
 
-
 RESEARCH_ROOT = Path(__file__).resolve().parents[3]
 LOCK_PATH = RESEARCH_ROOT / "contracts/knowledge-retrieval-provider-lock.json"
 

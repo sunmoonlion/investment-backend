@@ -8,7 +8,6 @@ from typing import Any
 
 import httpx
 
-
 EXPECTED_TIMELINE = [
     "TimelineRunStarted",
     "TimelineWaitInputDisplayed",

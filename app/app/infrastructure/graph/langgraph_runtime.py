@@ -4,7 +4,10 @@ from typing import Any
 
 from langgraph.types import Command
 
-from app.application.agent.graph_runtime_service import GraphRuntimeResult, GraphRuntimeService
+from app.application.agent.graph_runtime_service import (
+    GraphRuntimeResult,
+    GraphRuntimeService,
+)
 
 
 class LangGraphRuntimeService(GraphRuntimeService):

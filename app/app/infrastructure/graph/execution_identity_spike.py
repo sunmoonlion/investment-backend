@@ -6,8 +6,8 @@ state, checkpoint and lineage semantics before production tables are designed.
 
 from __future__ import annotations
 
-import uuid
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path

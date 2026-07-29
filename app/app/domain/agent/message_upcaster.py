@@ -4,7 +4,6 @@ from typing import Any
 
 from app.domain.agent.models import StoredMessage
 
-
 CURRENT_STORED_MESSAGE_SCHEMA_VERSION = 1
 
 

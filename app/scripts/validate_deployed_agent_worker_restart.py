@@ -9,7 +9,6 @@ from typing import Any
 
 import httpx
 
-
 EXPECTED_TIMELINE = [
     "TimelineRunStarted",
     "TimelineWaitInputDisplayed",
@@ -63,10 +62,10 @@ async def run_kubectl(args: list[str], *, timeout_seconds: float) -> None:
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError as exc:
         process.kill()
         await process.communicate()
-        raise AssertionError(f"kubectl timed out: {' '.join(args)}")
+        raise AssertionError(f"kubectl timed out: {' '.join(args)}") from exc
     if process.returncode != 0:
         raise AssertionError(
             "kubectl failed: "

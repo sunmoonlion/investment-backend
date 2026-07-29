@@ -4,7 +4,6 @@ from collections.abc import Callable
 
 from app.domain.agent.models import DomainEvent, UIEvent
 
-
 ProjectorHandler = Callable[[DomainEvent], UIEvent]
 
 

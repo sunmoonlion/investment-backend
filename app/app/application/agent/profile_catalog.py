@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.domain.agent.profiles import AgentProfile, EffectiveAgentConfig, MemoryPolicyConfig
+from app.domain.agent.profiles import (
+    AgentProfile,
+    EffectiveAgentConfig,
+    MemoryPolicyConfig,
+)
 
 
 class AgentProfileCatalog:

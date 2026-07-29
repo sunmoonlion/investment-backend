@@ -9,7 +9,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.agent_golden import load_golden_case, run_golden_case
 
-
 DEFAULT_FIXTURE = Path("tests/golden/phase0_walking_skeleton.json")
 
 

@@ -10,7 +10,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-
 ROOT = Path(__file__).resolve().parent
 EVENTS = [
     {"id": "event-1", "type": "TimelineRunStarted", "payload": {}},

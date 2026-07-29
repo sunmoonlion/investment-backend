@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import uuid
 import json
+import uuid
 from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.agent.models import DomainEvent, RunLineage, UIEvent
+from app.domain.agent.models import DomainEvent, UIEvent
 from app.domain.agent.runtime import validate_run_status_transition
 
 

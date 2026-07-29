@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import uuid
 
-from app.infrastructure.graph.first_m1_graph import build_first_m1_graph, normalize_input_node
+from app.infrastructure.graph.first_m1_graph import (
+    build_first_m1_graph,
+    normalize_input_node,
+)
 from app.infrastructure.graph.langgraph_runtime import LangGraphRuntimeService
 
 

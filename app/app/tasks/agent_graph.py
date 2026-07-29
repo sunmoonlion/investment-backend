@@ -11,8 +11,8 @@ from app.application.agent.run_logging import lineage_log_extra
 from app.application.agent.side_effect_service import ToolSideEffectService
 from app.domain.agent.models import DomainEvent, RunLineage
 from app.domain.agent.security import SecurityContext
-from app.infrastructure.agent.session_lock import RedisSessionLock
 from app.infrastructure.agent.repositories import AgentRepository
+from app.infrastructure.agent.session_lock import RedisSessionLock
 from app.infrastructure.graph.checkpointer import phase0_postgres_checkpointer
 from app.infrastructure.graph.langgraph_runtime import LangGraphRuntimeService
 from app.infrastructure.graph.walking_skeleton import build_walking_skeleton_graph

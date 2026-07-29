@@ -30,14 +30,26 @@ class CeleryProducer:
             return True
         return configure_celery()
 
+    def _delivery_options(self) -> dict[str, str]:
+        queue = get_settings().celery_queue
+        return {
+            "queue": queue,
+            "exchange": queue,
+            "routing_key": queue,
+        }
+
     def dispatch_ping(self) -> str:
         """投递 ping 任务，返回 Celery task_id。"""
         self._ensure_ready()
         from app.tasks.ping import ping
 
-        queue = get_settings().celery_queue
-        async_result = ping.apply_async(queue=queue)
-        logger.info("已投递 ping 任务 task_id=%s queue=%s", async_result.id, queue)
+        options = self._delivery_options()
+        async_result = ping.apply_async(**options)
+        logger.info(
+            "已投递 ping 任务 task_id=%s queue=%s",
+            async_result.id,
+            options["queue"],
+        )
         return async_result.id
 
     def dispatch_agent_graph(
@@ -50,16 +62,15 @@ class CeleryProducer:
         self._ensure_ready()
         from app.tasks.agent_graph import run_agent_graph
 
-        queue = get_settings().celery_queue
         async_result = run_agent_graph.apply_async(
             args=[run_id, user_input, security_context],
-            queue=queue,
+            **self._delivery_options(),
         )
         logger.info(
             "已投递 agent graph 任务 task_id=%s run_id=%s queue=%s",
             async_result.id,
             run_id,
-            queue,
+            get_settings().celery_queue,
         )
         return async_result.id
 

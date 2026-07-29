@@ -7,7 +7,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.domain.agent.commands import CancelRunCommand
 from app.domain.agent.message_upcaster import upcast_stored_message
 from app.domain.agent.models import MessageRole, StoredMessage
-from app.infrastructure.agent.message_mapper import base_message_to_stored, stored_message_to_base
+from app.infrastructure.agent.message_mapper import (
+    base_message_to_stored,
+    stored_message_to_base,
+)
 
 
 def test_stored_message_upcaster_accepts_current_schema() -> None:

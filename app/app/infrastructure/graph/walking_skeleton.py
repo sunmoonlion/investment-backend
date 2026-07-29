@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph

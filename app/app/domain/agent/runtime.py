@@ -94,14 +94,14 @@ class RunBudget(BaseModel):
             )
         return None
 
-    def consume_step(self, amount: int = 1) -> "RunBudget":
+    def consume_step(self, amount: int = 1) -> RunBudget:
         return self.model_copy(update={"steps_used": self.steps_used + amount})
 
-    def consume_tool_call(self, amount: int = 1) -> "RunBudget":
+    def consume_tool_call(self, amount: int = 1) -> RunBudget:
         return self.model_copy(update={"tool_calls_used": self.tool_calls_used + amount})
 
-    def consume_llm_call(self, amount: int = 1) -> "RunBudget":
+    def consume_llm_call(self, amount: int = 1) -> RunBudget:
         return self.model_copy(update={"llm_calls_used": self.llm_calls_used + amount})
 
-    def consume_input_tokens(self, amount: int) -> "RunBudget":
+    def consume_input_tokens(self, amount: int) -> RunBudget:
         return self.model_copy(update={"input_tokens_used": self.input_tokens_used + amount})
