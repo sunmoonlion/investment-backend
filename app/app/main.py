@@ -31,7 +31,9 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.is_production or settings.casdoor_endpoint:
+    if settings.browser_identity_enabled and (
+        settings.is_production or settings.casdoor_endpoint
+    ):
         settings.require_browser_identity()
 
     setup_logging()

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     casdoor_organization: str = "built-in"
     casdoor_application: str = "sunmoonai-research-admin"
     casdoor_verify_ssl: bool = True
+    browser_identity_enabled: bool = True
 
     auth_http_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     auth_transaction_ttl_seconds: int = Field(default=300, ge=60, le=900)
@@ -208,6 +209,10 @@ class Settings(BaseSettings):
             raise ValueError("SESSION_COOKIE_SECURE cannot be false in production")
         if self.agent_pilot_enabled:
             self.require_agent_pilot()
+        if not self.browser_identity_enabled and not self.agent_pilot_enabled:
+            raise ValueError(
+                "BROWSER_IDENTITY_ENABLED can be false only for the isolated agent pilot"
+            )
         return self
 
     @staticmethod
