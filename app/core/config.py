@@ -77,6 +77,49 @@ class Settings(BaseSettings):
     agent_redis_key_prefix: str = Field(
         default="research:agent", validation_alias="AGENT_REDIS_KEY_PREFIX"
     )
+    agent_pilot_enabled: bool = Field(
+        default=False, validation_alias="AGENT_PILOT_ENABLED"
+    )
+    agent_pilot_internal_auth_application: str = Field(
+        default="sunmoonai-research-runtime",
+        validation_alias="AGENT_PILOT_INTERNAL_AUTH_APPLICATION",
+    )
+    agent_pilot_internal_auth_discovery_url: str | None = Field(
+        default=None,
+        validation_alias="AGENT_PILOT_INTERNAL_AUTH_DISCOVERY_URL",
+    )
+    agent_pilot_internal_auth_backchannel_endpoint: str | None = Field(
+        default=None,
+        validation_alias="AGENT_PILOT_INTERNAL_AUTH_BACKCHANNEL_ENDPOINT",
+    )
+    agent_pilot_internal_auth_audience: str | None = Field(
+        default=None, validation_alias="AGENT_PILOT_INTERNAL_AUTH_AUDIENCE"
+    )
+    agent_pilot_internal_auth_subjects: str = Field(
+        default="", validation_alias="AGENT_PILOT_INTERNAL_AUTH_SUBJECTS"
+    )
+    agent_pilot_internal_auth_required_scope: str = Field(
+        default="research:runtime",
+        validation_alias="AGENT_PILOT_INTERNAL_AUTH_REQUIRED_SCOPE",
+    )
+    agent_pilot_dataset_keys: str = Field(
+        default="", validation_alias="AGENT_PILOT_DATASET_KEYS"
+    )
+    agent_pilot_llm_base_url: str = Field(
+        default="", validation_alias="AGENT_PILOT_LLM_BASE_URL"
+    )
+    agent_pilot_llm_api_key: str | None = Field(
+        default=None, validation_alias="AGENT_PILOT_LLM_API_KEY"
+    )
+    agent_pilot_llm_model: str = Field(
+        default="qwen-plus", validation_alias="AGENT_PILOT_LLM_MODEL"
+    )
+    agent_pilot_llm_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        le=120,
+        validation_alias="AGENT_PILOT_LLM_TIMEOUT_SECONDS",
+    )
 
     # Knowledge retrieval client (cross-app relation names must NOT be rewritten).
     knowledge_retrieval_url: str | None = Field(
@@ -163,6 +206,8 @@ class Settings(BaseSettings):
             raise ValueError("CASDOOR_VERIFY_SSL must be true in production")
         if self.is_production and self.session_cookie_secure is False:
             raise ValueError("SESSION_COOKIE_SECURE cannot be false in production")
+        if self.agent_pilot_enabled:
+            self.require_agent_pilot()
         return self
 
     @staticmethod
@@ -354,6 +399,37 @@ class Settings(BaseSettings):
             and self.knowledge_retrieval_service_client_id
             and self.knowledge_retrieval_service_client_secret
         )
+
+    @property
+    def agent_pilot_internal_auth_subject_list(self) -> frozenset[str]:
+        return frozenset(self._split_csv(self.agent_pilot_internal_auth_subjects))
+
+    @property
+    def agent_pilot_dataset_key_list(self) -> tuple[str, ...]:
+        return self._split_csv(self.agent_pilot_dataset_keys)
+
+    def require_agent_pilot(self) -> None:
+        if not self.agent_pilot_enabled:
+            raise ValueError("AGENT_PILOT_ENABLED must be true")
+        required = {
+            "AGENT_PILOT_INTERNAL_AUTH_AUDIENCE": (
+                self.agent_pilot_internal_auth_audience
+            ),
+            "AGENT_PILOT_INTERNAL_AUTH_SUBJECTS": (
+                self.agent_pilot_internal_auth_subjects
+            ),
+            "AGENT_PILOT_DATASET_KEYS": self.agent_pilot_dataset_keys,
+            "AGENT_PILOT_LLM_BASE_URL": self.agent_pilot_llm_base_url,
+            "AGENT_PILOT_LLM_API_KEY": self.agent_pilot_llm_api_key,
+            "AGENT_PILOT_LLM_MODEL": self.agent_pilot_llm_model,
+        }
+        missing = sorted(name for name, value in required.items() if not value)
+        if missing:
+            raise ValueError(
+                f"agent pilot configuration missing: {', '.join(missing)}"
+            )
+        if not self.knowledge_retrieval_enabled:
+            raise ValueError("Knowledge retrieval must be configured for agent pilot")
 
     model_config = SettingsConfigDict(
         env_file=".env",

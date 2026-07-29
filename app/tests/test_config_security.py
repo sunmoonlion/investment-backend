@@ -106,3 +106,36 @@ def test_provider_discovery_and_redirect_paths_are_exact() -> None:
         _production_settings(
             casdoor_redirect_uri="https://admin.example.test/other-callback"
         ).require_browser_identity()
+
+
+def test_agent_pilot_is_disabled_by_default_and_fails_closed() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.agent_pilot_enabled is False
+    with pytest.raises(ValueError, match="AGENT_PILOT_ENABLED"):
+        settings.require_agent_pilot()
+
+    with pytest.raises(ValueError, match="agent pilot configuration missing"):
+        Settings(_env_file=None, AGENT_PILOT_ENABLED=True)
+
+
+def test_agent_pilot_requires_real_retrieval_model_and_service_binding() -> None:
+    settings = Settings(
+        _env_file=None,
+        AGENT_PILOT_ENABLED=True,
+        AGENT_PILOT_INTERNAL_AUTH_AUDIENCE="sunmoonai-research-runtime",
+        AGENT_PILOT_INTERNAL_AUTH_SUBJECTS="research-web-bff",
+        AGENT_PILOT_DATASET_KEYS="codex-smoke",
+        AGENT_PILOT_LLM_BASE_URL=(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ),
+        AGENT_PILOT_LLM_API_KEY="test-only-key",
+        AGENT_PILOT_LLM_MODEL="qwen-plus",
+        KNOWLEDGE_RETRIEVAL_URL="https://knowledge.example.test/retrievals",
+        KNOWLEDGE_RETRIEVAL_SERVICE_CLIENT_ID="research-retrieval",
+        KNOWLEDGE_RETRIEVAL_SERVICE_CLIENT_SECRET="test-only-secret",
+    )
+    settings.require_agent_pilot()
+    assert settings.agent_pilot_dataset_key_list == ("codex-smoke",)
+    assert settings.agent_pilot_internal_auth_subject_list == {
+        "research-web-bff"
+    }

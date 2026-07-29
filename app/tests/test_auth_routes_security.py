@@ -162,6 +162,7 @@ def test_every_non_auth_api_route_requires_a_scope_dependency() -> None:
     allowed = {
         "dependency",  # require_scopes(...) wrapper
         "require_agent_v4_traffic_enabled",
+        "require_pilot_service",
         "require_research_admin",
     }
     for route in app.routes:
