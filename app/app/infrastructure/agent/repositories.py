@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import json
+import uuid
+from typing import Any, cast
+
+from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domain.agent.models import DomainEvent, UIEvent
+from app.domain.agent.runtime import validate_run_status_transition
+
+
+class AgentRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create_session(self, *, owner_actor_id: str | None = None) -> str:
+        session_id = str(uuid.uuid4())
+        await self.session.execute(
+            text(
+                """
+                insert into agent_sessions (id, status, owner_actor_id)
+                values (:id, 'created', :owner_actor_id)
+                """
+            ),
+            {"id": session_id, "owner_actor_id": owner_actor_id},
+        )
+        await self.session.commit()
+        return session_id
+
+    async def assert_session_owner(self, *, session_id: str, owner_actor_id: str) -> None:
+        result = await self.session.execute(
+            text(
+                """
+                select owner_actor_id
+                from agent_sessions
+                where id = :session_id
+                """
+            ),
+            {"session_id": session_id},
+        )
+        stored_owner = result.scalar_one_or_none()
+        if stored_owner is None or str(stored_owner) != owner_actor_id:
+            raise PermissionError("agent session belongs to another actor")
+
+    async def create_run(
+        self,
+        *,
+        session_id: str,
+        owner_actor_id: str | None,
+        idempotency_key: str | None,
+        agent_profile_key: str | None,
+        agent_profile_version: int = 1,
+    ) -> dict[str, Any]:
+        if owner_actor_id is not None:
+            await self.assert_session_owner(
+                session_id=session_id,
+                owner_actor_id=owner_actor_id,
+            )
+        if idempotency_key:
+            existing = await self.session.execute(
+                text(
+                    """
+                    select id, session_id, status
+                    from agent_runs
+                    where session_id = :session_id and idempotency_key = :idempotency_key
+                    """
+                ),
+                {"session_id": session_id, "idempotency_key": idempotency_key},
+            )
+            row = existing.mappings().first()
+            if row:
+                return dict(row)
+
+        run_id = str(uuid.uuid4())
+        await self.session.execute(
+            text(
+                """
+                insert into agent_runs (
+                    id, session_id, graph_name, graph_version, agent_profile_key,
+                    agent_profile_version, thread_id, idempotency_key, status
+                )
+                values (
+                    :id, :session_id, 'walking_skeleton', 'phase0',
+                    :agent_profile_key, :agent_profile_version, :thread_id, :idempotency_key, 'created'
+                )
+                """
+            ),
+            {
+                "id": run_id,
+                "session_id": session_id,
+                "thread_id": session_id,
+                "agent_profile_key": agent_profile_key or "default_research",
+                "agent_profile_version": agent_profile_version,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        await self.session.commit()
+        return {
+            "id": run_id,
+            "session_id": session_id,
+            "status": "created",
+            "agent_profile_key": agent_profile_key or "default_research",
+            "agent_profile_version": agent_profile_version,
+        }
+
+    async def get_run(self, run_id: str) -> dict[str, Any] | None:
+        result = await self.session.execute(
+            text(
+                """
+                select r.id, r.session_id, r.thread_id, r.status, r.resume_token,
+                       s.owner_actor_id
+                from agent_runs r
+                join agent_sessions s on s.id = r.session_id
+                where r.id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        row = result.mappings().first()
+        return dict(row) if row else None
+
+    async def set_run_status(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        status: str,
+        resume_token: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        current = await self.session.execute(
+            text(
+                """
+                select status
+                from agent_runs
+                where id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        current_status = current.scalar_one_or_none()
+        if current_status is None:
+            raise ValueError(f"run not found: {run_id}")
+        validate_run_status_transition(str(current_status), status)
+        await self.session.execute(
+            text(
+                """
+                update agent_runs
+                set status = :status,
+                    resume_token = coalesce(:resume_token, resume_token),
+                    error = :error,
+                    updated_at = now()
+                where id = :run_id
+                """
+            ),
+            {
+                "run_id": run_id,
+                "status": status,
+                "resume_token": resume_token,
+                "error": error,
+            },
+        )
+        await self.session.execute(
+            text(
+                """
+                update agent_sessions
+                set status = :status, updated_at = now()
+                where id = :session_id
+                """
+            ),
+            {"session_id": session_id, "status": status},
+        )
+        await self.session.commit()
+
+    async def append_event(self, event: DomainEvent | UIEvent, category: str) -> str:
+        event_id = str(uuid.uuid4())
+        lineage = event.lineage.model_dump()
+        # The sequence is the per-session replay cursor.  A max()+1 read alone
+        # races when API/worker processes append domain and UI events together.
+        # A transaction-scoped advisory lock serializes only writers for this
+        # session while keeping the existing schema and cursor contract.
+        await self.session.execute(
+            text(
+                """
+                select pg_advisory_xact_lock(hashtextextended(:session_id, 0))
+                """
+            ),
+            {"session_id": event.lineage.session_id},
+        )
+        result = await self.session.execute(
+            text(
+                """
+                select coalesce(max(sequence_no), 0) + 1
+                from session_events
+                where session_id = :session_id
+                """
+            ),
+            {"session_id": event.lineage.session_id},
+        )
+        sequence_no = int(result.scalar_one())
+        await self.session.execute(
+            text(
+                """
+                insert into session_events (
+                    id, session_id, run_id, sequence_no, category, event_type,
+                    payload_schema_version, lineage, payload, metadata
+                )
+                values (
+                    :id, :session_id, :run_id, :sequence_no, :category, :event_type,
+                    :payload_schema_version, cast(:lineage as jsonb),
+                    cast(:payload as jsonb), cast(:metadata as jsonb)
+                )
+                """
+            ),
+            {
+                "id": event_id,
+                "session_id": event.lineage.session_id,
+                "run_id": event.lineage.run_id,
+                "sequence_no": sequence_no,
+                "category": category,
+                "event_type": event.type,
+                "payload_schema_version": event.schema_version,
+                "lineage": json.dumps(lineage),
+                "payload": json.dumps(event.payload),
+                "metadata": "{}",
+            },
+        )
+        await self.session.commit()
+        return event_id
+
+    async def list_ui_events(
+        self, *, session_id: str, after_event_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        after_sequence = 0
+        if after_event_id:
+            result = await self.session.execute(
+                text(
+                    """
+                    select sequence_no from session_events
+                    where id = :event_id and session_id = :session_id
+                    """
+                ),
+                {"event_id": after_event_id, "session_id": session_id},
+            )
+            after_sequence = int(result.scalar() or 0)
+
+        result = await self.session.execute(
+            text(
+                """
+                select id, event_type as type, payload, lineage, payload_schema_version as schema_version
+                from session_events
+                where session_id = :session_id
+                  and category = 'ui'
+                  and sequence_no > :after_sequence
+                order by sequence_no asc
+                """
+            ),
+            {"session_id": session_id, "after_sequence": after_sequence},
+        )
+        events = []
+        for row in result.mappings().all():
+            event = dict(row)
+            event["id"] = str(event["id"])
+            events.append(event)
+        return events
+
+    async def record_side_effect_once(
+        self,
+        *,
+        tool_call_id: str,
+        run_id: str,
+        result: dict[str, Any] | None = None,
+    ) -> bool:
+        payload = result or {"message": "phase0 side effect"}
+        execute_result = await self.session.execute(
+            text(
+                """
+                insert into tool_side_effects (tool_call_id, run_id, status, result)
+                values (:tool_call_id, :run_id, 'completed', cast(:result as jsonb))
+                on conflict (tool_call_id) do nothing
+                """
+            ),
+            {
+                "tool_call_id": tool_call_id,
+                "run_id": run_id,
+                "result": json.dumps(payload),
+            },
+        )
+        await self.session.commit()
+        return cast(CursorResult[Any], execute_result).rowcount == 1

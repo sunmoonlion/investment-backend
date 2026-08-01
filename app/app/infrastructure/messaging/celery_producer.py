@@ -30,14 +30,71 @@ class CeleryProducer:
             return True
         return configure_celery()
 
+    def _delivery_options(self) -> dict[str, str]:
+        queue = get_settings().celery_queue
+        return {
+            "queue": queue,
+            "exchange": queue,
+            "routing_key": queue,
+        }
+
     def dispatch_ping(self) -> str:
         """投递 ping 任务，返回 Celery task_id。"""
         self._ensure_ready()
         from app.tasks.ping import ping
 
-        queue = get_settings().celery_queue
-        async_result = ping.apply_async(queue=queue)
-        logger.info("已投递 ping 任务 task_id=%s queue=%s", async_result.id, queue)
+        options = self._delivery_options()
+        async_result = ping.apply_async(**options)
+        logger.info(
+            "已投递 ping 任务 task_id=%s queue=%s",
+            async_result.id,
+            options["queue"],
+        )
+        return async_result.id
+
+    def dispatch_agent_graph(
+        self,
+        run_id: str,
+        user_input: str | None = None,
+        security_context: dict | None = None,
+    ) -> str:
+        """投递 Phase 0 agent graph 任务，返回 Celery task_id。"""
+        self._ensure_ready()
+        from app.tasks.agent_graph import run_agent_graph
+
+        async_result = run_agent_graph.apply_async(
+            args=[run_id, user_input, security_context],
+            **self._delivery_options(),
+        )
+        logger.info(
+            "已投递 agent graph 任务 task_id=%s run_id=%s queue=%s",
+            async_result.id,
+            run_id,
+            get_settings().celery_queue,
+        )
+        return async_result.id
+
+    def dispatch_pilot_graph(
+        self,
+        run_id: str,
+        resume: str | None = None,
+    ) -> str:
+        """Dispatch only the isolated P0-008C Runtime candidate."""
+        self._ensure_ready()
+        if not get_settings().agent_pilot_enabled:
+            raise CeleryNotConfiguredError("agent pilot is disabled")
+        from app.tasks.pilot_agent_graph import run_pilot_agent_graph
+
+        async_result = run_pilot_agent_graph.apply_async(
+            args=[run_id, resume],
+            **self._delivery_options(),
+        )
+        logger.info(
+            "dispatched pilot graph task_id=%s run_id=%s queue=%s",
+            async_result.id,
+            run_id,
+            get_settings().celery_queue,
+        )
         return async_result.id
 
     def get_task_result(self, task_id: str) -> AsyncResult:

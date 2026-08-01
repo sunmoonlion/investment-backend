@@ -1,0 +1,65 @@
+{
+  "name": "phase0_walking_skeleton",
+  "description": "Deterministic golden case for the Phase 0 ask-user -> side-effect skeleton.",
+  "llm": {
+    "mode": "none",
+    "expected_calls": 0
+  },
+  "graph": {
+    "initial_state": {
+      "session_id": "golden-session",
+      "run_id": "golden-run"
+    },
+    "resume_input": "continue",
+    "expected_resumed_state": {
+      "user_input": "continue",
+      "side_effect_done": true
+    }
+  },
+  "events": [
+    {
+      "domain_type": "RunStarted",
+      "payload": {},
+      "expected_ui_type": "TimelineRunStarted"
+    },
+    {
+      "domain_type": "HumanInputRequested",
+      "payload": {
+        "resume_token": "phase0:golden-run"
+      },
+      "expected_ui_type": "TimelineWaitInputDisplayed"
+    },
+    {
+      "domain_type": "UserInputReceived",
+      "payload": {
+        "text": "continue"
+      },
+      "expected_ui_type": "TimelineUserInputReceived"
+    },
+    {
+      "domain_type": "ToolCallStarted",
+      "payload": {},
+      "expected_ui_type": "TimelineToolStarted"
+    },
+    {
+      "domain_type": "ToolCallCompleted",
+      "payload": {
+        "inserted": true
+      },
+      "expected_ui_type": "TimelineToolCompleted"
+    },
+    {
+      "domain_type": "RunCompleted",
+      "payload": {},
+      "expected_ui_type": "TimelineRunCompleted"
+    }
+  ],
+  "expected_timeline": [
+    "TimelineRunStarted",
+    "TimelineWaitInputDisplayed",
+    "TimelineUserInputReceived",
+    "TimelineToolStarted",
+    "TimelineToolCompleted",
+    "TimelineRunCompleted"
+  ]
+}
