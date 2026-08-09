@@ -2,16 +2,16 @@
   "apiVersion": "search.sunmoonai.com/v1alpha1",
   "kind": "ElasticsearchAccess",
   "metadata": {
-    "name": "research-admin-backend"
+    "name": "investment-backend"
   },
   "spec": {
     "provider": "platform-elasticsearch",
     "environment": "development",
-    "app": "research-app",
-    "backend": "research-admin-backend",
+    "app": "investment-app",
+    "backend": "investment-backend",
     "namespace": "app-platform-dev",
-    "secretName": "research-admin-backend-elasticsearch",
-    "configMapName": "research-admin-backend-elasticsearch",
+    "secretName": "investment-backend-elasticsearch",
+    "configMapName": "investment-backend-elasticsearch",
     "datasets": [
       {
         "name": "admin-documents",
