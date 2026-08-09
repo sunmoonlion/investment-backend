@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class KnowledgeFilters(BaseModel):
     source_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
-    source_document_version_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
+    source_document_version_ids: list[uuid.UUID] = Field(
+        default_factory=list, max_length=50
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -141,5 +143,4 @@ class Citation(BaseModel):
 
 
 class KnowledgePort(Protocol):
-    async def retrieve(self, query: KnowledgeQuery) -> KnowledgeRetrievalResult:
-        ...
+    async def retrieve(self, query: KnowledgeQuery) -> KnowledgeRetrievalResult: ...

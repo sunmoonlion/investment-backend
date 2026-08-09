@@ -51,7 +51,9 @@ class RetrievalServiceTokenProvider:
         if discovery_url:
             parsed = urlsplit(discovery_url)
             if parsed.scheme in {"http", "https"} and parsed.hostname:
-                service_endpoint = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+                service_endpoint = urlunsplit(
+                    (parsed.scheme, parsed.netloc, "", "", "")
+                )
         service_settings = settings.model_copy(
             update={
                 "casdoor_endpoint": service_endpoint,
@@ -60,7 +62,8 @@ class RetrievalServiceTokenProvider:
                 "casdoor_backchannel_endpoint": (
                     settings.knowledge_retrieval_service_backchannel_endpoint
                 ),
-                "casdoor_client_id": settings.knowledge_retrieval_service_client_id or "",
+                "casdoor_client_id": settings.knowledge_retrieval_service_client_id
+                or "",
                 "casdoor_client_secret": (
                     settings.knowledge_retrieval_service_client_secret or ""
                 ),
@@ -103,7 +106,9 @@ class RetrievalServiceTokenProvider:
             if not isinstance(token, str) or not token:
                 raise KnowledgeRetrievalProtocolError("service access token missing")
             if not isinstance(expires_in, int | float) or expires_in <= 0:
-                raise KnowledgeRetrievalProtocolError("service access token expiry invalid")
+                raise KnowledgeRetrievalProtocolError(
+                    "service access token expiry invalid"
+                )
             self._access_token = token
             self._expires_at = time.time() + float(expires_in)
             return token
@@ -148,9 +153,13 @@ class KnowledgeRetrievalClient(KnowledgePort):
                     },
                 )
         except httpx.TimeoutException as exc:
-            raise KnowledgeRetrievalUnavailableError("Knowledge retrieval timed out") from exc
+            raise KnowledgeRetrievalUnavailableError(
+                "Knowledge retrieval timed out"
+            ) from exc
         except httpx.HTTPError as exc:
-            raise KnowledgeRetrievalUnavailableError("Knowledge retrieval unavailable") from exc
+            raise KnowledgeRetrievalUnavailableError(
+                "Knowledge retrieval unavailable"
+            ) from exc
         if response.status_code in {401, 403}:
             raise KnowledgeRetrievalAuthorizationError("Knowledge retrieval was denied")
         if response.status_code != 200:

@@ -55,7 +55,10 @@ class AgentRunService:
         run = await self.repository.get_run(command.run_id)
         if not run:
             raise ValueError("run not found")
-        if command.owner_actor_id is not None and str(run.get("owner_actor_id")) != command.owner_actor_id:
+        if (
+            command.owner_actor_id is not None
+            and str(run.get("owner_actor_id")) != command.owner_actor_id
+        ):
             raise PermissionError("run belongs to another actor")
         if run.get("status") != RunStatus.waiting:
             raise ValueError("run is not waiting for input")
@@ -73,4 +76,8 @@ class AgentRunService:
             enqueued = True
         else:
             enqueued = False
-        return {"run_id": command.run_id, "session_id": run["session_id"], "enqueued": enqueued}
+        return {
+            "run_id": command.run_id,
+            "session_id": run["session_id"],
+            "enqueued": enqueued,
+        }

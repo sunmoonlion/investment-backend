@@ -10,8 +10,7 @@ class ToolSideEffectStore(Protocol):
         tool_call_id: str,
         run_id: str,
         result: dict[str, Any] | None = None,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class ToolSideEffectService:

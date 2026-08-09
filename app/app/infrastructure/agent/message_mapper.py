@@ -12,7 +12,9 @@ from app.domain.agent.models import MessageRole, StoredMessage
 
 
 def base_message_to_stored(message: BaseMessage, *, sequence_no: int) -> StoredMessage:
-    content = message.content if isinstance(message.content, str) else str(message.content)
+    content = (
+        message.content if isinstance(message.content, str) else str(message.content)
+    )
     if isinstance(message, HumanMessage):
         role = MessageRole.user
     elif isinstance(message, AIMessage):
@@ -22,7 +24,9 @@ def base_message_to_stored(message: BaseMessage, *, sequence_no: int) -> StoredM
     elif isinstance(message, ToolMessage):
         role = MessageRole.tool
     else:
-        raise ValueError(f"unsupported LangChain message type: {type(message).__name__}")
+        raise ValueError(
+            f"unsupported LangChain message type: {type(message).__name__}"
+        )
 
     return StoredMessage(
         role=role,

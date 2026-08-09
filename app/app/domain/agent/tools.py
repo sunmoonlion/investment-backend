@@ -38,8 +38,9 @@ class ToolResultProjection(BaseModel):
 
 
 class ToolExecutionPort(Protocol):
-    async def execute(self, tool_name: str, args: dict[str, Any]) -> ToolExecutionResult:
-        ...
+    async def execute(
+        self, tool_name: str, args: dict[str, Any]
+    ) -> ToolExecutionResult: ...
 
 
 class ToolResultHandler(Protocol):
@@ -49,5 +50,4 @@ class ToolResultHandler(Protocol):
         *,
         lineage: RunLineage,
         sequence_no: int,
-    ) -> ToolResultProjection:
-        ...
+    ) -> ToolResultProjection: ...

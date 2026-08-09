@@ -48,11 +48,9 @@ class MemoryWindow(BaseModel):
 class MemoryPolicy(Protocol):
     key: str
 
-    def select_window(self, memories: list[AgentMemory]) -> list[AgentMemory]:
-        ...
+    def select_window(self, memories: list[AgentMemory]) -> list[AgentMemory]: ...
 
-    def summarize(self, memories: list[AgentMemory]) -> str | None:
-        ...
+    def summarize(self, memories: list[AgentMemory]) -> str | None: ...
 
 
 class WindowMemoryPolicy:
@@ -74,7 +72,9 @@ class WindowMemoryPolicy:
             if memory.scope == MemoryScope.session
             and (self.include_sensitive or not memory.sensitive)
         ]
-        return sorted(eligible, key=lambda memory: memory.created_at)[-self.max_memories :]
+        return sorted(eligible, key=lambda memory: memory.created_at)[
+            -self.max_memories :
+        ]
 
     def summarize(self, memories: list[AgentMemory]) -> str | None:
         if not memories:

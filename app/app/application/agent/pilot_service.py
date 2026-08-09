@@ -67,9 +67,7 @@ class PilotService:
             owner_actor_id=command.delegated_user.actor_id,
         )
 
-    async def snapshot(
-        self, *, run_id: UUID, owner_actor_id: UUID
-    ) -> PilotRunSnapshot:
+    async def snapshot(self, *, run_id: UUID, owner_actor_id: UUID) -> PilotRunSnapshot:
         run = await self.repository.get_run(
             run_id=run_id, owner_actor_id=owner_actor_id
         )
@@ -123,13 +121,9 @@ class PilotService:
             producer = get_celery_producer()
             if not producer.enabled:
                 await self._fail_consumed_resume(run_id=run_id, run=run)
-                raise RuntimeError(
-                    "pilot Runtime worker transport is unavailable"
-                )
+                raise RuntimeError("pilot Runtime worker transport is unavailable")
             try:
-                producer.dispatch_pilot_graph(
-                    run_id=str(run_id), resume=command.value
-                )
+                producer.dispatch_pilot_graph(run_id=str(run_id), resume=command.value)
             except Exception:
                 await self._fail_consumed_resume(run_id=run_id, run=run)
                 raise
@@ -217,6 +211,4 @@ class PilotService:
         # The pilot source view stays on the browser BFF origin.  The Web BFF
         # will fetch the authorized descriptor; it never redirects to a
         # provider-controlled URI.
-        return SourceResolution(
-            location=f"/api/citation-sources/{evidence_id}"
-        )
+        return SourceResolution(location=f"/api/citation-sources/{evidence_id}")

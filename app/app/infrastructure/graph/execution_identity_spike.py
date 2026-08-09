@@ -249,9 +249,7 @@ class InMemoryExecutionIdentityStore:
         self.attempts[attempt.id] = attempt
         run.status = SpikeRunStatus.running
         run.version += 1
-        self.invocations[run.root_invocation_id].status = (
-            SpikeInvocationStatus.running
-        )
+        self.invocations[run.root_invocation_id].status = SpikeInvocationStatus.running
         return attempt
 
     def mark_waiting(
@@ -277,9 +275,7 @@ class InMemoryExecutionIdentityStore:
         attempt.end_checkpoint_id = checkpoint_id
         run.status = SpikeRunStatus.waiting
         run.version += 1
-        self.invocations[run.root_invocation_id].status = (
-            SpikeInvocationStatus.waiting
-        )
+        self.invocations[run.root_invocation_id].status = SpikeInvocationStatus.waiting
         return binding
 
     def fail_attempt(
@@ -298,9 +294,7 @@ class InMemoryExecutionIdentityStore:
         )
         run.version += 1
         self.invocations[run.root_invocation_id].status = (
-            SpikeInvocationStatus.running
-            if retryable
-            else SpikeInvocationStatus.failed
+            SpikeInvocationStatus.running if retryable else SpikeInvocationStatus.failed
         )
 
     def complete_attempt(self, *, attempt_id: AttemptId) -> None:
@@ -311,9 +305,9 @@ class InMemoryExecutionIdentityStore:
         attempt.status = SpikeAttemptStatus.succeeded
         run.status = SpikeRunStatus.completed
         run.version += 1
-        self.invocations[run.root_invocation_id].status = (
-            SpikeInvocationStatus.completed
-        )
+        self.invocations[
+            run.root_invocation_id
+        ].status = SpikeInvocationStatus.completed
 
     def create_child_invocation(
         self,

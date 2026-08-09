@@ -11,7 +11,9 @@ from app.application.agent.graph_runtime_service import (
 
 
 class LangGraphRuntimeService(GraphRuntimeService):
-    def resume(self, graph: Any, user_input: str, *, session_id: str) -> GraphRuntimeResult:
+    def resume(
+        self, graph: Any, user_input: str, *, session_id: str
+    ) -> GraphRuntimeResult:
         return self.stream_with_config(
             graph,
             Command(resume=user_input),

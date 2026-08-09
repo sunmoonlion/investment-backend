@@ -37,5 +37,4 @@ class SandboxResult(BaseModel):
 
 
 class SandboxPort(Protocol):
-    async def run(self, request: SandboxRequest) -> SandboxResult:
-        ...
+    async def run(self, request: SandboxRequest) -> SandboxResult: ...

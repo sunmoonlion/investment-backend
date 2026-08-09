@@ -54,12 +54,8 @@ class PilotServiceAuthVerifier:
             client_secret="",
             redirect_uri="",
             application=self._settings.agent_pilot_internal_auth_application,
-            policy_version=(
-                self._settings.agent_pilot_internal_auth_policy_version
-            ),
-            required_scopes=(
-                self._settings.agent_pilot_internal_auth_required_scope,
-            ),
+            policy_version=(self._settings.agent_pilot_internal_auth_policy_version),
+            required_scopes=(self._settings.agent_pilot_internal_auth_required_scope,),
         )
         self._oidc = OidcProviderClient(service_settings, service_profile)
 
@@ -89,14 +85,10 @@ class PilotServiceAuthVerifier:
             surface="internal",
             audience=expected_audience,
             roles=(),
-            scopes=frozenset(
-                {self._settings.agent_pilot_internal_auth_required_scope}
-            ),
+            scopes=frozenset({self._settings.agent_pilot_internal_auth_required_scope}),
             authenticated_at=datetime.fromtimestamp(int(claims["iat"]), tz=UTC),
             expires_at=datetime.fromtimestamp(int(claims["exp"]), tz=UTC),
-            policy_version=(
-                self._settings.agent_pilot_internal_auth_policy_version
-            ),
+            policy_version=(self._settings.agent_pilot_internal_auth_policy_version),
         )
 
     @staticmethod
@@ -136,6 +128,4 @@ def _bearer_token(authorization: str | None) -> str:
 async def require_pilot_service(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> Principal:
-    return await get_pilot_service_auth_verifier().verify(
-        _bearer_token(authorization)
-    )
+    return await get_pilot_service_auth_verifier().verify(_bearer_token(authorization))

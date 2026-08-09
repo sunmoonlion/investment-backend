@@ -12,7 +12,9 @@ class CreateRunCommand(BaseModel):
     user_input: UserInput = UserInput()
     idempotency_key: str | None = None
     agent_profile_key: str | None = None
-    security_context: SecurityContext = Field(default_factory=SecurityContext.single_tenant)
+    security_context: SecurityContext = Field(
+        default_factory=SecurityContext.single_tenant
+    )
 
 
 class ResumeRunCommand(BaseModel):
@@ -21,11 +23,15 @@ class ResumeRunCommand(BaseModel):
     resume_token: str
     user_input: UserInput
     idempotency_key: str | None = None
-    security_context: SecurityContext = Field(default_factory=SecurityContext.single_tenant)
+    security_context: SecurityContext = Field(
+        default_factory=SecurityContext.single_tenant
+    )
 
 
 class CancelRunCommand(BaseModel):
     run_id: str
     reason: str | None = None
     idempotency_key: str | None = None
-    security_context: SecurityContext = Field(default_factory=SecurityContext.single_tenant)
+    security_context: SecurityContext = Field(
+        default_factory=SecurityContext.single_tenant
+    )

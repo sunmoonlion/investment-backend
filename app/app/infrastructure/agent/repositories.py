@@ -30,7 +30,9 @@ class AgentRepository:
         await self.session.commit()
         return session_id
 
-    async def assert_session_owner(self, *, session_id: str, owner_actor_id: str) -> None:
+    async def assert_session_owner(
+        self, *, session_id: str, owner_actor_id: str
+    ) -> None:
         result = await self.session.execute(
             text(
                 """

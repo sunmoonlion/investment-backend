@@ -78,9 +78,7 @@ class OpenAICompatiblePilotLLM:
         except httpx.HTTPError as exc:
             raise PilotLLMError("pilot LLM is unavailable") from exc
         if response.status_code != 200:
-            raise PilotLLMError(
-                f"pilot LLM failed with HTTP {response.status_code}"
-            )
+            raise PilotLLMError(f"pilot LLM failed with HTTP {response.status_code}")
         try:
             body = response.json()
             content = body["choices"][0]["message"]["content"]

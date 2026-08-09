@@ -54,7 +54,9 @@ def validate_run_status_transition(current: str, target: str) -> None:
     if current_status == target_status:
         return
     if target_status not in RUN_STATUS_TRANSITIONS[current_status]:
-        raise ValueError(f"invalid run status transition: {current_status}->{target_status}")
+        raise ValueError(
+            f"invalid run status transition: {current_status}->{target_status}"
+        )
 
 
 class RunBudget(BaseModel):
@@ -98,10 +100,14 @@ class RunBudget(BaseModel):
         return self.model_copy(update={"steps_used": self.steps_used + amount})
 
     def consume_tool_call(self, amount: int = 1) -> RunBudget:
-        return self.model_copy(update={"tool_calls_used": self.tool_calls_used + amount})
+        return self.model_copy(
+            update={"tool_calls_used": self.tool_calls_used + amount}
+        )
 
     def consume_llm_call(self, amount: int = 1) -> RunBudget:
         return self.model_copy(update={"llm_calls_used": self.llm_calls_used + amount})
 
     def consume_input_tokens(self, amount: int) -> RunBudget:
-        return self.model_copy(update={"input_tokens_used": self.input_tokens_used + amount})
+        return self.model_copy(
+            update={"input_tokens_used": self.input_tokens_used + amount}
+        )

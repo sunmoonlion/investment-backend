@@ -37,8 +37,7 @@ class LLMResponse(BaseModel):
 
 
 class LLMPort(Protocol):
-    async def complete(self, request: LLMRequest) -> LLMResponse:
-        ...
+    async def complete(self, request: LLMRequest) -> LLMResponse: ...
 
 
 def build_llm_context(

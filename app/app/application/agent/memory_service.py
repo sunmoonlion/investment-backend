@@ -6,11 +6,9 @@ from app.domain.agent.memory import AgentMemory, MemoryPolicy, MemoryWindow
 
 
 class AgentMemoryRepository(Protocol):
-    async def append(self, memory: AgentMemory) -> None:
-        ...
+    async def append(self, memory: AgentMemory) -> None: ...
 
-    async def list_for_session(self, session_id: str) -> list[AgentMemory]:
-        ...
+    async def list_for_session(self, session_id: str) -> list[AgentMemory]: ...
 
 
 class AgentMemoryService:

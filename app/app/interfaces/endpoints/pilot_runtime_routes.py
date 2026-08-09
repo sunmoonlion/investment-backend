@@ -46,9 +46,7 @@ def delegated_actor(value: str) -> UUID:
     try:
         return UUID(value)
     except ValueError as exc:
-        raise BadRequestError(
-            "The delegated actor identifier is invalid"
-        ) from exc
+        raise BadRequestError("The delegated actor identifier is invalid") from exc
 
 
 @router.post("/runs", response_model=PilotRunSnapshot)
@@ -73,9 +71,7 @@ async def get_run(
             owner_actor_id=delegated_actor(delegated_actor_id),
         )
     except PermissionError as exc:
-        raise ForbiddenError(
-            "The requested run is not available"
-        ) from exc
+        raise ForbiddenError("The requested run is not available") from exc
 
 
 @router.post("/runs/{run_id}/commands", response_model=PilotRunSnapshot)
@@ -95,9 +91,7 @@ async def submit_command(
         if isinstance(command, PilotCancelCommand):
             return await service(session).cancel(run_id=run_id, command=command)
     except PermissionError as exc:
-        raise ForbiddenError(
-            "The requested run is not available"
-        ) from exc
+        raise ForbiddenError("The requested run is not available") from exc
     raise BadRequestError("The command is invalid")
 
 
@@ -110,16 +104,12 @@ async def stream_events(
     query_cursor: Annotated[str | None, Query(alias="last_event_id")] = None,
 ) -> StreamingResponse:
     if header_cursor and query_cursor and header_cursor != query_cursor:
-        raise BadRequestError(
-            "Conflicting event cursors were supplied"
-        )
+        raise BadRequestError("Conflicting event cursors were supplied")
     cursor_value = header_cursor or query_cursor
     try:
         cursor = UUID(cursor_value) if cursor_value else None
     except ValueError as exc:
-        raise BadRequestError(
-            "The event cursor is invalid"
-        ) from exc
+        raise BadRequestError("The event cursor is invalid") from exc
     actor_id = delegated_actor(delegated_actor_id)
 
     async def event_source() -> AsyncIterator[str]:
@@ -137,9 +127,7 @@ async def stream_events(
                         after_event_id=cursor,
                     )
                 except PermissionError as exc:
-                    raise ForbiddenError(
-                        "The requested run is not available"
-                    ) from exc
+                    raise ForbiddenError("The requested run is not available") from exc
                 for event in events:
                     event_id = str(event["event_id"])
                     sent.add(event_id)
@@ -183,14 +171,8 @@ async def stream_events(
 
 
 def encode_sse(event: dict) -> str:
-    payload = json.dumps(
-        event, ensure_ascii=False, separators=(",", ":"), default=str
-    )
-    return (
-        f"id: {event['event_id']}\n"
-        "event: run-event\n"
-        f"data: {payload}\n\n"
-    )
+    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"), default=str)
+    return f"id: {event['event_id']}\nevent: run-event\ndata: {payload}\n\n"
 
 
 @router.get(
@@ -209,6 +191,4 @@ async def citation_source(
             owner_actor_id=delegated_actor(delegated_actor_id),
         )
     except PermissionError as exc:
-        raise ForbiddenError(
-            "The requested citation is not available"
-        ) from exc
+        raise ForbiddenError("The requested citation is not available") from exc

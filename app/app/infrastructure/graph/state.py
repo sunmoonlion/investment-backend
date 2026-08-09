@@ -87,4 +87,6 @@ def validate_base_state_layering(state: BaseAgentState) -> None:
         forbidden_artifact_keys = FORBIDDEN_ARTIFACT_KEYS.intersection(artifact.keys())
         if forbidden_artifact_keys:
             keys = ", ".join(sorted(forbidden_artifact_keys))
-            raise ValueError(f"ArtifactRef must store refs only, not object bodies: {keys}")
+            raise ValueError(
+                f"ArtifactRef must store refs only, not object bodies: {keys}"
+            )

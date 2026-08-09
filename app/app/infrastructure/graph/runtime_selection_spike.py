@@ -38,7 +38,9 @@ class SideEffectPort(Protocol):
 
 
 class RuntimeControlPlane(Protocol):
-    def create_run(self, *, thread_id: str, run_id: str, graph_version: str) -> None: ...
+    def create_run(
+        self, *, thread_id: str, run_id: str, graph_version: str
+    ) -> None: ...
 
     def mark_running(self, run_id: str) -> None: ...
 

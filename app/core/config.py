@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     deployment_id: str = "local"
     app_slug: str = "investment"
 
-    database_url: str = "postgresql+asyncpg://investment:investment@localhost:5432/investment"
+    database_url: str = (
+        "postgresql+asyncpg://investment:investment@localhost:5432/investment"
+    )
     migration_database_url: str | None = None
 
     redis_host: str = "localhost"
@@ -418,14 +420,10 @@ class Settings(BaseSettings):
             frontend_origins=origins,
             policy_version=str(getattr(self, f"{prefix}_auth_policy_version")),
             role_allowlist=frozenset(
-                self._split_csv(
-                    str(getattr(self, f"{prefix}_auth_role_allowlist"))
-                )
+                self._split_csv(str(getattr(self, f"{prefix}_auth_role_allowlist")))
             ),
             scope_allowlist=frozenset(
-                self._split_csv(
-                    str(getattr(self, f"{prefix}_auth_scope_allowlist"))
-                )
+                self._split_csv(str(getattr(self, f"{prefix}_auth_scope_allowlist")))
             ),
             default_return_to=default_return_to,
             allowed_return_paths=allowed_return_paths,
@@ -568,9 +566,7 @@ class Settings(BaseSettings):
                 "SERVICE_AUTH_SUBJECT_BINDINGS_JSON must be valid JSON"
             ) from exc
         if not isinstance(raw, dict):
-            raise ValueError(
-                "SERVICE_AUTH_SUBJECT_BINDINGS_JSON must be a JSON object"
-            )
+            raise ValueError("SERVICE_AUTH_SUBJECT_BINDINGS_JSON must be a JSON object")
         result: dict[str, frozenset[str]] = {}
         for subject, scopes in raw.items():
             if (
@@ -631,9 +627,7 @@ class Settings(BaseSettings):
         }
         missing = sorted(name for name, value in required.items() if not value)
         if missing:
-            raise ValueError(
-                f"agent pilot configuration missing: {', '.join(missing)}"
-            )
+            raise ValueError(f"agent pilot configuration missing: {', '.join(missing)}")
         if not self.knowledge_retrieval_enabled:
             raise ValueError("Knowledge retrieval must be configured for agent pilot")
 

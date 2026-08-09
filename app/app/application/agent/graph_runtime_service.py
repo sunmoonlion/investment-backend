@@ -14,14 +14,18 @@ class GraphRuntimeService:
     def build_config(self, *, session_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": session_id}}
 
-    def run(self, graph: Any, graph_input: Any, *, session_id: str) -> GraphRuntimeResult:
+    def run(
+        self, graph: Any, graph_input: Any, *, session_id: str
+    ) -> GraphRuntimeResult:
         return self.stream_with_config(
             graph,
             graph_input,
             self.build_config(session_id=session_id),
         )
 
-    def resume(self, graph: Any, user_input: str, *, session_id: str) -> GraphRuntimeResult:
+    def resume(
+        self, graph: Any, user_input: str, *, session_id: str
+    ) -> GraphRuntimeResult:
         raise NotImplementedError(
             "Runtime adapters must translate resume input to their graph command type."
         )

@@ -94,7 +94,9 @@ async def create_run(
     try:
         return await service.create_run(command)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="agent session access denied") from exc
+        raise HTTPException(
+            status_code=403, detail="agent session access denied"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -138,8 +140,14 @@ async def list_events(
             owner_actor_id=str(principal.actor_id),
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="agent session access denied") from exc
-    return {"events": await repository.list_ui_events(session_id=session_id, after_event_id=after_event_id)}
+        raise HTTPException(
+            status_code=403, detail="agent session access denied"
+        ) from exc
+    return {
+        "events": await repository.list_ui_events(
+            session_id=session_id, after_event_id=after_event_id
+        )
+    }
 
 
 @router.get("/sessions/{session_id}/stream")
@@ -156,7 +164,9 @@ async def stream_events(
             owner_actor_id=str(principal.actor_id),
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="agent session access denied") from exc
+        raise HTTPException(
+            status_code=403, detail="agent session access denied"
+        ) from exc
 
     def to_sse(payload: dict) -> str:
         data = json.dumps(payload, ensure_ascii=False, default=str)

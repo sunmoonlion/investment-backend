@@ -233,9 +233,7 @@ class PilotRepository:
         data: dict[str, Any],
     ) -> dict[str, Any]:
         await self.session.execute(
-            text(
-                "select pg_advisory_xact_lock(hashtextextended(:session_id, 0))"
-            ),
+            text("select pg_advisory_xact_lock(hashtextextended(:session_id, 0))"),
             {"session_id": str(session_id)},
         )
         db_sequence = await self.session.execute(
@@ -307,9 +305,7 @@ class PilotRepository:
         owner_actor_id: uuid.UUID,
         after_event_id: uuid.UUID | None = None,
     ) -> list[dict[str, Any]]:
-        run = await self.get_run(
-            run_id=run_id, owner_actor_id=owner_actor_id
-        )
+        run = await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)
         if run is None:
             raise PermissionError("pilot run belongs to another actor")
         after_sequence = 0
@@ -351,9 +347,7 @@ class PilotRepository:
         run_id: uuid.UUID,
         owner_actor_id: uuid.UUID,
     ) -> dict[str, Any]:
-        run = await self.get_run(
-            run_id=run_id, owner_actor_id=owner_actor_id
-        )
+        run = await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)
         if run is None:
             raise PermissionError("pilot run belongs to another actor")
         if run["status"] in {"completed", "failed", "cancelled"}:
@@ -374,9 +368,7 @@ class PilotRepository:
             session_id=run["session_id"],
             status="cancelled",
         )
-        return (await self.get_run(
-            run_id=run_id, owner_actor_id=owner_actor_id
-        )) or run
+        return (await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)) or run
 
     async def consume_resume(
         self,
@@ -390,9 +382,7 @@ class PilotRepository:
             text("select pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"pilot-resume:{run_id}"},
         )
-        run = await self.get_run(
-            run_id=run_id, owner_actor_id=owner_actor_id
-        )
+        run = await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)
         if run is None:
             raise PermissionError("pilot run belongs to another actor")
         existing_key = run.get("resume_idempotency_key")

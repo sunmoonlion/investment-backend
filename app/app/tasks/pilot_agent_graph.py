@@ -69,8 +69,10 @@ async def _append(
 
 async def _cancelled(repository: PilotRepository, run_id: uuid.UUID) -> bool:
     current = await repository.get_run_for_worker(run_id)
-    return current is None or current["status"] == "cancelled" or bool(
-        current["cancel_requested"]
+    return (
+        current is None
+        or current["status"] == "cancelled"
+        or bool(current["cancel_requested"])
     )
 
 
@@ -142,9 +144,7 @@ async def _run_pilot_graph(run_id_value: str, resume: str | None = None) -> None
                             run_id=run_id,
                             session_id=session_id,
                             event_type="citation",
-                            data={
-                                "citation": citation.model_dump(mode="json")
-                            },
+                            data={"citation": citation.model_dump(mode="json")},
                         )
                     if await _cancelled(repository, run_id):
                         return

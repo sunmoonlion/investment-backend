@@ -25,8 +25,12 @@ logger = logging.getLogger(__name__)
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _stream_graph(graph: Any, graph_input: Any, config: dict[str, Any]) -> dict[str, Any]:
-    return LangGraphRuntimeService().stream_with_config(graph, graph_input, config).state
+def _stream_graph(
+    graph: Any, graph_input: Any, config: dict[str, Any]
+) -> dict[str, Any]:
+    return (
+        LangGraphRuntimeService().stream_with_config(graph, graph_input, config).state
+    )
 
 
 def _run_in_worker_loop(coro: Any) -> Any:
