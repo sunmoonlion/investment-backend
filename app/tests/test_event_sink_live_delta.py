@@ -39,8 +39,8 @@ async def test_event_sink_publishes_ui_event_and_reconciled_live_delta() -> None
     assert event_id == "ui-2"
     assert [category for category, _ in repository.events] == ["domain", "ui"]
     assert [channel for channel, _ in redis.published] == [
-        "research:agent:session:session-1:events",
-        "research:agent:session:session-1:deltas",
+        "investment:agent:session:session-1:events",
+        "investment:agent:session:session-1:deltas",
     ]
 
     ui_payload = json.loads(redis.published[0][1])

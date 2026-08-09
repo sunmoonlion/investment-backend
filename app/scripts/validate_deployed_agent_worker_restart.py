@@ -235,7 +235,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--namespace", default="app-platform-dev")
-    parser.add_argument("--deployment", default="celeryworker-research-admin-backend")
+    parser.add_argument("--deployment", default="celeryworker-investment-backend")
     parser.add_argument("--timeout", type=float, default=120.0)
     return parser.parse_args()
 

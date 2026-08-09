@@ -8,7 +8,7 @@ import pytest
 
 import app.application.agent.pilot_service as pilot_service_module
 from app.application.agent.pilot_service import PilotService
-from app.interfaces.schemas.pilot_runtime import (
+from app.application.dto.pilot_runtime import (
     DelegatedUser,
     PilotResumeCommand,
 )

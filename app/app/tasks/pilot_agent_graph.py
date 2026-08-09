@@ -122,7 +122,9 @@ async def _run_pilot_graph(run_id_value: str, resume: str | None = None) -> None
                                 tenant_id="sunmoonai",
                                 actor_id=owner_actor_id,
                                 actor_type="human",
-                                policy_version=settings.auth_policy_version,
+                                policy_version=(
+                                    settings.agent_pilot_internal_auth_policy_version
+                                ),
                                 delegated_run_id=run_id,
                             ),
                         )

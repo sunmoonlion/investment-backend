@@ -21,15 +21,20 @@ from app.infrastructure.external.knowledge_retrieval import (
     KnowledgeRetrievalProtocolError,
 )
 
-RESEARCH_ROOT = Path(__file__).resolve().parents[3]
-LOCK_PATH = RESEARCH_ROOT / "contracts/knowledge-retrieval-provider-lock.json"
+INVESTMENT_ROOT = Path(
+    os.environ.get(
+        "INVESTMENT_APP_ROOT",
+        str(Path(__file__).resolve().parents[3]),
+    )
+)
+LOCK_PATH = INVESTMENT_ROOT / "contracts/knowledge-retrieval-provider-lock.json"
 
 
 def _provider_dir() -> Path:
     configured = os.environ.get("KNOWLEDGE_RETRIEVAL_CONTRACT_DIR")
     if configured:
         return Path(configured)
-    return RESEARCH_ROOT.parent / "knowledge-app/contracts/retrieval/v1"
+    return INVESTMENT_ROOT.parent / "knowledge-app/contracts/retrieval/v1"
 
 
 def _provider_example(name: str) -> dict[str, Any]:

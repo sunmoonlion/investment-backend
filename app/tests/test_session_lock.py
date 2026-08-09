@@ -52,7 +52,7 @@ async def test_redis_session_lock_acquires_once_and_releases_owner_token() -> No
 
     assert first is not None
     assert blocked is None
-    assert list(redis.values) == ["research:agent:session:session-1:lock"]
+    assert list(redis.values) == ["investment:agent:session:session-1:lock"]
 
     await lock.release(first)
 
@@ -66,11 +66,11 @@ async def test_redis_session_lock_does_not_release_another_owner() -> None:
 
     first = await lock.acquire(session_id="session-1", owner="run-1")
     assert first is not None
-    redis.values["research:agent:session:session-1:lock"] = "run-2:other-token"
+    redis.values["investment:agent:session:session-1:lock"] = "run-2:other-token"
 
     await lock.release(first)
 
-    assert redis.values == {"research:agent:session:session-1:lock": "run-2:other-token"}
+    assert redis.values == {"investment:agent:session:session-1:lock": "run-2:other-token"}
 
 
 @pytest.mark.asyncio
@@ -83,8 +83,8 @@ async def test_redis_session_lock_renews_only_owner_token() -> None:
 
     renewed = await lock.renew(first)
     assert renewed is True
-    assert redis.expirations == {"research:agent:session:session-1:lock": 30}
+    assert redis.expirations == {"investment:agent:session:session-1:lock": 30}
 
-    redis.values["research:agent:session:session-1:lock"] = "run-2:other-token"
+    redis.values["investment:agent:session:session-1:lock"] = "run-2:other-token"
 
     assert await lock.renew(first) is False

@@ -13,6 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.agent.pilot_redis import pilot_run_events_channel
 from app.application.agent.pilot_service import PilotService
+from app.application.dto.pilot_runtime import (
+    PILOT_COMMAND_ADAPTER,
+    PilotCancelCommand,
+    PilotCreateRun,
+    PilotResumeCommand,
+    PilotRunCommand,
+    PilotRunSnapshot,
+    SourceResolution,
+)
 from app.application.errors.exceptions import (
     BadRequestError,
     ForbiddenError,
@@ -22,19 +31,10 @@ from app.infrastructure.agent.pilot_repository import PilotRepository
 from app.infrastructure.security.pilot_service_auth import require_pilot_service
 from app.infrastructure.storage.postgres import get_db_session, get_postgres
 from app.infrastructure.storage.redis import get_redis
-from app.interfaces.schemas.pilot_runtime import (
-    PILOT_COMMAND_ADAPTER,
-    PilotCancelCommand,
-    PilotCreateRun,
-    PilotResumeCommand,
-    PilotRunCommand,
-    PilotRunSnapshot,
-    SourceResolution,
-)
 
 router = APIRouter(
-    prefix="/internal/v1/research",
-    tags=["Internal Research Runtime Pilot"],
+    prefix="/internal/v1/investment",
+    tags=["Internal Investment Runtime Pilot"],
 )
 
 

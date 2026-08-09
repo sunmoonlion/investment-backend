@@ -1,4 +1,4 @@
-"""Celery producer — admin-backend API 向 RabbitMQ 投递异步任务。"""
+"""Celery producer — Backend API 向 RabbitMQ 投递异步任务。"""
 
 from __future__ import annotations
 

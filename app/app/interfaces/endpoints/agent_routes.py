@@ -19,7 +19,7 @@ from app.domain.security import Principal
 from app.infrastructure.agent.repositories import AgentRepository
 from app.infrastructure.storage.postgres import get_db_session, get_postgres
 from app.infrastructure.storage.redis import get_redis
-from app.interfaces.middleware.auth import require_research_admin
+from app.interfaces.http.middleware.auth import require_investment_admin
 from core.config import get_settings
 
 
@@ -58,7 +58,7 @@ def get_service(session: AsyncSession) -> AgentRunService:
 
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(
-    principal: Principal = Depends(require_research_admin),
+    principal: Principal = Depends(require_investment_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
     service = get_service(session)
@@ -79,7 +79,7 @@ def security_context_for(principal: Principal) -> SecurityContext:
 async def create_run(
     session_id: str,
     request: CreateRunRequest,
-    principal: Principal = Depends(require_research_admin),
+    principal: Principal = Depends(require_investment_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
     service = get_service(session)
@@ -103,7 +103,7 @@ async def create_run(
 async def resume_run(
     run_id: str,
     request: ResumeRunRequest,
-    principal: Principal = Depends(require_research_admin),
+    principal: Principal = Depends(require_investment_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
     service = get_service(session)
@@ -128,7 +128,7 @@ async def resume_run(
 async def list_events(
     session_id: str,
     after_event_id: str | None = None,
-    principal: Principal = Depends(require_research_admin),
+    principal: Principal = Depends(require_investment_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
     repository = AgentRepository(session)
@@ -146,7 +146,7 @@ async def list_events(
 async def stream_events(
     session_id: str,
     last_event_id: str | None = None,
-    principal: Principal = Depends(require_research_admin),
+    principal: Principal = Depends(require_investment_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
     repository = AgentRepository(session)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -66,7 +67,16 @@ class RetrievalServiceTokenProvider:
                 "casdoor_redirect_uri": "",
             }
         )
-        self._oidc = OidcProviderClient(service_settings)
+        service_profile = replace(
+            settings.browser_profile("admin"),
+            client_id=settings.knowledge_retrieval_service_client_id or "",
+            client_secret=settings.knowledge_retrieval_service_client_secret or "",
+            redirect_uri="",
+            application=settings.knowledge_retrieval_service_application,
+            policy_version="investment-knowledge-retrieval-v1",
+            required_scopes=(settings.knowledge_retrieval_service_scope,),
+        )
+        self._oidc = OidcProviderClient(service_settings, service_profile)
         self._access_token: str | None = None
         self._expires_at = 0.0
         self._lock = asyncio.Lock()

@@ -3,8 +3,8 @@
 
 set -e
 
-IMAGE_NAME="research-admin-backend:1.0.1"
-CONTAINER_NAME="research-admin-backend"
+IMAGE_NAME="investment-backend:1.0.0"
+CONTAINER_NAME="investment-backend"
 
 echo "停止并删除旧容器..."
 docker stop $CONTAINER_NAME 2>/dev/null || true

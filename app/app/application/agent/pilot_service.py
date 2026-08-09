@@ -3,9 +3,7 @@ from __future__ import annotations
 from typing import cast
 from uuid import UUID
 
-from app.infrastructure.agent.pilot_repository import PilotRepository
-from app.infrastructure.messaging.celery_producer import get_celery_producer
-from app.interfaces.schemas.pilot_runtime import (
+from app.application.dto.pilot_runtime import (
     BrowserCitation,
     PilotCancelCommand,
     PilotCreateRun,
@@ -15,6 +13,8 @@ from app.interfaces.schemas.pilot_runtime import (
     RunStatus,
     SourceResolution,
 )
+from app.infrastructure.agent.pilot_repository import PilotRepository
+from app.infrastructure.messaging.celery_producer import get_celery_producer
 
 STATUS_MAP = {
     "created": "queued",

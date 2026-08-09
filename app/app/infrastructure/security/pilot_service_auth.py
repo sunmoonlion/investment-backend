@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import Header
-from joserfc import jwt
-from joserfc.errors import JoseError
-from joserfc.jwt import JWTClaimsRegistry
 
 from app.application.errors.exceptions import (
     ForbiddenError,
@@ -50,7 +48,20 @@ class PilotServiceAuthVerifier:
                 "casdoor_redirect_uri": "",
             }
         )
-        self._oidc = OidcProviderClient(service_settings)
+        service_profile = replace(
+            self._settings.browser_profile("admin"),
+            client_id=self._settings.agent_pilot_internal_auth_audience or "",
+            client_secret="",
+            redirect_uri="",
+            application=self._settings.agent_pilot_internal_auth_application,
+            policy_version=(
+                self._settings.agent_pilot_internal_auth_policy_version
+            ),
+            required_scopes=(
+                self._settings.agent_pilot_internal_auth_required_scope,
+            ),
+        )
+        self._oidc = OidcProviderClient(service_settings, service_profile)
 
     async def verify(self, encoded: str) -> Principal:
         self._settings.require_agent_pilot()
@@ -61,57 +72,32 @@ class PilotServiceAuthVerifier:
                 "pilot service identity binding is not configured"
             )
         metadata = await self._oidc.get_metadata()
-        last_error: Exception | None = None
-        for refresh in (False, True):
-            try:
-                key_set = await self._oidc.get_key_set(
-                    metadata, force_refresh=refresh
-                )
-                token = jwt.decode(
-                    encoded,
-                    key_set,
-                    algorithms=self._settings.auth_allowed_algorithm_list,
-                )
-                claims = token.claims
-                JWTClaimsRegistry(
-                    leeway=self._settings.auth_clock_skew_seconds,
-                    iss={"essential": True, "value": metadata.issuer},
-                    sub={"essential": True},
-                    aud={"essential": True},
-                    exp={"essential": True},
-                    iat={"essential": True},
-                ).validate(claims)
-                audience = claims.get("aud")
-                if audience != expected_audience and audience != [expected_audience]:
-                    raise UnauthorizedError("pilot service token audience mismatch")
-                subject = claims.get("sub")
-                if not isinstance(subject, str) or subject not in allowed_subjects:
-                    raise ForbiddenError("pilot service subject is not bound")
-                self._validate_scope_shape(claims)
-                return Principal(
-                    actor_type="service",
-                    subject=subject,
-                    issuer=metadata.issuer,
-                    app="research",
-                    surface="internal",
-                    audience=expected_audience,
-                    roles=(),
-                    scopes=frozenset(
-                        {self._settings.agent_pilot_internal_auth_required_scope}
-                    ),
-                    authenticated_at=datetime.fromtimestamp(
-                        int(claims["iat"]), tz=UTC
-                    ),
-                    expires_at=datetime.fromtimestamp(
-                        int(claims["exp"]), tz=UTC
-                    ),
-                    policy_version=self._settings.auth_policy_version,
-                )
-            except (UnauthorizedError, ForbiddenError):
-                raise
-            except (JoseError, ValueError, TypeError) as exc:
-                last_error = exc
-        raise UnauthorizedError("pilot service token invalid") from last_error
+        claims = await self._oidc.verify_access_token(
+            encoded,
+            audience=expected_audience,
+            metadata=metadata,
+        )
+        subject = claims.get("sub")
+        if not isinstance(subject, str) or subject not in allowed_subjects:
+            raise ForbiddenError("pilot service subject is not bound")
+        self._validate_scope_shape(claims)
+        return Principal(
+            actor_type="service",
+            subject=subject,
+            issuer=metadata.issuer,
+            app=self._settings.app_slug,
+            surface="internal",
+            audience=expected_audience,
+            roles=(),
+            scopes=frozenset(
+                {self._settings.agent_pilot_internal_auth_required_scope}
+            ),
+            authenticated_at=datetime.fromtimestamp(int(claims["iat"]), tz=UTC),
+            expires_at=datetime.fromtimestamp(int(claims["exp"]), tz=UTC),
+            policy_version=(
+                self._settings.agent_pilot_internal_auth_policy_version
+            ),
+        )
 
     @staticmethod
     def _validate_scope_shape(claims: dict[str, Any]) -> None:
