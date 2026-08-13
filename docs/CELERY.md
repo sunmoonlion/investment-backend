@@ -4,4 +4,4 @@
 
 Worker 不是独立源码项目。当前领域任务包括 Agent Graph 与试点图执行；API 仅持有 producer 权限，Worker 持有对应队列的 consumer 权限，Scheduler 只获得周期投递权限。各角色必须使用不同 ServiceAccount、Secret、资源与伸缩策略。
 
-新 K8s 资源由 `tpl-app/k8s-scaffold-v2` 的统一运行角色模型生成。旧 Research/Investment Worker 只属于 v1 回滚拓扑，在 R5/R7 门禁前保留，但不得作为新源码或新部署生成器。
+新 K8s 资源由 `tpl-app/k8s-deployment` 的统一运行角色模型生成。旧 Research/Investment Worker 只属于 v1 回滚拓扑，在 R5/R7 门禁前保留，但不得作为新源码或新部署生成器。
