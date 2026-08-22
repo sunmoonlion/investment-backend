@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--node-modules",
-        default="/home/zymun/tpl-app/tpl-admin-frontend/node_modules",
+        default="/home/zymun/master/tpl-app/tpl-admin-frontend/node_modules",
     )
     return parser.parse_args()
 

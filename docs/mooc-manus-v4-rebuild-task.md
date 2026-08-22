@@ -900,8 +900,8 @@ Scope:
 
 K8S platform docs:
 
-- `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
-- `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`
+- `/home/zymun/master/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
+- `/home/zymun/master/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`
 
 Validation:
 

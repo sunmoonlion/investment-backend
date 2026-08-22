@@ -28,7 +28,7 @@ Resume rule:
 1. Sync `research-app` parent to `codex-1`.
 2. Sync `research-admin-backend` to `codex-1`.
 3. Keep other research-app subrepos on `master` unless a phase explicitly needs them.
-4. Keep `/home/zym/k8s` or `/home/zymun/k8s` on the active work branch only when deployment changes are required.
+4. Keep `/home/zym/k8s` or `/home/zymun/master/k8s` on the active work branch only when deployment changes are required.
 5. Read this handoff first, then read `docs/mooc-manus-v4-rebuild-task.md`.
 6. Continue from Phase 1 ADRs or the next smallest Phase 2 task; do not skip the newly resynced M1 constraints.
 
@@ -120,8 +120,8 @@ Not done yet:
 - Deployed worker restart validation passed on 2026-07-09: `scripts/validate_deployed_agent_worker_restart.py` created a waiting run, restarted `celeryworker-research-admin-backend`, resumed the run, and verified the same timeline plus HTTP/SSE replay.
 - Final deployed images are `harbor.sunmoonai.com:30443/app-images/research-admin-backend:1.0.1` for both API and worker, and final `AGENT_V4_TRAFFIC_ENABLED=false`; POST `/api/agent/sessions` returns `404` while the traffic gate is closed.
 - K8S-side deployment docs now mirror the `info-app` pattern:
-  `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
-  and `/home/zymun/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`.
+  `/home/zymun/master/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment.md`
+  and `/home/zymun/master/k8s/sunmoonai/app-platform/research-app/docs/research-app-moocmanus-v4-deployment-tasks.md`.
 
 ## 2. Source Of Truth
 
