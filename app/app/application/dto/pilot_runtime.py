@@ -78,14 +78,14 @@ class BrowserCitation(ContractModel):
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_href: str = Field(
         min_length=1,
-        max_length=128,
-        pattern=r"^/api/citations/[0-9a-fA-F-]{36}/source$",
+        max_length=160,
+        pattern=r"^/api/web/v1/citations/[0-9a-fA-F-]{36}/source$",
     )
 
     @model_validator(mode="after")
     def source_matches_evidence(self) -> BrowserCitation:
         if self.source_href.lower() != (
-            f"/api/citations/{self.evidence_id}/source".lower()
+            f"/api/web/v1/citations/{self.evidence_id}/source".lower()
         ):
             raise ValueError("source_href must identify evidence_id")
         return self

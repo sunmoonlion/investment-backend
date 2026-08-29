@@ -24,7 +24,7 @@ def citation() -> dict[str, object]:
         "source_document_id": str(uuid.uuid4()),
         "source_document_version_id": str(uuid.uuid4()),
         "content_hash": "a" * 64,
-        "source_href": f"/api/citations/{evidence_id}/source",
+        "source_href": f"/api/web/v1/citations/{evidence_id}/source",
     }
 
 
