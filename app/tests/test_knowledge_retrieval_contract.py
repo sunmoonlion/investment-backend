@@ -49,7 +49,9 @@ def _query() -> KnowledgeQuery:
 
 def test_provider_contract_lock_matches_authoritative_schemas() -> None:
     lock = json.loads(LOCK_PATH.read_text())
-    provider_manifest = json.loads((_provider_dir() / "contract-manifest.json").read_text())
+    provider_manifest = json.loads(
+        (_provider_dir() / "contract-manifest.json").read_text()
+    )
 
     assert lock["major"] == provider_manifest["major"] == 1
     for name, expected_digest in lock["schemas"].items():
@@ -148,4 +150,42 @@ def test_citation_projection_removes_source_uri_and_provider_metadata() -> None:
 
     assert "source_uri" not in raw
     assert "provider_metadata" not in raw
-    assert citation.source_href.startswith("/api/citations/")
+    assert citation.source_href.startswith("/api/web/v1/citations/")
+
+
+def test_citation_source_href_matches_investment_own_routes() -> None:
+    """consumer 侧的 source_href 也必须能在本仓路由表里找到。
+
+    O6 在本仓有两处：`domain/agent/knowledge.Citation`（检索契约投影）与
+    `application/dto/pilot_runtime.BrowserCitation`。两者由
+    `tasks/pilot_agent_graph.py` 写事件、`agent/pilot_service.py` 读回来串在
+    一起，pattern 必须一致，否则 `model_validate` 直接抛。
+
+    而 `application/dto/interaction.BrowserCitation` 与前端
+    `contracts/interaction.ts` 早就用的是 `/api/web/v1/`——本仓自己内部就不一致。
+    """
+    import re
+    import uuid as _uuid
+
+    from fastapi.routing import APIRoute
+
+    from app.application.dto.pilot_runtime import BrowserCitation
+    from app.bootstrap.api import create_app
+    from app.domain.agent.knowledge import Citation
+
+    routes = [r.path for r in create_app().routes if isinstance(r, APIRoute)]
+    concrete = [re.sub(r"\{[^}]+\}", str(_uuid.uuid4()), p) for p in routes]
+
+    for model in (Citation, BrowserCitation):
+        pattern = model.model_fields["source_href"].metadata[-1].pattern
+        assert any(re.match(pattern, p) for p in concrete), (
+            f"{model.__name__}.source_href 的 pattern {pattern!r} "
+            f"匹配不到任何真实路由；含 citations 的路由有："
+            f"{[p for p in routes if 'citations' in p]}"
+        )
+
+    # 两个类必须同形：它们经事件存储首尾相接
+    assert (
+        Citation.model_fields["source_href"].metadata[-1].pattern
+        == BrowserCitation.model_fields["source_href"].metadata[-1].pattern
+    )
