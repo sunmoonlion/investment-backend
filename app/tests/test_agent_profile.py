@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from agent_test_fakes import FakeTransactions
 from pytest import MonkeyPatch
 
 from app.application.agent.profile_catalog import build_builtin_profile_catalog
@@ -13,8 +14,9 @@ class DisabledProducer:
     enabled = False
 
 
-class FakeRepository:
+class FakeRepository(FakeTransactions):
     def __init__(self) -> None:
+        super().__init__()
         self.create_run_kwargs: dict | None = None
         self.run: dict | None = None
 
@@ -27,6 +29,7 @@ class FakeRepository:
             "id": "run-1",
             "session_id": kwargs["session_id"],
             "status": "created",
+            "created": True,
             "agent_profile_key": kwargs["agent_profile_key"],
             "agent_profile_version": kwargs["agent_profile_version"],
         }
@@ -62,7 +65,9 @@ def test_unknown_agent_profile_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_run_service_persists_resolved_profile_identity() -> None:
     repository = FakeRepository()
-    service = AgentRunService(repository, profile_catalog=build_builtin_profile_catalog())
+    service = AgentRunService(
+        repository, profile_catalog=build_builtin_profile_catalog()
+    )
 
     result = await service.create_run(
         CreateRunCommand(
@@ -81,10 +86,6 @@ async def test_run_service_persists_resolved_profile_identity() -> None:
 
 @pytest.mark.asyncio
 async def test_resume_run_requires_waiting_status(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "app.application.agent.run_service.get_celery_producer",
-        lambda: DisabledProducer(),
-    )
     repository = FakeRepository()
     repository.run = {
         "id": "run-1",
@@ -92,9 +93,11 @@ async def test_resume_run_requires_waiting_status(monkeypatch: MonkeyPatch) -> N
         "status": "running",
         "resume_token": "phase0:run-1",
     }
-    service = AgentRunService(repository, profile_catalog=build_builtin_profile_catalog())
+    service = AgentRunService(
+        repository, profile_catalog=build_builtin_profile_catalog()
+    )
 
-    with pytest.raises(ValueError, match="run is not waiting for input"):
+    with pytest.raises(ValueError, match="invalid or consumed resume_token"):
         await service.resume_run(
             ResumeRunCommand(
                 run_id="run-1",
@@ -105,11 +108,9 @@ async def test_resume_run_requires_waiting_status(monkeypatch: MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_resume_run_requires_stored_resume_token(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "app.application.agent.run_service.get_celery_producer",
-        lambda: DisabledProducer(),
-    )
+async def test_resume_run_requires_stored_resume_token(
+    monkeypatch: MonkeyPatch,
+) -> None:
     repository = FakeRepository()
     repository.run = {
         "id": "run-1",
@@ -117,9 +118,11 @@ async def test_resume_run_requires_stored_resume_token(monkeypatch: MonkeyPatch)
         "status": "waiting",
         "resume_token": None,
     }
-    service = AgentRunService(repository, profile_catalog=build_builtin_profile_catalog())
+    service = AgentRunService(
+        repository, profile_catalog=build_builtin_profile_catalog()
+    )
 
-    with pytest.raises(ValueError, match="run has no resume_token"):
+    with pytest.raises(ValueError, match="invalid or consumed resume_token"):
         await service.resume_run(
             ResumeRunCommand(
                 run_id="run-1",
@@ -131,10 +134,6 @@ async def test_resume_run_requires_stored_resume_token(monkeypatch: MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_resume_run_accepts_valid_waiting_token(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "app.application.agent.run_service.get_celery_producer",
-        lambda: DisabledProducer(),
-    )
     repository = FakeRepository()
     repository.run = {
         "id": "run-1",
@@ -142,7 +141,9 @@ async def test_resume_run_accepts_valid_waiting_token(monkeypatch: MonkeyPatch) 
         "status": "waiting",
         "resume_token": "phase0:run-1",
     }
-    service = AgentRunService(repository, profile_catalog=build_builtin_profile_catalog())
+    service = AgentRunService(
+        repository, profile_catalog=build_builtin_profile_catalog()
+    )
 
     result = await service.resume_run(
         ResumeRunCommand(
@@ -152,4 +153,4 @@ async def test_resume_run_accepts_valid_waiting_token(monkeypatch: MonkeyPatch) 
         )
     )
 
-    assert result == {"run_id": "run-1", "session_id": "session-1", "enqueued": False}
+    assert result == {"run_id": "run-1", "session_id": "session-1", "enqueued": True}

@@ -6,16 +6,17 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.agent.pilot_redis import pilot_run_events_channel
 from app.domain.agent.runtime import validate_run_status_transition
+from app.infrastructure.agent.transactions import AgentTransactions, atomic
 from app.infrastructure.graph.pilot_graph import (
     PILOT_GRAPH_NAME,
     PILOT_GRAPH_VERSION,
 )
 
 
-class PilotRepository:
+class PilotRepository(AgentTransactions):
     """P0-008C durable projection repository.
 
     It intentionally uses pilot-specific request/control journals while
@@ -23,9 +24,7 @@ class PilotRepository:
     replace this repository without migrating stable traffic.
     """
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
+    @atomic
     async def create_run(
         self,
         *,
@@ -124,7 +123,18 @@ class PilotRepository:
             ),
             {"run_id": run_id},
         )
-        await self.session.commit()
+        await self.append_browser_event(
+            run_id=run_id,
+            session_id=session_id,
+            event_type="status",
+            data={"status": "queued"},
+        )
+        await self.enqueue(
+            topic="agent.execution",
+            key=f"start:{run_id}",
+            run_id=str(run_id),
+            payload={"run_id": str(run_id), "kind": "pilot", "operation": "start"},
+        )
         return (
             {
                 "id": run_id,
@@ -143,7 +153,7 @@ class PilotRepository:
             text(
                 """
                 select r.id, r.session_id, r.thread_id, r.status, r.resume_token,
-                       r.error, r.created_at, r.updated_at, p.title, p.user_input,
+                       r.execution_state, r.error, r.created_at, r.updated_at, p.title, p.user_input,
                        c.cancel_requested, c.resume_action_id,
                        c.resume_idempotency_key
                 from agent_runs r
@@ -163,7 +173,7 @@ class PilotRepository:
             text(
                 """
                 select r.id, r.session_id, r.thread_id, r.status, r.resume_token,
-                       r.error, r.created_at, r.updated_at, p.owner_actor_id,
+                       r.execution_state, r.error, r.created_at, r.updated_at, p.owner_actor_id,
                        p.title, p.user_input, c.cancel_requested,
                        c.resume_action_id, c.resume_idempotency_key
                 from agent_runs r
@@ -177,6 +187,7 @@ class PilotRepository:
         row = result.mappings().first()
         return dict(row) if row else None
 
+    @atomic
     async def set_status(
         self,
         *,
@@ -222,8 +233,8 @@ class PilotRepository:
             ),
             {"session_id": session_id, "status": status},
         )
-        await self.session.commit()
 
+    @atomic
     async def append_browser_event(
         self,
         *,
@@ -295,7 +306,12 @@ class PilotRepository:
                 "payload": json.dumps(payload),
             },
         )
-        await self.session.commit()
+        await self.notify(
+            key=f"pilot-ui:{event_id}",
+            run_id=str(run_id),
+            channel=pilot_run_events_channel(str(run_id)),
+            payload=payload,
+        )
         return payload
 
     async def list_browser_events(
@@ -341,12 +357,25 @@ class PilotRepository:
         )
         return [dict(row[0]) for row in result.all()]
 
+    @atomic
     async def request_cancel(
         self,
         *,
         run_id: uuid.UUID,
         owner_actor_id: uuid.UUID,
     ) -> dict[str, Any]:
+        await self.session.execute(
+            text("""
+            UPDATE agent_execution_leases SET epoch = epoch + 1, expires_at = clock_timestamp()
+            WHERE session_id = (SELECT session_id FROM agent_runs WHERE id = :id)
+              AND EXISTS (SELECT 1 FROM agent_runs r JOIN agent_sessions s ON s.id=r.session_id
+                          WHERE r.id=:id AND s.owner_actor_id=:owner)
+        """),
+            {"id": run_id, "owner": owner_actor_id},
+        )
+        await self.session.execute(
+            text("select id from agent_runs where id=:id for update"), {"id": run_id}
+        )
         run = await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)
         if run is None:
             raise PermissionError("pilot run belongs to another actor")
@@ -362,14 +391,20 @@ class PilotRepository:
             ),
             {"run_id": run_id},
         )
-        await self.session.commit()
         await self.set_status(
             run_id=run_id,
             session_id=run["session_id"],
             status="cancelled",
         )
+        await self.append_browser_event(
+            run_id=run_id,
+            session_id=run["session_id"],
+            event_type="status",
+            data={"status": "cancelled"},
+        )
         return (await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)) or run
 
+    @atomic
     async def consume_resume(
         self,
         *,
@@ -377,6 +412,7 @@ class PilotRepository:
         owner_actor_id: uuid.UUID,
         action_id: uuid.UUID,
         idempotency_key: uuid.UUID,
+        value: str,
     ) -> tuple[dict[str, Any], bool]:
         await self.session.execute(
             text("select pg_advisory_xact_lock(hashtextextended(:key, 0))"),
@@ -385,9 +421,25 @@ class PilotRepository:
         run = await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)
         if run is None:
             raise PermissionError("pilot run belongs to another actor")
+        await self.session.execute(
+            text("select id from agent_runs where id=:id for update"), {"id": run_id}
+        )
+        run = await self.get_run(run_id=run_id, owner_actor_id=owner_actor_id)
+        assert run is not None
         existing_key = run.get("resume_idempotency_key")
         if existing_key is not None:
             if uuid.UUID(str(existing_key)) == idempotency_key:
+                prior = await self.session.execute(
+                    text("""
+                    SELECT payload FROM outbox_message WHERE deduplication_key=:key
+                """),
+                    {"key": f"resume:{run_id}:{action_id}"},
+                )
+                payload = prior.scalar_one_or_none()
+                if payload is None or payload.get("input") != value:
+                    raise ValueError(
+                        "resume idempotency key reused with different input"
+                    )
                 return run, False
             raise ValueError("pilot resume was already consumed")
         if run["status"] != "waiting":
@@ -411,7 +463,27 @@ class PilotRepository:
                 "idempotency_key": idempotency_key,
             },
         )
-        await self.session.commit()
+        await self.session.execute(
+            text("update agent_runs set resume_token = null where id = :id"),
+            {"id": run_id},
+        )
+        await self.enqueue(
+            topic="agent.execution",
+            key=f"resume:{run_id}:{action_id}",
+            run_id=str(run_id),
+            payload={
+                "run_id": str(run_id),
+                "kind": "pilot",
+                "operation": "resume",
+                "input": value,
+            },
+        )
+        await self.append_browser_event(
+            run_id=run_id,
+            session_id=run["session_id"],
+            event_type="status",
+            data={"status": "queued"},
+        )
         return run, True
 
     async def assert_citation_owner(

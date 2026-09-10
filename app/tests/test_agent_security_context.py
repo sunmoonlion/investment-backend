@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from agent_test_fakes import FakeTransactions
 from pytest import MonkeyPatch
 
 from app.application.agent.profile_catalog import build_builtin_profile_catalog
@@ -32,8 +33,9 @@ class EnabledProducer:
         return "task-1"
 
 
-class FakeRepository:
+class FakeRepository(FakeTransactions):
     def __init__(self) -> None:
+        super().__init__()
         self.run: dict | None = None
 
     async def create_run(self, **kwargs):
@@ -41,6 +43,7 @@ class FakeRepository:
             "id": "run-1",
             "session_id": kwargs["session_id"],
             "status": "created",
+            "created": True,
             "agent_profile_key": kwargs["agent_profile_key"],
             "agent_profile_version": kwargs["agent_profile_version"],
         }
@@ -61,12 +64,10 @@ def test_commands_default_to_single_tenant_security_context() -> None:
 
 @pytest.mark.asyncio
 async def test_create_run_dispatches_security_context(monkeypatch: MonkeyPatch) -> None:
-    producer = EnabledProducer()
-    monkeypatch.setattr(
-        "app.application.agent.run_service.get_celery_producer",
-        lambda: producer,
+    repository = FakeRepository()
+    service = AgentRunService(
+        repository, profile_catalog=build_builtin_profile_catalog()
     )
-    service = AgentRunService(FakeRepository(), profile_catalog=build_builtin_profile_catalog())
 
     result = await service.create_run(
         CreateRunCommand(
@@ -77,28 +78,19 @@ async def test_create_run_dispatches_security_context(monkeypatch: MonkeyPatch) 
     )
 
     assert result["enqueued"] is True
-    assert producer.calls == [
-            {
-                "run_id": "run-1",
-                "user_input": "start",
-            "security_context": {
-                "tenant_id": "single-tenant",
-                "actor_id": "user-1",
-                "roles": ["agent_user"],
-                "permissions": [],
-                "schema_version": 1,
-            },
-        }
+    commands = [
+        v["payload"] for v in repository.outbox if v.get("topic") == "agent.execution"
     ]
+    assert len(commands) == 1
+    assert commands[0]["input"] == "start"
+    assert (
+        commands[0]["security_context"]
+        == SecurityContext(actor_id="user-1").model_dump()
+    )
 
 
 @pytest.mark.asyncio
 async def test_resume_run_dispatches_security_context(monkeypatch: MonkeyPatch) -> None:
-    producer = EnabledProducer()
-    monkeypatch.setattr(
-        "app.application.agent.run_service.get_celery_producer",
-        lambda: producer,
-    )
     repository = FakeRepository()
     repository.run = {
         "id": "run-1",
@@ -106,7 +98,9 @@ async def test_resume_run_dispatches_security_context(monkeypatch: MonkeyPatch) 
         "status": "waiting",
         "resume_token": "phase0:run-1",
     }
-    service = AgentRunService(repository, profile_catalog=build_builtin_profile_catalog())
+    service = AgentRunService(
+        repository, profile_catalog=build_builtin_profile_catalog()
+    )
 
     await service.resume_run(
         ResumeRunCommand(
@@ -117,16 +111,12 @@ async def test_resume_run_dispatches_security_context(monkeypatch: MonkeyPatch) 
         )
     )
 
-    assert producer.calls == [
-        {
-            "run_id": "run-1",
-            "user_input": "continue",
-            "security_context": {
-                "tenant_id": "single-tenant",
-                "actor_id": "user-2",
-                "roles": ["agent_user"],
-                "permissions": [],
-                "schema_version": 1,
-            },
-        }
+    commands = [
+        v["payload"] for v in repository.outbox if v.get("topic") == "agent.execution"
     ]
+    assert len(commands) == 1
+    assert commands[0]["input"] == "continue"
+    assert (
+        commands[0]["security_context"]
+        == SecurityContext(actor_id="user-2").model_dump()
+    )

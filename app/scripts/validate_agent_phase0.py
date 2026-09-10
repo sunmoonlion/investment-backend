@@ -24,12 +24,15 @@ from app.infrastructure.graph.checkpointer import phase0_postgres_checkpointer
 from app.infrastructure.graph.walking_skeleton import build_walking_skeleton_graph
 from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.redis import get_redis
-from app.tasks.agent_graph import _run_agent_graph, _stream_graph
+from app.tasks.agent_delivery import execute_command
+from app.tasks.agent_graph import _stream_graph
 
 EXPECTED_TIMELINE = [
+    "RunQueued",
     "TimelineRunStarted",
     "TimelineWaitInputDisplayed",
     "TimelineUserInputReceived",
+    "TimelineRunStarted",
     "TimelineToolStarted",
     "TimelineToolCompleted",
     "TimelineRunCompleted",
@@ -51,7 +54,9 @@ def assert_equal(actual: Any, expected: Any, message: str) -> None:
 
 
 def validate_checkpoint_resume() -> None:
-    print(json.dumps({"step": "checkpoint_resume:start"}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps({"step": "checkpoint_resume:start"}, ensure_ascii=False), flush=True
+    )
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     with phase0_postgres_checkpointer() as checkpointer:
@@ -71,7 +76,11 @@ def validate_checkpoint_resume() -> None:
         {"user_input": "after-reopen", "side_effect_done": True},
         "checkpoint resume result mismatch",
     )
-    print(json.dumps({"checkpoint_resume": "ok", "thread_id": thread_id}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"checkpoint_resume": "ok", "thread_id": thread_id}, ensure_ascii=False
+        )
+    )
 
 
 async def count_side_effects(run_id: str) -> int:
@@ -106,20 +115,37 @@ async def validate_run_flow(*, replay: bool) -> ValidationResult:
         )
         run_id = str(run["run_id"])
 
-    print(json.dumps({"step": "run_flow:first_graph", "run_id": run_id}, ensure_ascii=False), flush=True)
-    await _run_agent_graph(run_id)
+    print(
+        json.dumps(
+            {"step": "run_flow:first_graph", "run_id": run_id}, ensure_ascii=False
+        ),
+        flush=True,
+    )
+    async with get_postgres().session_factory() as session:
+        command_id = (
+            await session.execute(
+                text("select id from outbox_message where deduplication_key=:key"),
+                {"key": f"start:{run_id}"},
+            )
+        ).scalar_one()
+    await execute_command(str(command_id))
 
-    print(json.dumps({"step": "run_flow:resume", "run_id": run_id}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps({"step": "run_flow:resume", "run_id": run_id}, ensure_ascii=False),
+        flush=True,
+    )
     async with get_postgres().session_factory() as session:
         repository = AgentRepository(session)
         waiting = await repository.get_run(run_id)
         if not waiting:
             raise AssertionError("created run disappeared")
-        assert_equal(waiting["status"], "waiting", "run should wait after first graph pass")
+        assert_equal(
+            waiting["status"], "waiting", "run should wait after first graph pass"
+        )
         events_after_wait = await repository.list_ui_events(session_id=session_id)
         assert_equal(
             [event["type"] for event in events_after_wait],
-            ["TimelineRunStarted", "TimelineWaitInputDisplayed"],
+            ["RunQueued", "TimelineRunStarted", "TimelineWaitInputDisplayed"],
             "waiting timeline mismatch",
         )
         resume_token = str(waiting["resume_token"])
@@ -133,13 +159,33 @@ async def validate_run_flow(*, replay: bool) -> ValidationResult:
             )
         )
 
-    print(json.dumps({"step": "run_flow:second_graph", "run_id": run_id}, ensure_ascii=False), flush=True)
-    await _run_agent_graph(run_id, "continue")
+    print(
+        json.dumps(
+            {"step": "run_flow:second_graph", "run_id": run_id}, ensure_ascii=False
+        ),
+        flush=True,
+    )
+    async with get_postgres().session_factory() as session:
+        command_id = (
+            await session.execute(
+                text("select id from outbox_message where deduplication_key=:key"),
+                {"key": f"resume:{run_id}:{resume_token}"},
+            )
+        ).scalar_one()
+    await execute_command(str(command_id))
     if replay:
-        print(json.dumps({"step": "run_flow:forced_replay", "run_id": run_id}, ensure_ascii=False), flush=True)
-        await _run_agent_graph(run_id, "continue")
+        print(
+            json.dumps(
+                {"step": "run_flow:forced_replay", "run_id": run_id}, ensure_ascii=False
+            ),
+            flush=True,
+        )
+        await execute_command(str(command_id))
 
-    print(json.dumps({"step": "run_flow:assert", "run_id": run_id}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps({"step": "run_flow:assert", "run_id": run_id}, ensure_ascii=False),
+        flush=True,
+    )
     async with get_postgres().session_factory() as session:
         repository = AgentRepository(session)
         done = await repository.get_run(run_id)
@@ -174,7 +220,13 @@ async def validate_run_flow(*, replay: bool) -> ValidationResult:
 
 
 async def validate_http_replay(result: ValidationResult) -> None:
-    print(json.dumps({"step": "http_replay:start", "session_id": result.session_id}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps(
+            {"step": "http_replay:start", "session_id": result.session_id},
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
     os.environ["AGENT_V4_TRAFFIC_ENABLED"] = "true"
     from core.config import get_settings
 
@@ -187,7 +239,9 @@ async def validate_http_replay(result: ValidationResult) -> None:
         base_url="http://phase0.local",
         timeout=5.0,
     ) as client:
-        events_response = await client.get(f"/api/agent/sessions/{result.session_id}/events")
+        events_response = await client.get(
+            f"/api/agent/sessions/{result.session_id}/events"
+        )
         events_response.raise_for_status()
         all_events = events_response.json()["events"]
         assert_equal(

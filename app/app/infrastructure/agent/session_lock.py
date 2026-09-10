@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Awaitable
+from typing import cast
 
 from redis.asyncio import Redis
 
@@ -28,15 +30,31 @@ class RedisSessionLock:
         return token if acquired else None
 
     async def release(self, token: SessionLockToken) -> None:
-        key = self._key(token.session_id)
-        if await self.redis.get(key) == self._value(token):
-            await self.redis.delete(key)
+        await cast(
+            Awaitable[int],
+            self.redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                self._key(token.session_id),
+                self._value(token),
+            ),
+        )
 
     async def renew(self, token: SessionLockToken) -> bool:
-        key = self._key(token.session_id)
-        if await self.redis.get(key) != self._value(token):
-            return False
-        return bool(await self.redis.expire(key, self.ttl_seconds))
+        return bool(
+            await cast(
+                Awaitable[int],
+                self.redis.eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                    1,
+                    self._key(token.session_id),
+                    self._value(token),
+                    self.ttl_seconds,
+                ),
+            )
+        )
 
     def _key(self, session_id: str) -> str:
         return session_lock_key(session_id)

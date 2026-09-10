@@ -10,9 +10,11 @@ from typing import Any
 import httpx
 
 EXPECTED_TIMELINE = [
+    "RunQueued",
     "TimelineRunStarted",
     "TimelineWaitInputDisplayed",
     "TimelineUserInputReceived",
+    "TimelineRunStarted",
     "TimelineToolStarted",
     "TimelineToolCompleted",
     "TimelineRunCompleted",
@@ -61,7 +63,9 @@ async def run_kubectl(args: list[str], *, timeout_seconds: float) -> None:
         env=env,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=timeout_seconds
+        )
     except TimeoutError as exc:
         process.kill()
         await process.communicate()
@@ -113,7 +117,9 @@ async def async_main(args: argparse.Namespace) -> None:
         session_id = session_response.json()["session_id"]
 
         print(
-            json.dumps({"step": "create_run", "session_id": session_id}, ensure_ascii=False),
+            json.dumps(
+                {"step": "create_run", "session_id": session_id}, ensure_ascii=False
+            ),
             flush=True,
         )
         run_response = await client.post(
@@ -150,7 +156,13 @@ async def async_main(args: argparse.Namespace) -> None:
             flush=True,
         )
         await run_kubectl(
-            ["rollout", "restart", f"deployment/{args.deployment}", "-n", args.namespace],
+            [
+                "rollout",
+                "restart",
+                f"deployment/{args.deployment}",
+                "-n",
+                args.namespace,
+            ],
             timeout_seconds=args.timeout,
         )
         await run_kubectl(
@@ -166,7 +178,10 @@ async def async_main(args: argparse.Namespace) -> None:
         )
 
         print(
-            json.dumps({"step": "resume_after_worker_restart", "run_id": run_id}, ensure_ascii=False),
+            json.dumps(
+                {"step": "resume_after_worker_restart", "run_id": run_id},
+                ensure_ascii=False,
+            ),
             flush=True,
         )
         resume_response = await client.post(

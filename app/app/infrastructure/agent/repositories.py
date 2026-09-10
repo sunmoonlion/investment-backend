@@ -6,16 +6,14 @@ from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.agent.models import DomainEvent, UIEvent
 from app.domain.agent.runtime import validate_run_status_transition
+from app.infrastructure.agent.transactions import AgentTransactions, atomic
 
 
-class AgentRepository:
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
+class AgentRepository(AgentTransactions):
+    @atomic
     async def create_session(self, *, owner_actor_id: str | None = None) -> str:
         session_id = str(uuid.uuid4())
         await self.session.execute(
@@ -27,7 +25,6 @@ class AgentRepository:
             ),
             {"id": session_id, "owner_actor_id": owner_actor_id},
         )
-        await self.session.commit()
         return session_id
 
     async def assert_session_owner(
@@ -47,6 +44,7 @@ class AgentRepository:
         if stored_owner is None or str(stored_owner) != owner_actor_id:
             raise PermissionError("agent session belongs to another actor")
 
+    @atomic
     async def create_run(
         self,
         *,
@@ -61,6 +59,10 @@ class AgentRepository:
                 session_id=session_id,
                 owner_actor_id=owner_actor_id,
             )
+        await self.session.execute(
+            text("select id from agent_sessions where id = :id for update"),
+            {"id": session_id},
+        )
         if idempotency_key:
             existing = await self.session.execute(
                 text(
@@ -74,7 +76,7 @@ class AgentRepository:
             )
             row = existing.mappings().first()
             if row:
-                return dict(row)
+                return {**dict(row), "created": False}
 
         run_id = str(uuid.uuid4())
         await self.session.execute(
@@ -99,11 +101,11 @@ class AgentRepository:
                 "idempotency_key": idempotency_key,
             },
         )
-        await self.session.commit()
         return {
             "id": run_id,
             "session_id": session_id,
             "status": "created",
+            "created": True,
             "agent_profile_key": agent_profile_key or "default_research",
             "agent_profile_version": agent_profile_version,
         }
@@ -113,7 +115,7 @@ class AgentRepository:
             text(
                 """
                 select r.id, r.session_id, r.thread_id, r.status, r.resume_token,
-                       s.owner_actor_id
+                       r.execution_state, s.owner_actor_id
                 from agent_runs r
                 join agent_sessions s on s.id = r.session_id
                 where r.id = :run_id
@@ -124,6 +126,7 @@ class AgentRepository:
         row = result.mappings().first()
         return dict(row) if row else None
 
+    @atomic
     async def set_run_status(
         self,
         *,
@@ -138,7 +141,7 @@ class AgentRepository:
                 """
                 select status
                 from agent_runs
-                where id = :run_id
+                where id = :run_id for update
                 """
             ),
             {"run_id": run_id},
@@ -152,7 +155,7 @@ class AgentRepository:
                 """
                 update agent_runs
                 set status = :status,
-                    resume_token = coalesce(:resume_token, resume_token),
+                    resume_token = :resume_token,
                     error = :error,
                     updated_at = now()
                 where id = :run_id
@@ -175,8 +178,8 @@ class AgentRepository:
             ),
             {"session_id": session_id, "status": status},
         )
-        await self.session.commit()
 
+    @atomic
     async def append_event(self, event: DomainEvent | UIEvent, category: str) -> str:
         event_id = str(uuid.uuid4())
         lineage = event.lineage.model_dump()
@@ -230,7 +233,6 @@ class AgentRepository:
                 "metadata": "{}",
             },
         )
-        await self.session.commit()
         return event_id
 
     async def list_ui_events(
@@ -269,6 +271,14 @@ class AgentRepository:
             events.append(event)
         return events
 
+    async def get_command(self, key: str) -> dict[str, Any] | None:
+        result = await self.session.execute(
+            text("select payload from outbox_message where deduplication_key=:key"),
+            {"key": key},
+        )
+        return result.scalar_one_or_none()
+
+    @atomic
     async def record_side_effect_once(
         self,
         *,
@@ -276,12 +286,18 @@ class AgentRepository:
         run_id: str,
         result: dict[str, Any] | None = None,
     ) -> bool:
+        """Record a DB-local effect in the caller's transaction.
+
+        Remote mutations must use DurableSideEffectService: this method cannot
+        atomically commit an external system's action.
+        """
         payload = result or {"message": "phase0 side effect"}
         execute_result = await self.session.execute(
             text(
                 """
-                insert into tool_side_effects (tool_call_id, run_id, status, result)
-                values (:tool_call_id, :run_id, 'completed', cast(:result as jsonb))
+                insert into tool_side_effects (tool_call_id, run_id, status, result, intent, receipt)
+                values (:tool_call_id, :run_id, 'completed', cast(:result as jsonb),
+                        '{"kind":"database_record"}'::jsonb, cast(:result as jsonb))
                 on conflict (tool_call_id) do nothing
                 """
             ),
@@ -291,5 +307,4 @@ class AgentRepository:
                 "result": json.dumps(payload),
             },
         )
-        await self.session.commit()
         return cast(CursorResult[Any], execute_result).rowcount == 1

@@ -14,7 +14,6 @@ from app.application.dto.pilot_runtime import (
     SourceResolution,
 )
 from app.infrastructure.agent.pilot_repository import PilotRepository
-from app.infrastructure.messaging.celery_producer import get_celery_producer
 
 STATUS_MAP = {
     "created": "queued",
@@ -32,36 +31,13 @@ class PilotService:
         self.repository = repository
 
     async def create_run(self, command: PilotCreateRun) -> PilotRunSnapshot:
-        producer = get_celery_producer()
-        if not producer.enabled:
-            raise RuntimeError("pilot Runtime worker transport is unavailable")
         title = command.title or command.input.text.strip()[:120]
-        run, created = await self.repository.create_run(
+        run, _created = await self.repository.create_run(
             owner_actor_id=command.delegated_user.actor_id,
             idempotency_key=command.idempotency_key,
             title=title,
             user_input=command.input.text,
         )
-        if created:
-            try:
-                producer.dispatch_pilot_graph(str(run["id"]))
-            except Exception:
-                await self.repository.set_status(
-                    run_id=UUID(str(run["id"])),
-                    session_id=UUID(str(run["session_id"])),
-                    status="failed",
-                    error="dispatch_failed",
-                )
-                await self.repository.append_browser_event(
-                    run_id=UUID(str(run["id"])),
-                    session_id=UUID(str(run["session_id"])),
-                    event_type="failed",
-                    data={
-                        "code": "dispatch_failed",
-                        "message": "The pilot worker transport rejected the run.",
-                    },
-                )
-                raise
         return await self.snapshot(
             run_id=UUID(str(run["id"])),
             owner_actor_id=command.delegated_user.actor_id,
@@ -90,10 +66,22 @@ class PilotService:
             elif event_type == "completed":
                 summary = str(data.get("summary") or "")
                 required_action = None
+            elif event_type == "status" and data.get("status") in {
+                "queued",
+                "cancelled",
+            }:
+                required_action = None
             elif event_type == "failed":
                 required_action = None
         last = events[-1] if events else None
         mapped_status = STATUS_MAP.get(str(run["status"]))
+        if (
+            run["status"] == "waiting"
+            and run.get("resume_idempotency_key") is not None
+            and not run.get("resume_token")
+        ):
+            mapped_status = "queued"
+            required_action = None
         if mapped_status is None:
             raise RuntimeError("pilot run contains an unknown status")
         return PilotRunSnapshot(
@@ -111,75 +99,25 @@ class PilotService:
     async def resume(
         self, *, run_id: UUID, command: PilotResumeCommand
     ) -> PilotRunSnapshot:
-        run, consumed = await self.repository.consume_resume(
+        run, _consumed = await self.repository.consume_resume(
             run_id=run_id,
             owner_actor_id=command.delegated_user.actor_id,
             action_id=command.action_id,
             idempotency_key=command.idempotency_key,
+            value=command.value,
         )
-        if consumed:
-            producer = get_celery_producer()
-            if not producer.enabled:
-                await self._fail_consumed_resume(run_id=run_id, run=run)
-                raise RuntimeError("pilot Runtime worker transport is unavailable")
-            try:
-                producer.dispatch_pilot_graph(run_id=str(run_id), resume=command.value)
-            except Exception:
-                await self._fail_consumed_resume(run_id=run_id, run=run)
-                raise
         return await self.snapshot(
             run_id=run_id,
             owner_actor_id=command.delegated_user.actor_id,
         )
 
-    async def _fail_consumed_resume(self, *, run_id: UUID, run: dict) -> None:
-        """Make a consumed-but-undispatched resume terminal and observable.
-
-        Once the action token is atomically consumed it must never become
-        reusable.  A transport failure therefore cannot leave the run in a
-        misleading ``waiting`` state.
-        """
-
-        session_id = UUID(str(run["session_id"]))
-        await self.repository.set_status(
-            run_id=run_id,
-            session_id=session_id,
-            status="failed",
-            error="resume_dispatch_failed",
-        )
-        await self.repository.append_browser_event(
-            run_id=run_id,
-            session_id=session_id,
-            event_type="failed",
-            data={
-                "code": "resume_dispatch_failed",
-                "message": "The pilot worker transport rejected the resume.",
-            },
-        )
-
     async def cancel(
         self, *, run_id: UUID, command: PilotCancelCommand
     ) -> PilotRunSnapshot:
-        run = await self.repository.request_cancel(
+        await self.repository.request_cancel(
             run_id=run_id,
             owner_actor_id=command.delegated_user.actor_id,
         )
-        if run["status"] == "cancelled":
-            events = await self.repository.list_browser_events(
-                run_id=run_id,
-                owner_actor_id=command.delegated_user.actor_id,
-            )
-            if (
-                not events
-                or events[-1]["type"] != "status"
-                or events[-1].get("data", {}).get("status") != "cancelled"
-            ):
-                await self.repository.append_browser_event(
-                    run_id=run_id,
-                    session_id=run["session_id"],
-                    event_type="status",
-                    data={"status": "cancelled"},
-                )
         return await self.snapshot(
             run_id=run_id,
             owner_actor_id=command.delegated_user.actor_id,

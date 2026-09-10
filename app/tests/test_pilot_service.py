@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-import app.application.agent.pilot_service as pilot_service_module
 from app.application.agent.pilot_service import PilotService
 from app.application.dto.pilot_runtime import (
     DelegatedUser,
@@ -20,9 +19,7 @@ class FakeProducer:
         self.error = error
         self.calls: list[tuple[str, str | None]] = []
 
-    def dispatch_pilot_graph(
-        self, run_id: str, resume: str | None = None
-    ) -> None:
+    def dispatch_pilot_graph(self, run_id: str, resume: str | None = None) -> None:
         self.calls.append((run_id, resume))
         if self.error is not None:
             raise self.error
@@ -95,57 +92,31 @@ def resume_command(actor_id: uuid.UUID) -> PilotResumeCommand:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("producer", "expected_error"),
-    [
-        (FakeProducer(enabled=False), "transport is unavailable"),
-        (
-            FakeProducer(enabled=True, error=RuntimeError("broker rejected")),
-            "broker rejected",
-        ),
-    ],
-)
-async def test_consumed_resume_dispatch_failure_becomes_terminal(
-    monkeypatch: pytest.MonkeyPatch,
-    producer: FakeProducer,
-    expected_error: str,
-) -> None:
-    run_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
+async def test_resume_persists_input_without_calling_the_broker() -> None:
+    run_id, actor_id = uuid.uuid4(), uuid.uuid4()
     repository = FakeRepository(run_id=run_id, actor_id=actor_id)
-    monkeypatch.setattr(
-        pilot_service_module, "get_celery_producer", lambda: producer
-    )
+    values = []
+    original = repository.consume_resume
 
-    with pytest.raises(RuntimeError, match=expected_error):
-        await PilotService(repository).resume(
-            run_id=run_id, command=resume_command(actor_id)
-        )
+    async def consume(**kwargs):
+        values.append(kwargs)
+        return await original(**kwargs)
 
-    assert repository.status == "failed"
-    assert repository.status_updates[-1]["error"] == "resume_dispatch_failed"
-    assert repository.events[-1]["type"] == "failed"
-    assert (
-        repository.events[-1]["data"]["code"] == "resume_dispatch_failed"
-    )
+    repository.consume_resume = consume
+    command = resume_command(actor_id)
+    await PilotService(repository).resume(run_id=run_id, command=command)
+    assert values[0]["value"] == command.value
+    assert values[0]["idempotency_key"] == command.idempotency_key
+    assert repository.status_updates == []
 
 
 @pytest.mark.asyncio
-async def test_idempotent_resume_replay_does_not_dispatch_again(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
+async def test_idempotent_resume_replay_does_not_fail_the_run() -> None:
+    run_id, actor_id = uuid.uuid4(), uuid.uuid4()
     repository = FakeRepository(run_id=run_id, actor_id=actor_id)
     repository.consumed = False
-    producer = FakeProducer(enabled=True)
-    monkeypatch.setattr(
-        pilot_service_module, "get_celery_producer", lambda: producer
-    )
-
     snapshot = await PilotService(repository).resume(
         run_id=run_id, command=resume_command(actor_id)
     )
-
     assert snapshot.status == "waiting_for_input"
-    assert producer.calls == []
+    assert repository.status_updates == []
