@@ -12,11 +12,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.dto.outbox import OutboxEvent
+from app.infrastructure.messaging.durable_delivery import DeliveryLeaseLost as LeaseLost
 from app.infrastructure.repositories.outbox import SqlOutboxRepository
-
-
-class LeaseLost(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True)

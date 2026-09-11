@@ -219,7 +219,7 @@ DORMANT: tuple[Dormant, ...] = (
         kind="pending",
         evidence=(
             "RunService.create_run 解析 profile 并把 key/version 写进 run 行，"
-            "但 dispatch_agent_graph 只传 run_id / user_input / security_context——"
+            "但当前持久执行命令未向执行器传递完整 Profile effective_config——"
             "effective_config 到不了图里。两条生产图对 allowed_tools、denied_tools、"
             "model_key、system_prompt_id、memory_policy 的引用数均为 0。"
             "即：Profile 被记录，不被执行；它现在是审计字段，不是约束"

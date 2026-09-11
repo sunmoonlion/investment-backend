@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import uuid
 from contextlib import suppress
 
@@ -27,8 +26,6 @@ from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.redis import get_redis
 from app.worker import celery_app
 from core.config import get_settings
-
-logger = logging.getLogger(__name__)
 
 
 async def prepare_pilot_input(run):
@@ -133,54 +130,55 @@ async def execute_command(
 
 
 async def pump(*, sessions=None, publish=None, limit: int = 100):
+    # Resolve after Celery task registration; either transport can import first.
+    from app.tasks.durable_delivery import pump as pump_delivery
+
     if sessions is None:
         await get_postgres().init()
         sessions = get_postgres().session_factory
     delivery = AgentDelivery(sessions)
-    await delivery.reconcile()
-    for _ in range(limit):
-        message = await delivery.claim_delivery()
-        if message is None:
-            break
-        try:
-            if publish is not None:
-                await publish(message)
-            elif message["topic"] == "agent.execution":
-                # Broker payload is a reference; authoritative input and security
-                # context are read from the committed command by the consumer.
-                await asyncio.to_thread(
-                    run_agent_delivery.apply_async,
-                    args=[str(message["id"])],
-                    task_id=str(message["id"]),
-                )
-            else:
-                await get_redis().init()
-                await get_redis().client.publish(
-                    message["payload"]["channel"],
-                    json.dumps(message["payload"]["message"], ensure_ascii=False),
-                )
-            await delivery.finish_delivery(message)
-        except Exception as exc:
-            logger.warning(
-                "agent delivery failed message_id=%s error_type=%s",
-                message["id"],
-                type(exc).__name__,
+
+    async def publish_message(message):
+        if publish is not None:
+            await publish(message)
+        elif message["topic"] == "agent.execution":
+            # This adapter supplies transport, not its own retry/dead-letter loop.
+            await asyncio.to_thread(
+                run_agent_delivery.apply_async,
+                args=[str(message["id"])],
+                task_id=str(message["id"]),
             )
-            try:
-                await delivery.finish_delivery(message, error=type(exc).__name__)
-            except LeaseLost:
-                pass  # a replacement publisher owns this row now
+        else:
+            await get_redis().init()
+            await get_redis().client.publish(
+                message["payload"]["channel"],
+                json.dumps(message["payload"]["message"], ensure_ascii=False),
+            )
+
+    return await pump_delivery(delivery, publish_message, limit=limit)
+
+
+async def _with_worker_resources(coro):
+    # Celery can alternate domain and generic tasks in the same process. Never
+    # leave loop-bound singleton pools for another task's event loop to reuse.
+    try:
+        return await coro
+    finally:
+        try:
+            await get_redis().shutdown()
+        finally:
+            await get_postgres().shutdown()
 
 
 @celery_app.task(
     name="app.tasks.agent_delivery.run", acks_late=True, reject_on_worker_lost=True
 )
 def run_agent_delivery(command_id: str):
-    _run_in_worker_loop(execute_command(command_id))
+    _run_in_worker_loop(_with_worker_resources(execute_command(command_id)))
 
 
 @celery_app.task(
     name="app.tasks.agent_delivery.pump", acks_late=True, reject_on_worker_lost=True
 )
 def pump_agent_delivery():
-    _run_in_worker_loop(pump())
+    _run_in_worker_loop(_with_worker_resources(pump()))

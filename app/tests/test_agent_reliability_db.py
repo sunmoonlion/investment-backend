@@ -252,7 +252,7 @@ async def test_publisher_crash_duplicate_delivery_reconcile_and_dead_letter(db):
     await delivery.finish_delivery(retry, error="broker_down")
     assert (
         await scalar(
-            db, "select count(*) from agent_delivery_failures where replayed_at is null"
+            db, "select count(*) from outbox_dead_letter where replayed_at is null"
         )
         == 1
     )
@@ -638,10 +638,16 @@ async def test_schema_upgrade_downgrade_preserves_existing_run(db):
     run_id, _, _ = await phase0(db)
     async with db() as s:
         schema = (await s.execute(text("select current_schema()"))).scalar_one()
-    path = ROOT / "alembic/versions/20260910_0006_agent_reliability.py"
+    path = ROOT / "alembic/versions/20260911_0007_durable_delivery.py"
     spec = importlib.util.spec_from_file_location("reliability_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    previous_spec = importlib.util.spec_from_file_location(
+        "previous_reliability_migration",
+        ROOT / "alembic/versions/20260910_0006_agent_reliability.py",
+    )
+    previous = importlib.util.module_from_spec(previous_spec)
+    previous_spec.loader.exec_module(previous)
     engine = create_engine(
         os.environ["AGENT_TEST_DATABASE_URL"].replace(
             "postgresql://", "postgresql+psycopg://"
@@ -651,6 +657,8 @@ async def test_schema_upgrade_downgrade_preserves_existing_run(db):
         connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
         with Operations.context(MigrationContext.configure(connection)):
             module.downgrade()
+            previous.downgrade()
+            previous.upgrade()
             module.upgrade()
         assert (
             str(connection.execute(text("select id from agent_runs")).scalar_one())
@@ -698,10 +706,10 @@ async def test_poison_consumer_delivery_is_bounded_and_visible(db):
     assert (
         await scalar(
             db,
-            "select error_code from agent_delivery_failures where message_id=:id",
+            "select error_code from outbox_dead_letter where message_id=:id",
             id=command,
         )
-        == "execution_unacknowledged"
+        == "consumer_unacknowledged"
     )
     assert await delivery.claim_execution(command) is None
     await delivery.replay(command)

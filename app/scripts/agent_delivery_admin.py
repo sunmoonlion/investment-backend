@@ -65,7 +65,10 @@ async def main():
             async with sessions() as s:
                 rows = await s.execute(
                     text(
-                        "select message_id,error_code,failed_at from agent_delivery_failures where replayed_at is null order by failed_at"
+                        "select d.message_id,d.error_code,d.failed_at from outbox_dead_letter d "
+                        "join outbox_message m on m.id=d.message_id "
+                        "where d.replayed_at is null "
+                        "and m.topic in ('agent.execution','agent.notification') order by d.failed_at"
                     )
                 )
                 for row in rows:

@@ -3,7 +3,7 @@
 
 set -e
 
-IMAGE_NAME="investment-backend:1.0.0"
+IMAGE_NAME="investment-backend:architecture-v2-dev"
 CONTAINER_NAME="investment-backend"
 
 echo "停止并删除旧容器..."

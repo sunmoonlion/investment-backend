@@ -78,8 +78,9 @@ def configure_celery(*, require_broker: bool = False) -> bool:
 if os.environ.get("CELERY_BROKER_URL"):
     configure_celery()
 
-import app.tasks.agent_delivery  # noqa: E402, F401 — Agent-owned outbox consumer
+import app.tasks.agent_delivery  # noqa: E402, F401 — Agent session execution adapter
 import app.tasks.agent_graph  # noqa: E402, F401 — register tasks
+import app.tasks.durable_delivery  # noqa: E402, F401 — shared durable transport
 import app.tasks.pilot_agent_graph  # noqa: E402, F401 — isolated P0-008C task
 import app.tasks.ping  # noqa: E402, F401 — register tasks
 
@@ -87,6 +88,10 @@ celery_app.conf.beat_schedule = {
     **(celery_app.conf.beat_schedule or {}),
     "agent-delivery-reconcile": {
         "task": "app.tasks.agent_delivery.pump",
+        "schedule": 5.0,
+    },
+    "durable-delivery-reconcile": {
+        "task": "app.tasks.durable_delivery.pump",
         "schedule": 5.0,
     },
 }
