@@ -90,3 +90,33 @@ async def test_missing_domain_lease_store_fails_instead_of_falling_back(db):
     await sql(db, "ALTER TABLE agent_execution_leases RENAME TO missing_agent_leases")
     with pytest.raises(DBAPIError):
         await observe(db)
+
+
+async def test_current_archive_guard_prevents_implicit_outbox_cleanup(db):
+    _, _, command = await phase0(db)
+    assert await scalar(db, "SELECT count(*) FROM agent_execution_leases") == 0
+    assert (
+        await scalar(db, "SELECT count(*) FROM agent_delivery_failures_legacy_0006")
+        == 0
+    )
+    assert (
+        await scalar(
+            db,
+            "SELECT count(*) FROM pg_constraint "
+            "WHERE conrelid='agent_delivery_failures_legacy_0006'::regclass "
+            "AND confrelid='outbox_message'::regclass AND confdeltype='c'",
+        )
+        == 1
+    )
+    # Even an empty rollback archive rejects cascade statements. Do not disable it
+    # to make an observation test pass; retention must separately resolve ownership.
+    with pytest.raises(DBAPIError, match="Agent delivery archive is read-only"):
+        await sql(db, "DELETE FROM outbox_message WHERE id=:id", id=command)
+    assert (
+        await scalar(db, "SELECT count(*) FROM outbox_message WHERE id=:id", id=command)
+        == 1
+    )
+    assert (
+        await scalar(db, "SELECT count(*) FROM agent_delivery_failures_legacy_0006")
+        == 0
+    )
