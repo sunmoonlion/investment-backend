@@ -7,6 +7,7 @@ import uuid
 from sqlalchemy import text
 
 from app.infrastructure.agent.transactions import ExecutionLease, LeaseLost
+from app.infrastructure.messaging.delivery_schedule import NOT_BEFORE_DUE_SQL
 from app.infrastructure.messaging.durable_delivery import DurableDelivery
 
 CONSUMER = "agent.executor"
@@ -43,10 +44,11 @@ class AgentDelivery(DurableDelivery):
         owner = str(uuid.uuid4())
         async with self.sessions() as s, s.begin():
             result = await s.execute(
-                text("""
+                text(f"""
                 SELECT m.payload, r.id AS run_id, r.session_id, r.graph_name FROM outbox_message m
                 JOIN agent_runs r ON r.id=CAST(m.aggregate_key AS uuid)
                 WHERE m.id=:id AND m.topic='agent.execution'
+                  AND {NOT_BEFORE_DUE_SQL}
                   AND NOT EXISTS (SELECT 1 FROM inbox_message i WHERE i.consumer=:consumer AND i.message_id=m.id)
                   AND NOT EXISTS (SELECT 1 FROM outbox_dead_letter f WHERE f.message_id=m.id AND f.replayed_at IS NULL)
             """),
