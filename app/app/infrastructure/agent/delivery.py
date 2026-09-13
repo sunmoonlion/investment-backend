@@ -98,7 +98,7 @@ class AgentDelivery(DurableDelivery):
             if done.scalar_one_or_none():
                 await s.execute(
                     text(
-                        "update agent_execution_leases set expires_at=clock_timestamp() where session_id=:id"
+                        "update agent_execution_leases set expires_at='-infinity'::timestamptz where session_id=:id"
                     ),
                     {"id": row["session_id"]},
                 )
@@ -119,11 +119,14 @@ class AgentDelivery(DurableDelivery):
                 raise LeaseLost("execution lease lost")
 
     async def release(self, lease: ExecutionLease) -> None:
+        # Preserve the epoch tombstone without resurrecting a released owner
+        # when the database wall clock moves backwards.
         async with self.sessions() as s, s.begin():
             await s.execute(
                 text("""
-                UPDATE agent_execution_leases SET expires_at=clock_timestamp()
-                WHERE session_id=:session_id AND owner=:owner AND epoch=:epoch
+                UPDATE agent_execution_leases SET expires_at='-infinity'::timestamptz
+                WHERE session_id=:session_id AND command_id=:command_id
+                  AND owner=:owner AND epoch=:epoch
             """),
                 vars(lease),
             )

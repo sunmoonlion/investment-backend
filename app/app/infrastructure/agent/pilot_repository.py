@@ -366,7 +366,7 @@ class PilotRepository(AgentTransactions):
     ) -> dict[str, Any]:
         await self.session.execute(
             text("""
-            UPDATE agent_execution_leases SET epoch = epoch + 1, expires_at = clock_timestamp()
+            UPDATE agent_execution_leases SET epoch = epoch + 1, expires_at = '-infinity'::timestamptz
             WHERE session_id = (SELECT session_id FROM agent_runs WHERE id = :id)
               AND EXISTS (SELECT 1 FROM agent_runs r JOIN agent_sessions s ON s.id=r.session_id
                           WHERE r.id=:id AND s.owner_actor_id=:owner)
