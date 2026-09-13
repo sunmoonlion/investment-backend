@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     celery_result_backend: str | None = Field(
         default=None, validation_alias="CELERY_RESULT_BACKEND"
     )
+    # Opt-in only after a privileged provisioner verifies the durable binding.
+    celery_task_topology_predeclared: bool = Field(
+        default=False, validation_alias="CELERY_TASK_TOPOLOGY_PREDECLARED"
+    )
 
     # Investment Agent runtime. These settings are process-role neutral and
     # are consumed only by the API/Worker adapters that enable Agent features.
