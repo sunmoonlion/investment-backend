@@ -33,6 +33,8 @@ async def test_agent_execution_uses_real_session_lease_and_exact_consumer(db):
     lease, _ = await delivery.claim_execution(command)
     row = (await observe(db))["agent.execution"]
     assert row["incomplete_messages"] == row["active_execution_messages"] == 1
+    assert row["retained_receipt_messages"] == 0
+    assert row["latest_receipt_recorded_timestamp_seconds"] == 0
     assert row["reconcile_candidates"] == 0
     # Public execution storage is unused; falling back to it would falsely stall.
     assert await scalar(db, "SELECT count(*) FROM outbox_execution") == 0
@@ -44,6 +46,7 @@ async def test_agent_execution_uses_real_session_lease_and_exact_consumer(db):
         id=command,
     )
     assert (await observe(db))["agent.execution"]["incomplete_messages"] == 1
+    assert (await observe(db))["agent.execution"]["retained_receipt_messages"] == 0
     await delivery.release(lease)
     assert (await observe(db))["agent.execution"]["reconcile_candidates"] == 1
     await sql(
@@ -56,6 +59,8 @@ async def test_agent_execution_uses_real_session_lease_and_exact_consumer(db):
     )
     row = (await observe(db))["agent.execution"]
     assert row["incomplete_messages"] == row["reconcile_candidates"] == 0
+    assert row["retained_receipt_messages"] == 1
+    assert row["latest_receipt_recorded_timestamp_seconds"] > 0
 
 
 async def test_notification_publication_is_not_misreported_as_missing_agent_ack(db):
@@ -73,6 +78,8 @@ async def test_notification_publication_is_not_misreported_as_missing_agent_ack(
     )
     row = (await observe(db))["agent.notification"]
     assert not row["receipt_required"]
+    assert row["retained_receipt_messages"] == 0
+    assert row["latest_receipt_recorded_timestamp_seconds"] == 0
     assert row["incomplete_messages"] == row["awaiting_receipt_messages"] == 0
     assert row["reconcile_candidates"] == 0
     assert await scalar(db, "SELECT count(*) FROM inbox_message") == 0
