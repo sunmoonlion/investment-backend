@@ -1,7 +1,8 @@
 # Investment Backend 文档说明
 
-当前架构、部署与发布事实以仓库根 `README.md`、K8s Architecture v2 bundle 和
-`k8s/sunmoonai/docs/architecture-v2/` 证据为准。
+当前架构入口为仓库根 `README.md` 与 `k8s/sunmoonai/docs/project-guide/`；
+部署事实须核对实际 bundle 与运行状态。历史迁移/退役证据按
+`k8s/sunmoonai/docs/legacy-backlog/verification-index.md` 的固定 Git 版本查询。
 
 本目录中的 `mooc-manus-v4-*`、部分早期 ADR 及其中出现的 `research-app`、
 `research-admin-backend`、`research-web-frontend` 等名称，是 Investment 改名前的历史设计与
