@@ -970,8 +970,11 @@ class WorkbenchRepository:
         return [str(x[0]) for x in r.all()]
 
     async def release_leases(self, *, runner_id: str) -> None:
+        # 到期而不是删除：运行身份对这张表只有 SELECT/INSERT/UPDATE（数据库策略不发 DELETE）
         await self.session.execute(
-            text("delete from workbench_sandbox_leases where runner_id = :r"),
+            text(
+                "update workbench_sandbox_leases set expires_at = now(), updated_at = now() where runner_id = :r"
+            ),
             {"r": runner_id},
         )
 
