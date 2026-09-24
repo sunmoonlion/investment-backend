@@ -1,0 +1,206 @@
+"""网页路由：用依赖覆盖注入 web 身份与测试库；验开关、归属、幂等、命令入队、事件游标。"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from test_workbench_ledger_db import db as db  # noqa: F401
+
+from app.bootstrap.api import create_app
+from app.domain.security import Principal
+from app.infrastructure.storage.postgres import get_db_session
+from app.interfaces.endpoints.workbench_routes import require_workbench_enabled
+from app.interfaces.http.middleware.auth import get_web_current_user
+from core.config import Settings
+
+
+def principal(actor_id: str) -> Principal:
+    now = datetime.now(UTC)
+    return Principal(
+        actor_type="user",
+        subject=f"sub-{actor_id}",
+        issuer="https://casdoor.test",
+        app="investment",
+        surface="web",
+        audience="web",
+        policy_version="investment-web-v2",
+        actor_id=uuid.UUID(actor_id),
+        roles=("user",),
+        scopes=frozenset({"web"}),
+        authenticated_at=now,
+        expires_at=now + timedelta(hours=1),
+    )
+
+
+@pytest.fixture
+def make_client(db, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("WORKBENCH_ENABLED", "true")
+    app = create_app(Settings())
+
+    async def override_db():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = override_db
+    # get_settings 是缓存的：开关用依赖覆盖，不靠环境变量
+    app.dependency_overrides[require_workbench_enabled] = lambda: None
+
+    def as_user(actor_id: str):
+        app.dependency_overrides[get_web_current_user] = lambda: principal(actor_id)
+        return AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        )
+
+    return as_user
+
+
+A = str(uuid.uuid4())
+B = str(uuid.uuid4())
+
+
+async def bootstrap(http):
+    env = (
+        await http.post(
+            "/api/workbench/environments",
+            json={
+                "name": "pc",
+                "roots": ["/home/u/research"],
+                "codex_version": "0.155.1",
+            },
+        )
+    ).json()["environment_id"]
+    sb = (
+        await http.post(
+            "/api/workbench/sandboxes",
+            json={
+                "app_server_url": "ws://sandbox:47800",
+                "token_ref": "env:APP_SERVER_TOKEN",
+            },
+        )
+    ).json()["sandbox_id"]
+    r = await http.post(
+        "/api/workbench/sessions",
+        json={
+            "environment_id": env,
+            "sandbox_id": sb,
+            "project_root": "/home/u/research/proj",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return env, sb, r.json()["session_id"]
+
+
+async def test_session_turn_handover_and_events(make_client, db):  # noqa: F811
+    async with make_client(A) as http:
+        env, sb, sid = await bootstrap(http)
+        r = await http.get(f"/api/workbench/sessions/{sid}")
+        assert r.status_code == 200 and r.json()["session"]["wheel"] == "user"
+        r = await http.post(
+            f"/api/workbench/sessions/{sid}/turns",
+            json={"text": "hello", "request_id": "req-1"},
+        )
+        assert r.status_code == 202 and r.json()["cursor"] == 2
+        r = await http.get(f"/api/workbench/sessions/{sid}/events")
+        assert [e["type"] for e in r.json()["events"]] == [
+            "session/created",
+            "turn/requested",
+        ] and r.json()["next_cursor"] == 2
+        r = await http.get(f"/api/workbench/sessions/{sid}/events", params={"after": 2})
+        assert r.json()["events"] == [] and r.json()["next_cursor"] == 2
+        body = {
+            "idempotency_key": "k-0000-0001",
+            "profile_id": "DATA_QUERY",
+            "original_input": {"text": "核对附注"},
+            "budget_limit": "10",
+        }
+        r = await http.post(f"/api/workbench/sessions/{sid}/handover", json=body)
+        assert r.status_code == 201 and r.json()["created"] is True
+        task_id = r.json()["task_id"]
+        r2 = await http.post(f"/api/workbench/sessions/{sid}/handover", json=body)
+        assert r2.json()["task_id"] == task_id and r2.json()["created"] is False
+        r3 = await http.post(
+            f"/api/workbench/sessions/{sid}/handover",
+            json={**body, "original_input": {"text": "别的"}},
+        )
+        assert r3.status_code == 409 and r3.json()["code"] == "idempotency_conflict"
+        r = await http.post(
+            f"/api/workbench/sessions/{sid}/turns", json={"text": "sneak"}
+        )
+        assert r.status_code == 409 and r.json()["code"] == "wheel_held_by_other"
+        r = await http.get(f"/api/workbench/tasks/{task_id}")
+        assert r.status_code == 200 and r.json()["task"]["state"] == "RECEIVED"
+        r = await http.post(f"/api/workbench/tasks/{task_id}/cancel")
+        assert r.status_code == 202 and r.json()["state"] == "CANCELLED"
+        r = await http.get(f"/api/workbench/sessions/{sid}")
+        assert r.json()["session"]["wheel"] == "user"
+    async with db() as s:
+        rows = await s.execute(
+            text(
+                "select kind from workbench_commands where session_id = :s order by created_at"
+            ),
+            {"s": sid},
+        )
+        assert [x[0] for x in rows.all()] == [
+            "session.start_thread",
+            "turn.start",
+            "task.drive",
+        ]
+
+
+async def test_other_user_sees_nothing(make_client):
+    async with make_client(A) as http:
+        env, sb, sid = await bootstrap(http)
+    async with make_client(B) as http:
+        assert (await http.get(f"/api/workbench/sessions/{sid}")).status_code == 404
+        assert (
+            await http.get(f"/api/workbench/sessions/{sid}/events")
+        ).status_code == 404
+        assert (
+            await http.post(f"/api/workbench/sessions/{sid}/turns", json={"text": "x"})
+        ).status_code == 404
+        assert (await http.get("/api/workbench/sessions")).json()["sessions"] == []
+
+
+async def test_validation_and_root_whitelist(make_client):
+    async with make_client(A) as http:
+        r = await http.post(
+            "/api/workbench/sandboxes",
+            json={"app_server_url": "http://x", "token_ref": "env:T"},
+        )
+        assert r.status_code == 422
+        r = await http.post(
+            "/api/workbench/sandboxes",
+            json={"app_server_url": "ws://x", "token_ref": "vault:T"},
+        )
+        assert r.status_code == 422
+        env = (
+            await http.post(
+                "/api/workbench/environments",
+                json={"name": "pc", "roots": ["/home/u/research"]},
+            )
+        ).json()["environment_id"]
+        sb = (
+            await http.post(
+                "/api/workbench/sandboxes",
+                json={"app_server_url": "ws://x", "token_ref": "env:T"},
+            )
+        ).json()["sandbox_id"]
+        r = await http.post(
+            "/api/workbench/sessions",
+            json={"environment_id": env, "sandbox_id": sb, "project_root": "/etc"},
+        )
+        assert r.status_code == 400 and r.json()["code"] == "root_outside_whitelist"
+
+
+async def test_disabled_flag_hides_everything(db, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("WORKBENCH_ENABLED", "false")
+    app = create_app(Settings())
+    app.dependency_overrides[get_web_current_user] = lambda: principal(A)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as http:
+        assert (await http.get("/api/workbench/sessions")).status_code == 404

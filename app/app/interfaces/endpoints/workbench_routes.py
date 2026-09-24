@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.errors.exceptions import AppException
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.session_service import SessionService
 from app.domain.security import Principal
@@ -112,15 +113,9 @@ def _plain(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _http(exc: WorkbenchError) -> HTTPException:
-    return HTTPException(
-        status_code=exc.http_status,
-        detail={
-            "code": exc.code,
-            "message": exc.message,
-            "details": {k: str(v) for k, v in exc.details.items()},
-        },
-    )
+def _http(exc: WorkbenchError) -> AppException:
+    # 走统一的 problem+json：顶层 code / status / detail
+    return AppException(code=exc.code, status_code=exc.http_status, msg=exc.message)
 
 
 async def _publish_commands_wakeup() -> None:
