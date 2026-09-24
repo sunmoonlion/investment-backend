@@ -17,6 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors.exceptions import AppException
 from app.application.workbench.ledger import Ledger
+from app.application.workbench.provisioning import (
+    HttpProvisioner,
+    ProvisionerConfig,
+    ProvisioningUnavailable,
+    SandboxProvisioning,
+    WsRelayAdmin,
+)
 from app.application.workbench.session_service import SessionService
 from app.domain.security import Principal
 from app.domain.workbench.errors import WorkbenchError
@@ -127,6 +134,31 @@ def credential_cipher():
     from cryptography.fernet import Fernet
 
     return Fernet(key.encode())
+
+
+def provisioning_backends():
+    """供给器与会合点管理通道的客户端；未配置即 503。测试用依赖覆盖注入假的。"""
+    s = get_settings()
+    if not (
+        s.workbench_provisioner_url
+        and s.workbench_provisioner_token
+        and s.workbench_relay_admin_url
+        and s.workbench_relay_admin_token
+    ):
+        raise _http(ProvisioningUnavailable("sandbox provisioning is not configured"))
+    provisioner = HttpProvisioner(
+        ProvisionerConfig(
+            url=s.workbench_provisioner_url,
+            token=s.workbench_provisioner_token,
+            model_provider=s.workbench_sandbox_model_provider,
+            model=s.workbench_sandbox_model,
+            provider_base_url=s.workbench_sandbox_provider_base_url,
+        )
+    )
+    relay_admin = WsRelayAdmin(
+        s.workbench_relay_admin_url, s.workbench_relay_admin_token
+    )
+    return provisioner, relay_admin, s.workbench_relay_public_url
 
 
 def _actor(principal: Principal) -> str:
@@ -535,6 +567,70 @@ async def put_conclusion(
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return _plain(art)
+
+
+# ---------------- sandbox provisioning (0003 D9) ----------------
+def _provisioning(
+    session: AsyncSession, principal: Principal, cipher, backends
+) -> SandboxProvisioning:
+    provisioner, relay_admin, relay_public_url = backends
+    return SandboxProvisioning(
+        WorkbenchRepository(session),
+        cipher=cipher,
+        provisioner=provisioner,
+        relay_admin=relay_admin,
+        relay_public_url=relay_public_url,
+    )
+
+
+@router.post("/sandboxes/provision")
+async def provision_sandbox(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    cipher=Depends(credential_cipher),
+    backends=Depends(provisioning_backends),
+):
+    """用设置页登记的 key 给这个用户拉起（或更新）他的沙箱。首次同时签发会合点身份，代理令牌只在这次响应里。"""
+    try:
+        result = await _provisioning(session, principal, cipher, backends).provision(
+            _actor(principal)
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return {"contract_version": CONTRACT_VERSION, **result}
+
+
+@router.get("/sandboxes/provisioned")
+async def provisioned_sandbox_status(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    cipher=Depends(credential_cipher),
+    backends=Depends(provisioning_backends),
+):
+    try:
+        result = await _provisioning(session, principal, cipher, backends).status(
+            _actor(principal)
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return {"contract_version": CONTRACT_VERSION, **result}
+
+
+@router.delete("/sandboxes/provisioned")
+async def deprovision_sandbox(
+    purge: bool = Query(default=False),
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    cipher=Depends(credential_cipher),
+    backends=Depends(provisioning_backends),
+):
+    try:
+        result = await _provisioning(session, principal, cipher, backends).deprovision(
+            _actor(principal), purge=purge
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return {"contract_version": CONTRACT_VERSION, **result}
 
 
 # ---------------- settings: prefs & credentials ----------------

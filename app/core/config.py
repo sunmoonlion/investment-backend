@@ -161,6 +161,32 @@ class Settings(BaseSettings):
     workbench_credential_key: str | None = Field(
         default=None, validation_alias="WORKBENCH_CREDENTIAL_KEY"
     )
+    # 沙箱供给器（0003 D9）与会合点管理通道（0004）：内网地址与共享令牌；未配置时相关接口 503
+    workbench_provisioner_url: str | None = Field(
+        default=None, validation_alias="WORKBENCH_PROVISIONER_URL"
+    )
+    workbench_provisioner_token: str | None = Field(
+        default=None, validation_alias="WORKBENCH_PROVISIONER_TOKEN"
+    )
+    workbench_relay_admin_url: str | None = Field(
+        default=None, validation_alias="WORKBENCH_RELAY_ADMIN_URL"
+    )
+    workbench_relay_admin_token: str | None = Field(
+        default=None, validation_alias="WORKBENCH_RELAY_ADMIN_TOKEN"
+    )
+    workbench_relay_public_url: str = Field(
+        default="wss://edge.sunmoonai.com/relay",
+        validation_alias="WORKBENCH_RELAY_PUBLIC_URL",
+    )
+    workbench_sandbox_model_provider: str = Field(
+        default="", validation_alias="WORKBENCH_SANDBOX_MODEL_PROVIDER"
+    )
+    workbench_sandbox_model: str = Field(
+        default="", validation_alias="WORKBENCH_SANDBOX_MODEL"
+    )
+    workbench_sandbox_provider_base_url: str = Field(
+        default="", validation_alias="WORKBENCH_SANDBOX_PROVIDER_BASE_URL"
+    )
     agent_pilot_internal_auth_application: str = Field(
         default="sunmoonai-investment-runtime",
         validation_alias="AGENT_PILOT_INTERNAL_AUTH_APPLICATION",

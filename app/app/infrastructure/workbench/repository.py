@@ -731,6 +731,116 @@ class WorkbenchRepository:
         )
         return int(getattr(r, "rowcount", 0)) == 1
 
+    # ---------- relay identity (0004 动态登记) ----------
+    async def get_relay_identity(self, owner_actor_id: str) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text("select * from workbench_relay_identities where owner_actor_id = :o"),
+            {"o": owner_actor_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def put_relay_identity(
+        self,
+        owner_actor_id: str,
+        *,
+        relay_user: str,
+        agent_token_ciphertext: str,
+        sandbox_token_ciphertext: str,
+    ) -> None:
+        await self.session.execute(
+            text(
+                """insert into workbench_relay_identities (owner_actor_id, relay_user, agent_token_ciphertext, sandbox_token_ciphertext)
+                   values (:o, :u, :a, :s)
+                   on conflict (owner_actor_id) do update set agent_token_ciphertext = excluded.agent_token_ciphertext,
+                     sandbox_token_ciphertext = excluded.sandbox_token_ciphertext"""
+            ),
+            {
+                "o": owner_actor_id,
+                "u": relay_user,
+                "a": agent_token_ciphertext,
+                "s": sandbox_token_ciphertext,
+            },
+        )
+
+    async def mark_relay_registered(self, owner_actor_id: str) -> None:
+        await self.session.execute(
+            text(
+                "update workbench_relay_identities set registered_at = now() where owner_actor_id = :o"
+            ),
+            {"o": owner_actor_id},
+        )
+
+    async def upsert_provisioned_sandbox(
+        self,
+        *,
+        owner_actor_id: str,
+        app_server_url: str,
+        token_ref: str,
+        codex_version: str | None,
+        relay_user: str,
+        status: str,
+    ) -> str:
+        r = await self.session.execute(
+            text(
+                "select id from workbench_sandboxes where owner_actor_id = :o and provisioned = true order by created_at limit 1"
+            ),
+            {"o": owner_actor_id},
+        )
+        row = r.first()
+        if row:
+            await self.session.execute(
+                text(
+                    """update workbench_sandboxes set app_server_url = :url, token_ref = :ref, codex_version = :cv,
+                       relay_user = :ru, status = :st, updated_at = now() where id = :id"""
+                ),
+                {
+                    "url": app_server_url,
+                    "ref": token_ref,
+                    "cv": codex_version,
+                    "ru": relay_user,
+                    "st": status,
+                    "id": str(row[0]),
+                },
+            )
+            return str(row[0])
+        sb_id = str(uuid.uuid4())
+        await self.session.execute(
+            text(
+                """insert into workbench_sandboxes (id, owner_actor_id, app_server_url, token_ref, codex_version, status, relay_user, provisioned)
+                   values (:id, :o, :url, :ref, :cv, :st, :ru, true)"""
+            ),
+            {
+                "id": sb_id,
+                "o": owner_actor_id,
+                "url": app_server_url,
+                "ref": token_ref,
+                "cv": codex_version,
+                "st": status,
+                "ru": relay_user,
+            },
+        )
+        return sb_id
+
+    async def set_sandbox_status(self, sandbox_id: str, status: str) -> None:
+        await self.session.execute(
+            text(
+                "update workbench_sandboxes set status = :s, updated_at = now() where id = :id"
+            ),
+            {"s": status, "id": sandbox_id},
+        )
+
+    async def active_credential(self, owner_actor_id: str) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                """select id, provider, ciphertext, hint from workbench_credentials
+                   where owner_actor_id = :o and status = 'active' order by created_at desc limit 1"""
+            ),
+            {"o": owner_actor_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
     # ---------- budget ----------
     async def ledger_append(
         self,
