@@ -729,7 +729,7 @@ class WorkbenchRepository:
             ),
             {"id": credential_id, "o": owner_actor_id},
         )
-        return r.rowcount == 1
+        return int(getattr(r, "rowcount", 0)) == 1
 
     # ---------- budget ----------
     async def ledger_append(

@@ -53,8 +53,8 @@ def migrate(connection) -> None:
     with Operations.context(MigrationContext.configure(connection)):
         for path in sorted((ROOT_DIR / "alembic/versions").glob("20*.py")):
             spec = importlib.util.spec_from_file_location(path.stem, path)
+            assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
-            assert spec.loader is not None
             spec.loader.exec_module(module)
             module.upgrade()
 
