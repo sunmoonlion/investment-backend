@@ -701,3 +701,79 @@ class WorkbenchRepository:
                 "i": interaction_id,
             },
         )
+
+    # ---------- commands（网页接口 → runner） ----------
+    async def enqueue_command(
+        self, *, session_id: str, sandbox_id: str, kind: str, payload: dict
+    ) -> str:
+        cid = str(uuid.uuid4())
+        await self.session.execute(
+            text(
+                """insert into workbench_commands (id, session_id, sandbox_id, kind, payload)
+                   values (:id, :s, :sb, :k, cast(:p as jsonb))"""
+            ),
+            {"id": cid, "s": session_id, "sb": sandbox_id, "k": kind, "p": _j(payload)},
+        )
+        return cid
+
+    async def claim_commands(
+        self, *, claimed_by: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """update workbench_commands set status = 'claimed', claimed_by = :by, claimed_at = now()
+                   where id in (
+                     select id from workbench_commands where status = 'pending'
+                     order by created_at limit :l for update skip locked
+                   ) returning *"""
+            ),
+            {"by": claimed_by, "l": limit},
+        )
+        out = []
+        for m in r.mappings().all():
+            d = dict(m)
+            for k in ("id", "session_id", "sandbox_id"):
+                d[k] = str(d[k])
+            out.append(d)
+        return out
+
+    async def finish_command(
+        self, command_id: str, *, error: str | None = None
+    ) -> None:
+        await self.session.execute(
+            text(
+                """update workbench_commands set status = :st, finished_at = now(), error = :e where id = :id"""
+            ),
+            {"st": "failed" if error else "done", "e": error, "id": command_id},
+        )
+
+    async def requeue_stale_commands(self, *, older_than_seconds: int = 300) -> int:
+        r = await self.session.execute(
+            text(
+                """update workbench_commands set status = 'pending', claimed_by = null, claimed_at = null
+                   where status = 'claimed' and claimed_at < now() - make_interval(secs => :s) returning id"""
+            ),
+            {"s": older_than_seconds},
+        )
+        return len(r.all())
+
+    async def get_session_by_thread(self, thread_id: str) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text("select * from workbench_sessions where thread_id = :t"),
+            {"t": thread_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def get_interaction_by_request(
+        self, *, session_id: str, request_id: str
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_interactions where session_id = :s and kind = 'tool_approval'
+                   and prompt->'subject'->>'request_id' = :r order by created_at desc limit 1"""
+            ),
+            {"s": session_id, "r": request_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None

@@ -143,6 +143,20 @@ class Settings(BaseSettings):
     agent_pilot_enabled: bool = Field(
         default=False, validation_alias="AGENT_PILOT_ENABLED"
     )
+    # 工作台（0001-workbench）：网页接口与 runner 角色的开关
+    workbench_enabled: bool = Field(default=False, validation_alias="WORKBENCH_ENABLED")
+    workbench_redis_key_prefix: str = Field(
+        default="investment:workbench", validation_alias="WORKBENCH_REDIS_KEY_PREFIX"
+    )
+    workbench_runner_id: str = Field(
+        default="runner-local", validation_alias="WORKBENCH_RUNNER_ID"
+    )
+    workbench_poll_seconds: float = Field(
+        default=1.0, gt=0, le=30, validation_alias="WORKBENCH_POLL_SECONDS"
+    )
+    workbench_environment_key: str = Field(
+        default="user-pc", validation_alias="WORKBENCH_ENVIRONMENT_KEY"
+    )
     agent_pilot_internal_auth_application: str = Field(
         default="sunmoonai-investment-runtime",
         validation_alias="AGENT_PILOT_INTERNAL_AUTH_APPLICATION",

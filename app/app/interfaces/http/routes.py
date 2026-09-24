@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.interfaces.endpoints.agent_routes import router as agent_router
 from app.interfaces.endpoints.pilot_runtime_routes import router as pilot_runtime_router
+from app.interfaces.endpoints.workbench_routes import router as workbench_router
 from app.interfaces.http.admin.auth import router as admin_auth_router
 from app.interfaces.http.admin.diagnostics import router as admin_diagnostics_router
 from app.interfaces.http.internal.delivery_metrics import (
@@ -18,3 +19,4 @@ router.include_router(delivery_metrics_router)
 router.include_router(web_interactions_router)
 router.include_router(agent_router)
 router.include_router(pilot_runtime_router)
+router.include_router(workbench_router)

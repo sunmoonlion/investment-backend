@@ -404,9 +404,45 @@ def upgrade():
         "ix_workbench_approval_session", "workbench_approval_log", ["session_id"]
     )
 
+    # 网页接口 → runner 的命令队列（同一事务里与事件一起落库；runner 用 skip locked 认领）
+    op.create_table(
+        "workbench_commands",
+        sa.Column(
+            "id",
+            pg.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.func.gen_random_uuid(),
+        ),
+        sa.Column("session_id", pg.UUID(as_uuid=True), nullable=False),
+        sa.Column("sandbox_id", pg.UUID(as_uuid=True), nullable=False),
+        sa.Column("kind", sa.String(32), nullable=False),
+        sa.Column(
+            "payload",
+            pg.JSONB(),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
+        sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
+        sa.Column("claimed_by", sa.String(128), nullable=True),
+        sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("error", sa.Text(), nullable=True),
+        _ts("created_at"),
+        sa.CheckConstraint(
+            "status in ('pending','claimed','done','failed')",
+            name="ck_workbench_commands_status",
+        ),
+    )
+    op.create_index(
+        "ix_workbench_commands_pending",
+        "workbench_commands",
+        ["status", "created_at"],
+    )
+
 
 def downgrade():
     for name in (
+        "workbench_commands",
         "workbench_approval_log",
         "workbench_budget_ledger",
         "workbench_artifacts",
