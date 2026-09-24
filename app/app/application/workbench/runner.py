@@ -175,8 +175,8 @@ class SandboxLink:
             item = params.get("item") or {}
             if item.get("type") == "agentMessage" and item.get("text"):
                 w["text"] = item["text"]
-        elif method == "thread/tokenUsage":
-            w["tokens"] = params.get("tokenUsage") or {}
+        elif method.startswith("thread/tokenUsage"):
+            w["tokens"] = params.get("tokenUsage") or params.get("usage") or {}
         elif method == "turn/completed":
             turn = params.get("turn") or {}
             if turn.get("status") not in (None, "completed") and not w.get("error"):
@@ -216,6 +216,11 @@ class SandboxLink:
         self.turn_waiters[turn_id] = waiter
         try:
             await asyncio.wait_for(waiter["future"], timeout)
+            # 真 app-server 的 thread/tokenUsage 可能晚于 turn/completed 到达：留一小段宽限期再撤 waiter
+            for _ in range(20):
+                if waiter["tokens"]:
+                    break
+                await asyncio.sleep(0.1)
         except TimeoutError:
             waiter["error"] = "turn timed out"
             try:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import os
+import os.path
 import sys
 import time
 import uuid
@@ -51,7 +52,12 @@ def migrate(connection):
             module.upgrade()
 
 
-async def wait_event(factory, sid: str, event_type: str, timeout: float = 240) -> dict | None:
+async def wait_event(
+    factory,
+    sid: str,
+    event_type: str,
+    timeout: float = 240,  # noqa: ASYNC109
+) -> dict | None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         async with factory() as s:
@@ -81,50 +87,126 @@ async def main() -> int:
         c.execute(text(f'CREATE SCHEMA "{schema}"'))
         c.execute(text(f'SET LOCAL search_path TO "{schema}"'))
         migrate(c)
-    engine = create_async_engine(url.replace("postgresql://", "postgresql+asyncpg://"), connect_args={"server_settings": {"search_path": schema}})
+    engine = create_async_engine(
+        url.replace("postgresql://", "postgresql+asyncpg://"),
+        connect_args={"server_settings": {"search_path": schema}},
+    )
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    runner = Runner(factory, publisher=Publisher(None, "it"), runner_id="chain-driver", environment_key=env_key, poll_seconds=0.2)
+    runner = Runner(
+        factory,
+        publisher=Publisher(None, "it"),
+        runner_id="chain-driver",
+        environment_key=env_key,
+        poll_seconds=0.2,
+    )
     ts = int(time.time())
     try:
         print("--- 1. 登记环境、沙箱，建会话")
         async with factory() as s:
             repo = WorkbenchRepository(s)
             async with repo.transaction():
-                env = await repo.register_environment(owner_actor_id=OWNER, name="this-box", agent_version="0.1.0", codex_version="0.155.1", roots=[root], ceiling={"sandbox": "workspace-write", "network": False})
-                sb = await repo.register_sandbox(owner_actor_id=OWNER, app_server_url=app_url, token_ref=f"inline:{token}", codex_version="0.155.1")
-            sid = (await SessionService(repo).create(owner_actor_id=OWNER, environment_id=env, sandbox_id=sb, project_root=root, thread_settings={"approvalPolicy": "on-request", "sandbox": "workspace-write"}))["session_id"]
+                env = await repo.register_environment(
+                    owner_actor_id=OWNER,
+                    name="this-box",
+                    agent_version="0.1.0",
+                    codex_version="0.155.1",
+                    roots=[root],
+                    ceiling={"sandbox": "workspace-write", "network": False},
+                )
+                sb = await repo.register_sandbox(
+                    owner_actor_id=OWNER,
+                    app_server_url=app_url,
+                    token_ref=f"inline:{token}",
+                    codex_version="0.155.1",
+                )
+            sid = (
+                await SessionService(repo).create(
+                    owner_actor_id=OWNER,
+                    environment_id=env,
+                    sandbox_id=sb,
+                    project_root=root,
+                    thread_settings={
+                        "approvalPolicy": "on-request",
+                        "sandbox": "workspace-write",
+                    },
+                )
+            )["session_id"]
             async with repo.transaction():
-                await repo.enqueue_command(session_id=sid, sandbox_id=sb, kind="session.start_thread", payload={})
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="session.start_thread",
+                    payload={},
+                )
         await pump(runner, 2)
         async with factory() as s:
             sess = await WorkbenchRepository(s).get_session(sid)
-        verdict("thread/start 经 ws+令牌成功，thread_id 落库", bool(sess["thread_id"]), str(sess["thread_id"]))
+        verdict(
+            "thread/start 经 ws+令牌成功，thread_id 落库",
+            bool(sess["thread_id"]),
+            str(sess["thread_id"]),
+        )
 
         print("--- 2. 用户自驾：在白名单目录写文件（命令在本机执行）")
         fname = f"PROBE_WB_{ts}.txt"
         async with factory() as s:
             repo = WorkbenchRepository(s)
-            await SessionService(repo).record_user_turn_requested(sid, owner_actor_id=OWNER, text="t1", request_id="req-1")
+            await SessionService(repo).record_user_turn_requested(
+                sid, owner_actor_id=OWNER, text="t1", request_id="req-1"
+            )
             async with repo.transaction():
-                await repo.enqueue_command(session_id=sid, sandbox_id=sb, kind="turn.start", payload={"text": f"Run exactly `echo via-workbench > {fname} && cat {fname}` and report verbatim.", "request_id": "req-1", "by": "user"})
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": f"Run exactly `echo via-workbench > {fname} && cat {fname}` and report verbatim.",
+                        "request_id": "req-1",
+                        "by": "user",
+                    },
+                )
         await pump(runner, 1)
         done = await wait_event(factory, sid, "turn/completed")
         verdict("turn/completed 事件到达", done is not None)
         target = Path(root) / fname
-        verdict("文件出现在本机白名单目录", target.exists() and target.read_text().strip() == "via-workbench")
+        verdict(
+            "文件出现在本机白名单目录",
+            os.path.exists(target)  # noqa: ASYNC240
+            and Path(target).read_text().strip() == "via-workbench",  # noqa: ASYNC240,
+        )
         async with factory() as s:
-            types = [e["type"] for e in await WorkbenchRepository(s).list_events(session_id=sid)]
-        verdict("事件里有 item/completed 且没有 delta", "item/completed" in types and not any(t.endswith("/delta") for t in types))
+            types = [
+                e["type"]
+                for e in await WorkbenchRepository(s).list_events(session_id=sid)
+            ]
+        verdict(
+            "事件里有 item/completed 且没有 delta",
+            "item/completed" in types and not any(t.endswith("/delta") for t in types),
+        )
 
-        print("--- 3. 用户自驾：写白名单外 → Codex 请求审批 → 工作台开 Interaction → 我们批准 → 本地上限仍然拒绝")
+        print(
+            "--- 3. 用户自驾：写白名单外 → Codex 请求审批 → 工作台开 Interaction → 我们批准 → 本地上限仍然拒绝"
+        )
         outside = f"/home/zym/probe-wb-outside-{ts}.txt"
         async with factory() as s:
             repo = WorkbenchRepository(s)
             async with repo.transaction():
-                await repo.enqueue_command(session_id=sid, sandbox_id=sb, kind="turn.start", payload={"text": f"Run exactly `touch {outside} && echo touched`. If it needs approval, request it. Do not retry; report the final result verbatim.", "request_id": "req-2", "by": "user"})
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": f"Run exactly `touch {outside} && echo touched`. If it needs approval, request it. Do not retry; report the final result verbatim.",
+                        "request_id": "req-2",
+                        "by": "user",
+                    },
+                )
         await pump(runner, 1)
         opened = await wait_event(factory, sid, "interaction/opened", timeout=180)
-        verdict("审批请求变成 tool_approval Interaction", opened is not None and opened["payload"].get("kind") == "tool_approval")
+        verdict(
+            "审批请求变成 tool_approval Interaction",
+            opened is not None and opened["payload"].get("kind") == "tool_approval",
+        )
         if opened is None:
             async with factory() as s:
                 evs = await WorkbenchRepository(s).list_events(session_id=sid)
@@ -132,47 +214,198 @@ async def main() -> int:
             for e in evs:
                 if e["cursor"] > 8:
                     p = e["payload"]
-                    brief = p.get("item", {}).get("text") if isinstance(p.get("item"), dict) else None
-                    print("   ", e["cursor"], e["type"], (brief or str(p))[:300].replace("\n", " | "))
+                    brief = (
+                        p.get("item", {}).get("text")
+                        if isinstance(p.get("item"), dict)
+                        else None
+                    )
+                    print(
+                        "   ",
+                        e["cursor"],
+                        e["type"],
+                        (brief or str(p))[:300].replace("\n", " | "),
+                    )
         if opened:
             async with factory() as s:
                 repo = WorkbenchRepository(s)
                 it = (await repo.list_interactions(session_id=sid, status="pending"))[0]
-                await Ledger(repo).respond_interaction(str(it["id"]), token=opened["payload"]["token"], response={"decision": "accept"}, owner_actor_id=OWNER)
+                await Ledger(repo).respond_interaction(
+                    str(it["id"]),
+                    token=opened["payload"]["token"],
+                    response={"decision": "accept"},
+                    owner_actor_id=OWNER,
+                )
                 async with repo.transaction():
-                    await repo.enqueue_command(session_id=sid, sandbox_id=sb, kind="approval.respond", payload={"request_id": it["prompt"]["subject"]["request_id"], "decision": "accept"})
+                    await repo.enqueue_command(
+                        session_id=sid,
+                        sandbox_id=sb,
+                        kind="approval.respond",
+                        payload={
+                            "request_id": it["prompt"]["subject"]["request_id"],
+                            "decision": "accept",
+                        },
+                    )
             await pump(runner, 1)
-            # 第二个 turn/completed
-            deadline = time.time() + 180
+            # 第二个 turn/completed；期间模型可能再次请求审批（被本地上限拒后重试），后续一律拒绝
+            deadline = time.time() + 300
             second = None
+            answered = {str(it["id"])}
             while time.time() < deadline and second is None:
                 async with factory() as s:
-                    evs = [e for e in await WorkbenchRepository(s).list_events(session_id=sid) if e["type"] == "turn/completed"]
-                if len(evs) >= 2:
-                    second = evs[1]
-                await asyncio.sleep(0.5)
+                    repo = WorkbenchRepository(s)
+                    evs = await repo.list_events(session_id=sid)
+                    done_evs = [e for e in evs if e["type"] == "turn/completed"]
+                    if len(done_evs) >= 2:
+                        second = done_evs[1]
+                        break
+                    for pend in await repo.list_interactions(
+                        session_id=sid, status="pending"
+                    ):
+                        if (
+                            str(pend["id"]) in answered
+                            or pend["kind"] != "tool_approval"
+                        ):
+                            continue
+                        tok = next(
+                            e["payload"]["token"]
+                            for e in evs
+                            if e["type"] == "interaction/opened"
+                            and e["payload"]["interaction_id"] == str(pend["id"])
+                        )
+                        await Ledger(repo).respond_interaction(
+                            str(pend["id"]),
+                            token=tok,
+                            response={"decision": "decline"},
+                            owner_actor_id=OWNER,
+                        )
+                        async with repo.transaction():
+                            await repo.enqueue_command(
+                                session_id=sid,
+                                sandbox_id=sb,
+                                kind="approval.respond",
+                                payload={
+                                    "request_id": pend["prompt"]["subject"][
+                                        "request_id"
+                                    ],
+                                    "decision": "decline",
+                                },
+                            )
+                        answered.add(str(pend["id"]))
+                await pump(runner, 0.5)
             verdict("批准后的 turn 结束", second is not None)
-            verdict("白名单外文件没有出现（本地上限兜底）", not Path(outside).exists())
+            verdict("白名单外文件没有出现（本地上限兜底）", not os.path.exists(outside))  # noqa: ASYNC240
             async with factory() as s:
-                r = await s.execute(text("select decision, source from workbench_approval_log order by created_at"))
+                r = await s.execute(
+                    text(
+                        "select decision, source from workbench_approval_log order by created_at"
+                    )
+                )
                 rows = [tuple(x) for x in r.all()]
-            verdict("审批留痕 decision=accept source=user", rows == [("accept", "user")], str(rows))
+            verdict(
+                "审批留痕 decision=accept source=user",
+                rows == [("accept", "user")],
+                str(rows),
+            )
 
-        print("--- 4. 交出方向盘：用户 turn 被拒；取消后交回")
+        print(
+            "--- 4. 交出方向盘，顾问按 SMOKE 专家包驾驶同一个 thread（两步、验收、预算、交回）"
+        )
         async with factory() as s:
             repo = WorkbenchRepository(s)
             led = Ledger(repo)
-            t = (await led.handover(HandoverRequest(idempotency_key=f"chain-{ts}", session_id=sid, profile_id="DATA_QUERY", original_input={"text": "核对"}, budget_limit=Decimal("5")), owner_actor_id=OWNER))["task_id"]
+            t_smoke = (
+                await led.handover(
+                    HandoverRequest(
+                        idempotency_key=f"smoke-{ts}",
+                        session_id=sid,
+                        profile_id="SMOKE",
+                        original_input={
+                            "text": "What files are in this project directory and what do they contain? Cite paths."
+                        },
+                        budget_limit=Decimal("5"),
+                    ),
+                    owner_actor_id=OWNER,
+                )
+            )["task_id"]
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="task.drive",
+                    payload={"task_id": t_smoke},
+                )
+        await runner.run_once()
+        await runner.wait_drivers(timeout=600)
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            task = await repo.get_task(t_smoke)
+            arts = await repo.list_artifacts(t_smoke)
+            attempts = await repo.list_attempts(t_smoke)
+            sess = await repo.get_session(sid)
+            print(
+                "  task state:",
+                task["state"],
+                "step:",
+                task["current_step"],
+                "budget:",
+                task["budget"],
+            )
+            print(
+                "  attempts:",
+                [(a["step_id"], a["status"], a["failure_code"]) for a in attempts],
+            )
+            print("  artifacts:", [(a["name"], a["version"]) for a in arts])
+            ans = await repo.get_artifact(task_id=t_smoke, name="answer")
+            if ans:
+                print("  answer:", str(ans["content"])[:300])
+        verdict(
+            "顾问驾驶到 SUCCEEDED（真沙箱、Kimi、本机执行）",
+            task["state"] == "SUCCEEDED",
+            task["state"],
+        )
+        verdict(
+            "产物 plan/answer/handback 各至少一版",
+            {a["name"] for a in arts} >= {"plan", "answer", "handback"},
+        )
+        verdict(
+            "预算有扣减（token 记账）",
+            Decimal(task["budget"]["used"]) > 0,
+            task["budget"]["used"],
+        )
+        verdict("终态后方向盘交回用户", sess["wheel"] == "user")
+
+        print("--- 5. 再次交出方向盘：用户 turn 被拒；取消后交回")
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            led = Ledger(repo)
+            t = (
+                await led.handover(
+                    HandoverRequest(
+                        idempotency_key=f"chain2-{ts}",
+                        session_id=sid,
+                        profile_id="DATA_QUERY",
+                        original_input={"text": "核对"},
+                        budget_limit=Decimal("5"),
+                    ),
+                    owner_actor_id=OWNER,
+                )
+            )["task_id"]
             refused = False
             try:
-                await SessionService(repo).assert_user_may_drive(sid, owner_actor_id=OWNER)
+                await SessionService(repo).assert_user_may_drive(
+                    sid, owner_actor_id=OWNER
+                )
             except WheelHeldByOther:
                 refused = True
             verdict("advisor 持方向盘时用户 turn 被拒", refused)
             r = await led.request_cancel(t, owner_actor_id=OWNER)
-            verdict("取消后 Task CANCELLED、方向盘交回", r["state"] == "CANCELLED" and (await repo.get_session(sid))["wheel"] == "user")
+            verdict(
+                "取消后 Task CANCELLED、方向盘交回",
+                r["state"] == "CANCELLED"
+                and (await repo.get_session(sid))["wheel"] == "user",
+            )
         try:
-            target.unlink()
+            os.unlink(target)  # noqa: ASYNC240
         except FileNotFoundError:
             pass
     finally:

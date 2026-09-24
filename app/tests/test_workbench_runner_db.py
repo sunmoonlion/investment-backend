@@ -136,7 +136,7 @@ class FakeAppServer:
             )
             await send(
                 {
-                    "method": "thread/tokenUsage",
+                    "method": "thread/tokenUsage/updated",
                     "params": {
                         "threadId": tid,
                         "turnId": turn_id,
@@ -271,7 +271,7 @@ async def test_start_thread_and_user_turn_project_events(db):
         )
         assert (
             "item/completed" in types
-            and "thread/tokenUsage" in types
+            and "thread/tokenUsage/updated" in types
             and "turn/completed" in types
         )
         assert not any(t.endswith("/delta") for t in types)  # 流式 delta 不落库

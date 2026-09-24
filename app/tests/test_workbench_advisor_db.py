@@ -79,7 +79,7 @@ class ScriptedAppServer:
             )
             await send(
                 {
-                    "method": "thread/tokenUsage",
+                    "method": "thread/tokenUsage/updated",
                     "params": {
                         "threadId": tid,
                         "turnId": turn_id,
