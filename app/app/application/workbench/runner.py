@@ -433,6 +433,8 @@ class Runner:
         self.driving: dict[str, asyncio.Task] = {}
         self._stop = asyncio.Event()
         self.handled = 0
+        self.lease_ttl_seconds = max(10, int(poll_seconds * 30))
+        self.leased: set[str] = set()
 
     async def link_for(self, sandbox_id: str, repo: WorkbenchRepository) -> SandboxLink:
         link = self.links.get(sandbox_id)
@@ -457,16 +459,79 @@ class Runner:
         for link in self.links.values():
             if link.client:
                 await link.client.close()
+        async with self.session_factory() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.release_leases(runner_id=self.runner_id)
 
     def stop(self) -> None:
         self._stop.set()
+
+    async def _drop_link(self, sandbox_id: str, why: str) -> None:
+        link = self.links.pop(sandbox_id, None)
+        if link is None:
+            return
+        log.warning("dropping sandbox link sandbox=%s: %s", sandbox_id, why)
+        for fut in list(link.pending_approvals.values()):
+            if not fut.done():
+                fut.set_result("decline")
+        if link.client:
+            try:
+                await link.client.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _take_over(self, repo: WorkbenchRepository, sandbox_id: str) -> None:
+        """刚拿到一个沙箱的租约（首次或接管）：作废上一任留下的未决工具审批，把没有驾驶者的 Task 重新排队。"""
+        expired = await repo.expire_pending_tool_approvals(
+            sandbox_id=sandbox_id, reason="runner restarted; Codex will ask again"
+        )
+        for it in expired:
+            ev = await repo.append_event(
+                session_id=it["session_id"],
+                kind="interaction",
+                event_type="interaction/expired",
+                payload={
+                    "interaction_id": it["id"],
+                    "kind": "tool_approval",
+                    "reason": "runner_restarted",
+                },
+                task_id=it["task_id"],
+            )
+            await self.publisher.publish(
+                self.publisher.session_channel(it["session_id"]), ev
+            )
+        for task in await repo.active_tasks_for_sandbox(sandbox_id):
+            if task["id"] in self.driving:
+                continue
+            await repo.enqueue_command(
+                session_id=task["session_id"],
+                sandbox_id=sandbox_id,
+                kind="task.drive",
+                payload={"task_id": task["id"], "resumed": True},
+            )
+        log.info("took over sandbox=%s expired_approvals=%d", sandbox_id, len(expired))
 
     async def run_once(self) -> int:
         async with self.session_factory() as s:
             repo = WorkbenchRepository(s)
             async with repo.transaction():
                 await repo.requeue_stale_commands()
+                kept = set(
+                    await repo.renew_leases(
+                        runner_id=self.runner_id, ttl_seconds=self.lease_ttl_seconds
+                    )
+                )
+                fresh = await repo.acquire_leases(
+                    runner_id=self.runner_id, ttl_seconds=self.lease_ttl_seconds
+                )
+                for sandbox_id in fresh:
+                    await self._take_over(repo, sandbox_id)
+                lost = self.leased - kept - set(fresh)
+                self.leased = kept | set(fresh)
                 commands = await repo.claim_commands(claimed_by=self.runner_id)
+        for sandbox_id in lost:
+            await self._drop_link(sandbox_id, "lease lost to another runner")
         for cmd in commands:
             error: str | None = None
             try:

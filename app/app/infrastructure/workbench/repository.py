@@ -918,6 +918,98 @@ class WorkbenchRepository:
         )
         return cid
 
+    # ---------- sandbox leases（runner 分片，F-LEDGER-02） ----------
+    async def acquire_leases(self, *, runner_id: str, ttl_seconds: int) -> list[str]:
+        """给有待办命令的沙箱拿租约：没有租约或租约已过期的才拿得到；返回新拿到（接管）的沙箱 id。"""
+        r = await self.session.execute(
+            text(
+                """with wanted as (
+                     select distinct sandbox_id from workbench_commands where status = 'pending'
+                   ), taken as (
+                     insert into workbench_sandbox_leases (sandbox_id, runner_id, expires_at, acquired_at, updated_at)
+                     select sandbox_id, :r, now() + make_interval(secs => :ttl), now(), now() from wanted
+                     on conflict (sandbox_id) do update
+                       set runner_id = excluded.runner_id, expires_at = excluded.expires_at,
+                           acquired_at = case when workbench_sandbox_leases.runner_id = excluded.runner_id
+                                              then workbench_sandbox_leases.acquired_at else now() end,
+                           updated_at = now()
+                       where workbench_sandbox_leases.runner_id = excluded.runner_id
+                          or workbench_sandbox_leases.expires_at < now()
+                     returning sandbox_id, (xmax = 0) as inserted, acquired_at
+                   )
+                   select sandbox_id, inserted, acquired_at from taken"""
+            ),
+            {"r": runner_id, "ttl": ttl_seconds},
+        )
+        rows = r.mappings().all()
+        # 新拿到 = 刚插入的，或 acquired_at 刚被重置（接管）的
+        fresh = []
+        for row in rows:
+            if row["inserted"]:
+                fresh.append(str(row["sandbox_id"]))
+                continue
+            age = await self.session.execute(
+                text(
+                    "select extract(epoch from (now() - acquired_at)) from workbench_sandbox_leases where sandbox_id = :s"
+                ),
+                {"s": row["sandbox_id"]},
+            )
+            if float(age.scalar_one()) < 1.0:
+                fresh.append(str(row["sandbox_id"]))
+        return fresh
+
+    async def renew_leases(self, *, runner_id: str, ttl_seconds: int) -> list[str]:
+        """续本 runner 的租约；返回仍归本 runner 的沙箱 id（丢了的就不在里面）。"""
+        r = await self.session.execute(
+            text(
+                """update workbench_sandbox_leases set expires_at = now() + make_interval(secs => :ttl), updated_at = now()
+                   where runner_id = :r and expires_at >= now() returning sandbox_id"""
+            ),
+            {"r": runner_id, "ttl": ttl_seconds},
+        )
+        return [str(x[0]) for x in r.all()]
+
+    async def release_leases(self, *, runner_id: str) -> None:
+        await self.session.execute(
+            text("delete from workbench_sandbox_leases where runner_id = :r"),
+            {"r": runner_id},
+        )
+
+    async def expire_pending_tool_approvals(
+        self, *, sandbox_id: str, reason: str
+    ) -> list[dict[str, Any]]:
+        """接管一个沙箱时：上一个 runner 手里未决的工具审批作废（app-server 那边的请求已随连接消失，Codex 会重发）。"""
+        r = await self.session.execute(
+            text(
+                """update workbench_interactions i set status = 'expired', response = cast(:resp as jsonb), consumed_at = now()
+                   from workbench_sessions s
+                   where i.session_id = s.id and s.sandbox_id = :sb and i.kind = 'tool_approval' and i.status = 'pending'
+                   returning i.id, i.session_id, i.task_id"""
+            ),
+            {"sb": sandbox_id, "resp": _j({"expired": reason})},
+        )
+        return [
+            {
+                "id": str(m["id"]),
+                "session_id": str(m["session_id"]),
+                "task_id": str(m["task_id"]) if m["task_id"] else None,
+            }
+            for m in r.mappings().all()
+        ]
+
+    async def active_tasks_for_sandbox(self, sandbox_id: str) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """select t.id, t.session_id from workbench_tasks t join workbench_sessions s on s.id = t.session_id
+                   where s.sandbox_id = :sb and t.state in ('QUEUED', 'RUNNING') order by t.created_at"""
+            ),
+            {"sb": sandbox_id},
+        )
+        return [
+            {"id": str(m["id"]), "session_id": str(m["session_id"])}
+            for m in r.mappings().all()
+        ]
+
     async def claim_commands(
         self, *, claimed_by: str, limit: int = 20
     ) -> list[dict[str, Any]]:
@@ -925,8 +1017,10 @@ class WorkbenchRepository:
             text(
                 """update workbench_commands set status = 'claimed', claimed_by = :by, claimed_at = now()
                    where id in (
-                     select id from workbench_commands where status = 'pending'
-                     order by created_at limit :l for update skip locked
+                     select c.id from workbench_commands c
+                     join workbench_sandbox_leases l on l.sandbox_id = c.sandbox_id
+                     where c.status = 'pending' and l.runner_id = :by and l.expires_at > now()
+                     order by c.created_at limit :l for update of c skip locked
                    ) returning *"""
             ),
             {"by": claimed_by, "l": limit},

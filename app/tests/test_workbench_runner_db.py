@@ -8,6 +8,7 @@ import json
 import uuid
 
 import pytest
+from sqlalchemy import text
 from test_workbench_ledger_db import OWNER  # noqa: F401  (fixture)
 from test_workbench_ledger_db import db as db
 from websockets.asyncio.server import serve
@@ -491,13 +492,173 @@ async def test_command_claims_are_exclusive(db):
             async with db() as s:
                 repo = WorkbenchRepository(s)
                 async with repo.transaction():
+                    await repo.acquire_leases(runner_id=name, ttl_seconds=30)
                     return [
                         c["id"]
                         for c in await repo.claim_commands(claimed_by=name, limit=50)
                     ]
 
+        # 分片：一个沙箱的命令只归持有其租约的 runner；另一个一条也拿不到
         a, b = await asyncio.gather(claim("r1"), claim("r2"))
-        assert len(a) + len(b) == 21 and not set(a) & set(b)
+        assert sorted([len(a), len(b)]) == [0, 21] and not set(a) & set(b)
+        # 同一 runner 再拿：没有剩余
+        assert await claim("r1") == [] and await claim("r2") == []
+    finally:
+        await fake.close()
+
+
+async def test_lease_takeover_expires_pending_approvals_and_requeues_drives(db):
+    """r1 崩了（租约过期）：r2 接管时作废 r1 留下的未决工具审批并发 interaction/expired，
+    没有驾驶者的 Task 重新排 task.drive；r1 的旧租约再也拿不到命令。"""
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        r1 = Runner(
+            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        assert await r1.run_once() == 1
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": "please NEED_APPROVAL now",
+                        "request_id": "req-x",
+                        "by": "user",
+                    },
+                )
+        await r1.run_once()
+
+        async def opened():
+            async with db() as s:
+                return (
+                    len(
+                        await WorkbenchRepository(s).list_interactions(
+                            session_id=sid, status="pending"
+                        )
+                    )
+                    == 1
+                )
+
+        assert await wait_for(opened)
+        # 模拟 r1 死掉：租约过期，链路不再服务
+        async with db() as s:
+            await s.execute(
+                text(
+                    "update workbench_sandbox_leases set expires_at = now() - interval '1 minute' where runner_id = 'r1'"
+                )
+            )
+            await s.commit()
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        r2 = Runner(
+            db, publisher=Publisher(None, "t"), runner_id="r2", poll_seconds=0.05
+        )
+        await r2.run_once()
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            pending = await repo.list_interactions(session_id=sid, status="pending")
+            expired = await repo.list_interactions(session_id=sid, status="expired")
+            events = [
+                e
+                for e in await repo.list_events(session_id=sid)
+                if e["type"] == "interaction/expired"
+            ]
+            leases = (
+                (
+                    await s.execute(
+                        text(
+                            "select runner_id from workbench_sandbox_leases where sandbox_id = :s"
+                        ),
+                        {"s": sb},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert pending == [] and len(expired) == 1 and len(events) == 1
+        assert events[0]["payload"]["reason"] == "runner_restarted"
+        assert leases == ["r2"]
+        # r1 的旧租约拿不到新命令；r2 拿得到
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+                assert await repo.claim_commands(claimed_by="r1") == []
+        assert await r2.run_once() >= 1
+        for runner in (r1, r2):
+            for link in runner.links.values():
+                if link.client:
+                    await link.client.close()
+    finally:
+        await fake.close()
+
+
+async def test_takeover_requeues_running_tasks(db):
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        from decimal import Decimal
+
+        from app.domain.workbench.models import HandoverRequest
+        from app.domain.workbench.states import TaskState
+
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            led = Ledger(repo)
+            task_id = (
+                await led.handover(
+                    HandoverRequest(
+                        idempotency_key="takeover-0001",
+                        session_id=sid,
+                        profile_id="SMOKE",
+                        original_input={"text": "q"},
+                        budget_limit=Decimal("1"),
+                    ),
+                    owner_actor_id=OWNER,
+                )
+            )["task_id"]
+            await led.transition(task_id, TaskState.VALIDATING)
+            await led.transition(task_id, TaskState.QUEUED)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        r2 = Runner(
+            db, publisher=Publisher(None, "t"), runner_id="r2", poll_seconds=0.05
+        )
+        await r2.run_once()  # 首次拿租约 = 接管：QUEUED 的 Task 得到一条 task.drive
+        async with db() as s:
+            rows = (
+                (
+                    await s.execute(
+                        text(
+                            "select kind, payload, status from workbench_commands where kind = 'task.drive'"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        assert (
+            len(rows) == 1
+            and rows[0]["payload"]["task_id"] == task_id
+            and rows[0]["payload"]["resumed"] is True
+        )
+        await r2.wait_drivers(timeout=5)
+        for link in r2.links.values():
+            if link.client:
+                await link.client.close()
     finally:
         await fake.close()
 
