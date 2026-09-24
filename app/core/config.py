@@ -174,6 +174,13 @@ class Settings(BaseSettings):
     workbench_relay_admin_token: str | None = Field(
         default=None, validation_alias="WORKBENCH_RELAY_ADMIN_TOKEN"
     )
+    # D10：签发代理/沙箱/知识令牌的 ES256 私钥（PEM）；未配置时退回不透明随机令牌（会合点静态表/管理通道）
+    workbench_token_signing_key: str | None = Field(
+        default=None, validation_alias="WORKBENCH_TOKEN_SIGNING_KEY"
+    )
+    workbench_token_issuer: str = Field(
+        default="sunmoon-workbench", validation_alias="WORKBENCH_TOKEN_ISSUER"
+    )
     workbench_relay_public_url: str = Field(
         default="wss://edge.sunmoonai.com/relay",
         validation_alias="WORKBENCH_RELAY_PUBLIC_URL",

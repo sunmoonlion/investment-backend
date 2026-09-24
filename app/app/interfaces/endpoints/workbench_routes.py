@@ -25,6 +25,7 @@ from app.application.workbench.provisioning import (
     WsRelayAdmin,
 )
 from app.application.workbench.session_service import SessionService
+from app.application.workbench.tokens import TokenIssuer
 from app.domain.security import Principal
 from app.domain.workbench.errors import WorkbenchError
 from app.domain.workbench.models import HandoverRequest
@@ -159,6 +160,14 @@ def provisioning_backends():
         s.workbench_relay_admin_url, s.workbench_relay_admin_token
     )
     return provisioner, relay_admin, s.workbench_relay_public_url
+
+
+def token_issuer() -> TokenIssuer | None:
+    """D10：配置了签名私钥才签 JWT；否则供给走不透明随机令牌。"""
+    s = get_settings()
+    if not s.workbench_token_signing_key:
+        return None
+    return TokenIssuer(s.workbench_token_signing_key, issuer=s.workbench_token_issuer)
 
 
 def _actor(principal: Principal) -> str:
@@ -571,7 +580,7 @@ async def put_conclusion(
 
 # ---------------- sandbox provisioning (0003 D9) ----------------
 def _provisioning(
-    session: AsyncSession, principal: Principal, cipher, backends
+    session: AsyncSession, principal: Principal, cipher, backends, issuer=None
 ) -> SandboxProvisioning:
     provisioner, relay_admin, relay_public_url = backends
     return SandboxProvisioning(
@@ -580,7 +589,16 @@ def _provisioning(
         provisioner=provisioner,
         relay_admin=relay_admin,
         relay_public_url=relay_public_url,
+        issuer=issuer,
     )
+
+
+@router.get("/token-keys")
+async def token_keys(issuer: TokenIssuer | None = Depends(token_issuer)):
+    """公钥集（JWKS）：边缘与知识服务用它就地验工作台签发的令牌（D10）。未配签名密钥时为空。"""
+    if issuer is None:
+        return {"keys": []}
+    return issuer.public_jwks()
 
 
 @router.post("/sandboxes/provision")
@@ -589,15 +607,34 @@ async def provision_sandbox(
     session: AsyncSession = Depends(get_db_session),
     cipher=Depends(credential_cipher),
     backends=Depends(provisioning_backends),
+    issuer: TokenIssuer | None = Depends(token_issuer),
 ):
     """用设置页登记的 key 给这个用户拉起（或更新）他的沙箱。首次同时签发会合点身份，代理令牌只在这次响应里。"""
     try:
-        result = await _provisioning(session, principal, cipher, backends).provision(
-            _actor(principal)
-        )
+        result = await _provisioning(
+            session, principal, cipher, backends, issuer
+        ).provision(_actor(principal))
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return {"contract_version": CONTRACT_VERSION, **result}
+
+
+@router.post("/sandboxes/relay-identity/rotate")
+async def rotate_relay_identity(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    cipher=Depends(credential_cipher),
+    backends=Depends(provisioning_backends),
+    issuer: TokenIssuer | None = Depends(token_issuer),
+):
+    """撤换会合点令牌（D10）：旧的按 jti 吊销并推到会合点，新代理令牌只在这次响应里。沙箱在线则滚动。"""
+    try:
+        result = await _provisioning(
+            session, principal, cipher, backends, issuer
+        ).rotate_relay_identity(_actor(principal))
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return result
 
 
 @router.get("/sandboxes/provisioned")

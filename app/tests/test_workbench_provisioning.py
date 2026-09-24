@@ -13,9 +13,16 @@ from app.application.workbench.provisioning import (
     ProvisionerConfig,
     relay_user_for,
 )
+from app.application.workbench.tokens import (
+    TokenIssuer,
+    generate_private_key_pem,
+    jti_of,
+    verify,
+)
 from app.interfaces.endpoints.workbench_routes import (
     credential_cipher,
     provisioning_backends,
+    token_issuer,
 )
 
 
@@ -23,12 +30,20 @@ class FakeRelayAdmin:
     def __init__(self):
         self.tokens: dict[str, tuple[str, str]] = {}
         self.revoked: list[str] = []
+        self.revoked_jtis: list[str] = []
+        self.public_keys: list[str] = []
 
     async def set_tokens(self, user, agent, sandbox):
         self.tokens[user] = (agent, sandbox)
 
     async def revoke(self, user):
         self.revoked.append(user)
+
+    async def set_public_key(self, pem):
+        self.public_keys.append(pem)
+
+    async def revoke_jti(self, jtis):
+        self.revoked_jtis.extend(jtis)
 
 
 class FakeProvisionerApi:
@@ -190,3 +205,84 @@ async def test_unconfigured_provisioning_is_503(make_client):  # noqa: F811
     app.dependency_overrides.pop(provisioning_backends, None)
     r = await http.post("/api/workbench/sandboxes/provision")
     assert r.status_code == 503 and r.json()["code"] == "provisioning_unavailable"
+
+
+async def test_jwt_identity_and_rotation(make_client, db):  # noqa: F811
+    """D10：配了签名密钥时三种令牌都是可验的 JWT；撤换按 jti 吊销、公钥推到会合点、沙箱在线则滚动。"""
+    http = make_client(A)
+    app = http._transport.app  # type: ignore[attr-defined]
+    key = Fernet(Fernet.generate_key())
+    fake_api = FakeProvisionerApi()
+    relay = FakeRelayAdmin()
+    issuer = TokenIssuer(generate_private_key_pem(), issuer="wb-test")
+    provisioner = HttpProvisioner(
+        ProvisionerConfig(
+            url="http://prov", token="prov-secret", model_provider="kimi"
+        ),
+        transport=httpx.MockTransport(fake_api.handler),
+    )
+    app.dependency_overrides[credential_cipher] = lambda: key
+    app.dependency_overrides[provisioning_backends] = lambda: (
+        provisioner,
+        relay,
+        "wss://edge.test/relay",
+    )
+    app.dependency_overrides[token_issuer] = lambda: issuer
+
+    jwks = (await http.get("/api/workbench/token-keys")).json()
+    assert jwks["keys"][0]["kid"] == issuer.kid and "d" not in jwks["keys"][0]
+
+    # 没身份时撤换 → 409
+    assert (
+        await http.post("/api/workbench/sandboxes/relay-identity/rotate")
+    ).status_code == 409
+
+    await http.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "sk-live-key-1234567890"},
+    )
+    body = (await http.post("/api/workbench/sandboxes/provision")).json()
+    user = body["relay"]["user"]
+    pub = issuer.public_pem()
+    agent_claims = verify(
+        body["relay"]["agent_token"], pub, audience="relay", issuer="wb-test"
+    )
+    assert agent_claims["sub"] == user and agent_claims["role"] == "agent"
+    spec = fake_api.specs[0]
+    assert verify(spec["relay_token"], pub, audience="relay")["role"] == "sandbox"
+    assert (
+        verify(spec["knowledge_mcp_token"], pub, audience="knowledge")["sandbox"]
+        == user
+    )
+    assert (
+        relay.public_keys == [pub]
+        and relay.tokens[user][0] == body["relay"]["agent_token"]
+    )
+    old_jtis = {jti_of(body["relay"]["agent_token"]), jti_of(spec["relay_token"])}
+
+    # 撤换：旧 jti 吊销，新代理令牌回一次，沙箱（在线）用新沙箱令牌滚动
+    r = await http.post("/api/workbench/sandboxes/relay-identity/rotate")
+    assert r.status_code == 200, r.text
+    rotated = r.json()
+    assert (
+        set(relay.revoked_jtis) == old_jtis
+        and rotated["revoked"] == 2
+        and rotated["sandbox_rolled"] is True
+    )
+    new_agent = rotated["relay"]["agent_token"]
+    assert (
+        new_agent != body["relay"]["agent_token"] and jti_of(new_agent) not in old_jtis
+    )
+    assert relay.tokens[user][0] == new_agent
+    assert (
+        len(fake_api.specs) == 2
+        and fake_api.specs[1]["relay_token"] != spec["relay_token"]
+    )
+    assert (
+        verify(fake_api.specs[1]["relay_token"], pub, audience="relay")["sub"] == user
+    )
+    assert "sk-live" not in r.text
+
+    # 再拉起：不再回代理令牌，登记的仍是撤换后的那对
+    again = (await http.post("/api/workbench/sandboxes/provision")).json()
+    assert again["relay"]["agent_token"] is None and relay.tokens[user][0] == new_agent
