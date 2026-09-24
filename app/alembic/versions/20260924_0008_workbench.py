@@ -354,11 +354,13 @@ def upgrade():
 
     op.create_table(
         "workbench_budget_ledger",
+        # UUID like every other workbench table: the KIND identity policy reviews
+        # only plain tables (no sequences) and inserts must not need a sequence grant.
         sa.Column(
             "id",
-            sa.BigInteger().with_variant(sa.BigInteger(), "postgresql"),
+            pg.UUID(as_uuid=True),
             primary_key=True,
-            autoincrement=True,
+            server_default=sa.func.gen_random_uuid(),
         ),
         sa.Column(
             "task_id",

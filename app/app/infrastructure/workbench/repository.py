@@ -760,7 +760,7 @@ class WorkbenchRepository:
     async def ledger_list(self, task_id: str) -> list[dict[str, Any]]:
         r = await self.session.execute(
             text(
-                "select * from workbench_budget_ledger where task_id = :t order by id"
+                "select * from workbench_budget_ledger where task_id = :t order by created_at, id"
             ),
             {"t": task_id},
         )
