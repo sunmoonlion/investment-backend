@@ -157,6 +157,10 @@ class Settings(BaseSettings):
     workbench_environment_key: str = Field(
         default="user-pc", validation_alias="WORKBENCH_ENVIRONMENT_KEY"
     )
+    # BYOK 凭据登记的对称密钥（Fernet，urlsafe base64）；未配置时凭据接口返回 503
+    workbench_credential_key: str | None = Field(
+        default=None, validation_alias="WORKBENCH_CREDENTIAL_KEY"
+    )
     agent_pilot_internal_auth_application: str = Field(
         default="sunmoonai-investment-runtime",
         validation_alias="AGENT_PILOT_INTERNAL_AUTH_APPLICATION",

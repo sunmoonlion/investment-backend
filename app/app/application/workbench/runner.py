@@ -243,12 +243,54 @@ class SandboxLink:
             environment_lost=waiter["env_lost"],
         )
 
+    # ---- MCP 询问（elicitation）：Codex 在调 MCP 工具前向客户端要一次确认（user verification）----
+    async def _on_elicitation(self, rid: Any, params: dict[str, Any]) -> None:
+        """表单式询问按 requestedSchema 用默认值答"accept"；url 式（OAuth）拒绝。
+
+        我们只挂自己的知识 MCP（0006），令牌在沙箱配置里已经把它限定为可信；用户的第三方 MCP 第一期不接。
+        """
+        client = self.client
+        assert client is not None
+        mode = params.get("mode")
+        log.info(
+            "mcp elicitation sandbox=%s mode=%s message=%s meta=%s",
+            self.sandbox_id,
+            mode,
+            str(params.get("message"))[:200],
+            json.dumps(params.get("_meta"), ensure_ascii=False, default=str)[:300],
+        )
+        if mode == "url":
+            await client.respond(rid, {"action": "decline"})
+            return
+        schema = params.get("requestedSchema") or {}
+        content: dict[str, Any] = {}
+        props = schema.get("properties") if isinstance(schema, dict) else None
+        for name, spec in (props or {}).items():
+            if not isinstance(spec, dict):
+                continue
+            if "default" in spec and spec["default"] is not None:
+                content[name] = spec["default"]
+            elif spec.get("type") == "boolean":
+                content[name] = True
+            elif spec.get("enum"):
+                content[name] = spec["enum"][0]
+            elif spec.get("oneOf"):
+                content[name] = spec["oneOf"][0].get("const")
+            elif spec.get("type") in ("number", "integer"):
+                content[name] = spec.get("minimum", 0)
+            else:
+                content[name] = ""
+        await client.respond(rid, {"action": "accept", "content": content})
+
     # ---- 服务端请求（审批）→ 按方向盘路由 ----
     async def on_server_request(
         self, rid: Any, method: str, params: dict[str, Any]
     ) -> None:
         client = self.client
         assert client is not None
+        if method == "mcpServer/elicitation/request":
+            await self._on_elicitation(rid, params)
+            return
         if not method.endswith("requestApproval"):
             await client.respond_error(
                 rid, -32601, f"workbench does not handle {method}"

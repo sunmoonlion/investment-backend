@@ -639,6 +639,98 @@ class WorkbenchRepository:
         )
         return [dict(m) for m in r.mappings().all()]
 
+    async def list_artifacts_with_content(self, task_id: str) -> list[dict[str, Any]]:
+        """底稿页用：每个名字取最新版本，带内容。"""
+        r = await self.session.execute(
+            text(
+                """select distinct on (name) id, task_id, attempt_id, name, version, kind, content, digest, workspace_path, created_at
+                   from workbench_artifacts where task_id = :t order by name, version desc"""
+            ),
+            {"t": task_id},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    # ---------- user prefs / credentials（设置面） ----------
+    async def get_prefs(self, owner_actor_id: str) -> dict[str, Any]:
+        r = await self.session.execute(
+            text(
+                "select model, approval_policy, updated_at from workbench_user_prefs where owner_actor_id = :o"
+            ),
+            {"o": owner_actor_id},
+        )
+        row = r.mappings().first()
+        if row is None:
+            return {"model": None, "approval_policy": "on-request", "updated_at": None}
+        return dict(row)
+
+    async def put_prefs(
+        self, owner_actor_id: str, *, model: str | None, approval_policy: str
+    ) -> dict[str, Any]:
+        await self.session.execute(
+            text(
+                """insert into workbench_user_prefs (owner_actor_id, model, approval_policy, updated_at)
+                   values (:o, :m, :a, now())
+                   on conflict (owner_actor_id) do update set model = excluded.model,
+                     approval_policy = excluded.approval_policy, updated_at = now()"""
+            ),
+            {"o": owner_actor_id, "m": model, "a": approval_policy},
+        )
+        return await self.get_prefs(owner_actor_id)
+
+    async def add_credential(
+        self,
+        *,
+        owner_actor_id: str,
+        sandbox_id: str | None,
+        provider: str,
+        ciphertext: str,
+        hint: str,
+    ) -> dict[str, Any]:
+        cid = str(uuid.uuid4())
+        await self.session.execute(
+            text(
+                """insert into workbench_credentials (id, owner_actor_id, sandbox_id, provider, ciphertext, hint, status)
+                   values (:id, :o, :s, :p, :c, :h, 'active')"""
+            ),
+            {
+                "id": cid,
+                "o": owner_actor_id,
+                "s": sandbox_id,
+                "p": provider,
+                "c": ciphertext,
+                "h": hint,
+            },
+        )
+        return {
+            "id": cid,
+            "provider": provider,
+            "hint": hint,
+            "status": "active",
+            "sandbox_id": sandbox_id,
+        }
+
+    async def list_credentials(self, owner_actor_id: str) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """select id, sandbox_id, provider, hint, status, created_at, revoked_at
+                   from workbench_credentials where owner_actor_id = :o order by created_at desc"""
+            ),
+            {"o": owner_actor_id},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def revoke_credential(
+        self, credential_id: str, *, owner_actor_id: str
+    ) -> bool:
+        r = await self.session.execute(
+            text(
+                """update workbench_credentials set status = 'revoked', revoked_at = now(), ciphertext = ''
+                   where id = :id and owner_actor_id = :o and status = 'active'"""
+            ),
+            {"id": credential_id, "o": owner_actor_id},
+        )
+        return r.rowcount == 1
+
     # ---------- budget ----------
     async def ledger_append(
         self,

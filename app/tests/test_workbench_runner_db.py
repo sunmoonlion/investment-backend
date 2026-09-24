@@ -26,6 +26,7 @@ class FakeAppServer:
     def __init__(self):
         self.server = None
         self.port = 0
+        self.elicitations: list[dict] = []
         self.requests: list[dict] = []
         self.auth_headers: list[str | None] = []
         self.approval_decisions: list[dict] = []
@@ -84,6 +85,47 @@ class FakeAppServer:
                 }
             )
             text = p["input"][0]["text"]
+            if "NEED_ELICITATION" in text:
+                srid = f"elic-{uuid.uuid4().hex[:6]}"
+                fut = asyncio.get_running_loop().create_future()
+                self._pending[srid] = fut
+                await send(
+                    {
+                        "id": srid,
+                        "method": "mcpServer/elicitation/request",
+                        "params": {
+                            "message": "sunmoon_knowledge wants to run run_sql",
+                            "mode": "form",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "confirm": {"type": "boolean"},
+                                    "note": {"type": "string", "default": "ok"},
+                                },
+                            },
+                        },
+                    }
+                )
+                answer = await asyncio.wait_for(fut, 20)
+                self.elicitations.append(answer)
+                await send(
+                    {
+                        "method": "item/completed",
+                        "params": {
+                            "threadId": tid,
+                            "turnId": turn_id,
+                            "item": {
+                                "type": "mcpToolCall",
+                                "id": "mcp-1",
+                                "server": "sunmoon_knowledge",
+                                "tool": "run_sql",
+                                "status": "completed"
+                                if answer.get("action") == "accept"
+                                else "failed",
+                            },
+                        },
+                    }
+                )
             if "NEED_APPROVAL" in text:
                 srid = f"req-{uuid.uuid4().hex[:6]}"
                 fut = asyncio.get_running_loop().create_future()
@@ -467,3 +509,57 @@ def test_token_ref(ref, expected):
     assert resolve_token_ref(ref) == expected
     with pytest.raises(RuntimeError):
         resolve_token_ref("vault:nope")
+
+
+async def test_mcp_elicitation_is_accepted_with_schema_defaults(db):
+    """Codex 调 MCP 工具前的 user-verification 询问：表单式按 schema 默认值答 accept，工具调用得以完成。"""
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = Runner(
+            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        assert await runner.run_once() == 1
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            await SessionService(repo).record_user_turn_requested(
+                sid, owner_actor_id=OWNER, text="NEED_ELICITATION", request_id="req-e"
+            )
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": "NEED_ELICITATION",
+                        "request_id": "req-e",
+                        "by": "user",
+                    },
+                )
+        assert await runner.run_once() == 1
+
+        async def turn_done():
+            async with db() as s:
+                return any(
+                    e["type"] == "turn/completed"
+                    for e in await WorkbenchRepository(s).list_events(session_id=sid)
+                )
+
+        assert await wait_for(turn_done)
+        assert fake.elicitations == [
+            {"action": "accept", "content": {"confirm": True, "note": "ok"}}
+        ]
+        async with db() as s:
+            events = await WorkbenchRepository(s).list_events(session_id=sid)
+        tool = next(
+            e
+            for e in events
+            if e["type"] == "item/completed"
+            and e["payload"]["item"].get("type") == "mcpToolCall"
+        )
+        assert tool["payload"]["item"]["status"] == "completed"
+        for link in runner.links.values():
+            await link.client.close()
+    finally:
+        await fake.close()

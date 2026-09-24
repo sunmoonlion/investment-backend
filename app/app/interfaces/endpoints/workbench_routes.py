@@ -98,6 +98,37 @@ class RespondInteraction(Strict):
     subject_digest: str | None = None
 
 
+class Prefs(Strict):
+    model: str | None = Field(default=None, max_length=128)
+    approval_policy: str = Field(
+        default="on-request", pattern=r"^(untrusted|on-request|on-failure|never)$"
+    )
+
+
+class AddCredential(Strict):
+    provider: str = Field(min_length=1, max_length=64)
+    api_key: str = Field(min_length=8, max_length=512)
+    sandbox_id: str | None = None
+
+
+class Conclusion(Strict):
+    text: str = Field(max_length=20000)
+
+
+def credential_cipher():
+    """BYOK 凭据的对称加密（Fernet）；未配置密钥即 503。测试用依赖覆盖注入。"""
+    key = get_settings().workbench_credential_key
+    if not key:
+        raise AppException(
+            code="credential_store_unconfigured",
+            status_code=503,
+            msg="credential store is not configured",
+        )
+    from cryptography.fernet import Fernet
+
+    return Fernet(key.encode())
+
+
 def _actor(principal: Principal) -> str:
     if principal.actor_id is None:
         raise HTTPException(status_code=403, detail="principal has no actor id")
@@ -203,12 +234,21 @@ async def create_session(
 ):
     repo = WorkbenchRepository(session)
     try:
+        thread_settings = body.thread_settings
+        if thread_settings is None:  # 用户设置面的偏好进 thread 设置（0002「设置」）
+            prefs = await repo.get_prefs(_actor(principal))
+            thread_settings = {
+                "approvalPolicy": prefs["approval_policy"],
+                "sandbox": "workspace-write",
+            }
+            if prefs["model"]:
+                thread_settings["model"] = prefs["model"]
         result = await SessionService(repo).create(
             owner_actor_id=_actor(principal),
             environment_id=body.environment_id,
             sandbox_id=body.sandbox_id,
             project_root=body.project_root,
-            thread_settings=body.thread_settings,
+            thread_settings=thread_settings,
         )
         async with repo.transaction():
             await repo.enqueue_command(
@@ -452,6 +492,129 @@ async def cancel_task(
         )
     except WorkbenchError as exc:
         raise _http(exc) from exc
+
+
+@router.get("/tasks/{task_id}/artifacts")
+async def task_artifacts(
+    task_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """底稿页：每个交回物的最新版本带内容。不渲染任何评级、目标价字段（F-WEB-05 由网页守，后端只给事实）。"""
+    repo = WorkbenchRepository(session)
+    try:
+        await repo.get_task(task_id, owner_actor_id=_actor(principal))
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    arts = await repo.list_artifacts_with_content(task_id)
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "artifacts": [_plain(a) for a in arts],
+    }
+
+
+@router.put("/tasks/{task_id}/conclusion")
+async def put_conclusion(
+    task_id: str,
+    body: Conclusion,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """结论栏是用户草稿：落为 conclusion 交回物的新版本，永远标 kind=user_draft。"""
+    repo = WorkbenchRepository(session)
+    try:
+        await repo.get_task(task_id, owner_actor_id=_actor(principal))
+        async with repo.transaction():
+            art = await repo.put_artifact(
+                task_id=task_id,
+                attempt_id=None,
+                name="conclusion",
+                kind="user_draft",
+                content={"text": body.text, "author": "user"},
+            )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return _plain(art)
+
+
+# ---------------- settings: prefs & credentials ----------------
+@router.get("/prefs")
+async def get_prefs(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    prefs = await WorkbenchRepository(session).get_prefs(_actor(principal))
+    return {"contract_version": CONTRACT_VERSION, **_plain(prefs)}
+
+
+@router.put("/prefs")
+async def put_prefs(
+    body: Prefs,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    repo = WorkbenchRepository(session)
+    async with repo.transaction():
+        prefs = await repo.put_prefs(
+            _actor(principal), model=body.model, approval_policy=body.approval_policy
+        )
+    return {"contract_version": CONTRACT_VERSION, **_plain(prefs)}
+
+
+@router.get("/credentials")
+async def list_credentials(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    rows = await WorkbenchRepository(session).list_credentials(_actor(principal))
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "credentials": [_plain(r) for r in rows],
+    }
+
+
+@router.post("/credentials", status_code=201)
+async def add_credential(
+    body: AddCredential,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    cipher=Depends(credential_cipher),
+):
+    """key 只经 HTTPS 提交一次，服务端存密文，接口永不回显（F-WEB-01、C-D9）。"""
+    repo = WorkbenchRepository(session)
+    if body.sandbox_id:
+        try:
+            await repo.get_sandbox(body.sandbox_id, owner_actor_id=_actor(principal))
+        except WorkbenchError as exc:
+            raise _http(exc) from exc
+    ciphertext = cipher.encrypt(body.api_key.encode()).decode()
+    async with repo.transaction():
+        row = await repo.add_credential(
+            owner_actor_id=_actor(principal),
+            sandbox_id=body.sandbox_id,
+            provider=body.provider,
+            ciphertext=ciphertext,
+            hint=body.api_key[-4:],
+        )
+    return _plain(row)
+
+
+@router.post("/credentials/{credential_id}/revoke")
+async def revoke_credential(
+    credential_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    repo = WorkbenchRepository(session)
+    async with repo.transaction():
+        ok = await repo.revoke_credential(
+            credential_id, owner_actor_id=_actor(principal)
+        )
+    if not ok:
+        raise AppException(
+            code="credential_not_found", status_code=404, msg="no active credential"
+        )
+    return {"credential_id": credential_id, "status": "revoked"}
 
 
 # ---------------- interactions ----------------

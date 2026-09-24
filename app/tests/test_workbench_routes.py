@@ -204,3 +204,129 @@ async def test_disabled_flag_hides_everything(db, monkeypatch):  # noqa: F811
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as http:
         assert (await http.get("/api/workbench/sessions")).status_code == 404
+
+
+async def test_prefs_flow_into_new_sessions(make_client):
+    http = make_client(A)
+    r = await http.get("/api/workbench/prefs")
+    assert r.status_code == 200 and r.json()["approval_policy"] == "on-request"
+    r = await http.put(
+        "/api/workbench/prefs", json={"model": "kimi-k3", "approval_policy": "never"}
+    )
+    assert r.status_code == 200 and r.json()["model"] == "kimi-k3"
+    r = await http.put("/api/workbench/prefs", json={"approval_policy": "yolo"})
+    assert r.status_code == 422
+    env, sb, _first = await bootstrap(http)
+    sid = (
+        await http.post(
+            "/api/workbench/sessions",
+            json={
+                "environment_id": env,
+                "sandbox_id": sb,
+                "project_root": "/home/u/research/p",
+            },
+        )
+    ).json()["session_id"]
+    view = (await http.get(f"/api/workbench/sessions/{sid}")).json()
+    assert view["session"]["thread_settings"] == {
+        "approvalPolicy": "never",
+        "sandbox": "workspace-write",
+        "model": "kimi-k3",
+    }
+
+
+async def test_credentials_never_echo_the_key(make_client, db):  # noqa: F811
+    from cryptography.fernet import Fernet
+
+    from app.interfaces.endpoints.workbench_routes import credential_cipher
+
+    http = make_client(A)
+    r = await http.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "sk-test-1234567890abcd"},
+    )
+    assert r.status_code == 503 and r.json()["code"] == "credential_store_unconfigured"
+
+    key = Fernet.generate_key()
+    http._transport.app.dependency_overrides[credential_cipher] = lambda: Fernet(key)  # type: ignore[attr-defined]
+    r = await http.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "sk-test-1234567890abcd"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["hint"] == "abcd" and "sk-test" not in r.text and "api_key" not in body
+    cid = body["id"]
+    listed = (await http.get("/api/workbench/credentials")).json()["credentials"]
+    assert [c["status"] for c in listed] == ["active"] and "ciphertext" not in listed[0]
+    async with db() as s:
+        stored = (
+            await s.execute(
+                text("select ciphertext from workbench_credentials where id = :i"),
+                {"i": cid},
+            )
+        ).scalar_one()
+    assert (
+        "sk-test" not in stored
+        and Fernet(key).decrypt(stored.encode()) == b"sk-test-1234567890abcd"
+    )
+
+    # 同一个 app 对象的身份覆盖是全局的：先换成 B 试撤销，再换回 A
+    other = make_client(B)
+    assert (
+        await other.post(f"/api/workbench/credentials/{cid}/revoke")
+    ).status_code == 404
+    http = make_client(A)
+    assert (
+        await http.post(f"/api/workbench/credentials/{cid}/revoke")
+    ).status_code == 200
+    assert (
+        await http.post(f"/api/workbench/credentials/{cid}/revoke")
+    ).status_code == 404
+    listed = (await http.get("/api/workbench/credentials")).json()["credentials"]
+    assert listed[0]["status"] == "revoked"
+
+
+async def test_conclusion_is_a_user_draft_artifact(make_client):
+    http = make_client(A)
+    env, sb, _first = await bootstrap(http)
+    sid = (
+        await http.post(
+            "/api/workbench/sessions",
+            json={
+                "environment_id": env,
+                "sandbox_id": sb,
+                "project_root": "/home/u/research/p",
+            },
+        )
+    ).json()["session_id"]
+    tid = (
+        await http.post(
+            f"/api/workbench/sessions/{sid}/handover",
+            json={
+                "idempotency_key": "concl-000001",
+                "profile_id": "SMOKE",
+                "original_input": {"text": "q"},
+                "budget_limit": "1",
+            },
+        )
+    ).json()["task_id"]
+    r = await http.put(
+        f"/api/workbench/tasks/{tid}/conclusion", json={"text": "第一版结论"}
+    )
+    assert (
+        r.status_code == 200
+        and r.json()["kind"] == "user_draft"
+        and r.json()["version"] == 1
+    )
+    r = await http.put(
+        f"/api/workbench/tasks/{tid}/conclusion", json={"text": "第二版"}
+    )
+    assert r.json()["version"] == 2
+    arts = (await http.get(f"/api/workbench/tasks/{tid}/artifacts")).json()["artifacts"]
+    assert [
+        (a["name"], a["version"], a["kind"], a["content"]["text"]) for a in arts
+    ] == [("conclusion", 2, "user_draft", "第二版")]
+    assert (
+        await make_client(B).get(f"/api/workbench/tasks/{tid}/artifacts")
+    ).status_code == 404
