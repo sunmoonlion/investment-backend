@@ -18,7 +18,9 @@ def test_llm_context_is_temporary_package_with_refs_only() -> None:
         source=MemorySourceRef(source_type="event", source_id="event-1"),
         confidence=0.9,
     )
-    evidence = EvidenceRef(source_type="artifact", source_id="artifact-1", source_uri="s3://b/k")
+    evidence = EvidenceRef(
+        source_type="artifact", source_id="artifact-1", source_uri="s3://b/k"
+    )
 
     context = build_llm_context(
         prompt_id="prompt.test.v1",

@@ -280,9 +280,7 @@ async def test_database_lock_timeout_releases_connection_and_recovers(
         monkeypatch.setattr(
             api,
             "get_redis",
-            lambda: SimpleNamespace(
-                client=SimpleNamespace(ping=healthy_but_slow_ping)
-            ),
+            lambda: SimpleNamespace(client=SimpleNamespace(ping=healthy_but_slow_ping)),
         )
     await assert_status(client, 200)
 

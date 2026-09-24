@@ -38,7 +38,9 @@ def test_timeline_projector_maps_domain_event_to_ui_event() -> None:
 
 def test_timeline_projector_accepts_registered_handlers() -> None:
     lineage = RunLineage(session_id="s1", run_id="r1", root_run_id="r1")
-    domain_event = DomainEvent(type="CustomFactRecorded", payload={"ok": True}, lineage=lineage)
+    domain_event = DomainEvent(
+        type="CustomFactRecorded", payload={"ok": True}, lineage=lineage
+    )
 
     ui_event = TimelineProjector(
         handlers={

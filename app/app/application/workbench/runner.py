@@ -15,6 +15,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.application.workbench.advisor import Advisor, TurnResult
+from app.domain.workbench.packs import find_pack
 from app.domain.workbench.states import Wheel
 from app.infrastructure.workbench.app_server_client import (
     AppServerClient,
@@ -98,6 +100,7 @@ class SandboxLink:
             str, asyncio.Future
         ] = {}  # request_id -> future(decision)
         self._lock = asyncio.Lock()
+        self.turn_waiters: dict[str, dict[str, Any]] = {}  # turn_id -> waiter
 
     async def ensure_connected(self) -> AppServerClient:
         async with self._lock:
@@ -152,6 +155,88 @@ class SandboxLink:
             await self.runner.publisher.publish(
                 self.runner.publisher.session_channel(session_id), event
             )
+        self._feed_turn_waiters(method, params)
+
+    def _feed_turn_waiters(self, method: str, params: dict[str, Any]) -> None:
+        turn_id = params.get("turnId") or (params.get("turn") or {}).get("id")
+        if method.startswith("thread/environment/disconnected"):
+            for w in self.turn_waiters.values():
+                w["env_lost"] = True
+                w["error"] = "execution environment disconnected"
+            return
+        if method == "error":
+            for w in self.turn_waiters.values():
+                w["error"] = str(params.get("message") or params)
+            return
+        w = self.turn_waiters.get(turn_id) if turn_id else None
+        if w is None:
+            return
+        if method == "item/completed":
+            item = params.get("item") or {}
+            if item.get("type") == "agentMessage" and item.get("text"):
+                w["text"] = item["text"]
+        elif method == "thread/tokenUsage":
+            w["tokens"] = params.get("tokenUsage") or {}
+        elif method == "turn/completed":
+            turn = params.get("turn") or {}
+            if turn.get("status") not in (None, "completed") and not w.get("error"):
+                w["error"] = f"turn {turn.get('status')}"
+            if not w["future"].done():
+                w["future"].set_result(True)
+
+    async def run_turn(
+        self,
+        thread_id: str,
+        text: str,
+        *,
+        timeout: float = 900,  # noqa: ASYNC109
+    ) -> TurnResult:  # noqa: ASYNC109
+        """TurnDriver：顾问在用户的 thread 上发一个 turn 并等它结束。"""
+        client = await self.ensure_connected()
+        result = await client.request(
+            "turn/start",
+            {"threadId": thread_id, "input": [{"type": "text", "text": text}]},
+            timeout=120,
+        )
+        turn_id = ((result or {}).get("turn") or {}).get("id")
+        if not turn_id:
+            return TurnResult(
+                turn_id=None,
+                final_text=None,
+                tokens={},
+                error=f"turn/start returned no turn id: {result}",
+            )
+        waiter: dict[str, Any] = {
+            "future": asyncio.get_running_loop().create_future(),
+            "text": None,
+            "tokens": {},
+            "error": None,
+            "env_lost": False,
+        }
+        self.turn_waiters[turn_id] = waiter
+        try:
+            await asyncio.wait_for(waiter["future"], timeout)
+        except TimeoutError:
+            waiter["error"] = "turn timed out"
+            try:
+                await client.request(
+                    "turn/interrupt",
+                    {"threadId": thread_id, "turnId": turn_id},
+                    timeout=30,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        except ConnectionError as exc:
+            waiter["error"] = f"connection lost: {exc}"
+        finally:
+            self.turn_waiters.pop(turn_id, None)
+        return TurnResult(
+            turn_id=turn_id,
+            final_text=waiter["text"],
+            tokens=waiter["tokens"],
+            error=waiter["error"],
+            environment_lost=waiter["env_lost"],
+        )
 
     # ---- 服务端请求（审批）→ 按方向盘路由 ----
     async def on_server_request(
@@ -181,20 +266,36 @@ class SandboxLink:
                 "environmentId": params.get("environmentId"),
             }
             if session["wheel"] == Wheel.advisor:
-                # 顾问驾驶：第一期策略——项目目录内的写与只读命令由专家包 auto_allow 决定；这一片先一律拒绝并留痕
+                # 顾问驾驶：按专家包 auto_allow 决定；越出的一律拒绝并留痕（第一期不转 Interaction）
+                task_id = (
+                    str(session["active_task_id"])
+                    if session["active_task_id"]
+                    else None
+                )
+                decision = "decline"
+                if task_id:
+                    task = await repo.get_task(task_id)
+                    pack = find_pack(task["profile_id"], task["profile_version"])
+                    allow = pack.auto_allow if pack else {}
+                    if method.startswith("item/fileChange/") and allow.get(
+                        "file_change_in_project"
+                    ):
+                        decision = "accept"
+                    elif method.startswith("item/commandExecution/") and allow.get(
+                        "command_escalation"
+                    ):
+                        decision = "accept"
                 async with repo.transaction():
                     await repo.log_approval(
                         session_id=session_id,
-                        task_id=str(session["active_task_id"])
-                        if session["active_task_id"]
-                        else None,
+                        task_id=task_id,
                         request_id=request_id,
                         method=method,
                         summary=summary,
-                        decision="decline",
+                        decision=decision,
                         source="policy",
                     )
-                await client.respond(rid, {"decision": "decline"})
+                await client.respond(rid, {"decision": decision})
                 return
             # 用户自驾：开一个 tool_approval Interaction，等用户在网页上答
             token = secrets.token_urlsafe(32)
@@ -282,6 +383,7 @@ class Runner:
         self.environment_key = environment_key
         self.poll_seconds = poll_seconds
         self.links: dict[str, SandboxLink] = {}
+        self.driving: dict[str, asyncio.Task] = {}
         self._stop = asyncio.Event()
         self.handled = 0
 
@@ -353,6 +455,15 @@ class Runner:
             repo = WorkbenchRepository(s)
             session = await repo.get_session(session_id)
             link = await self.link_for(str(session["sandbox_id"]), repo)
+        if kind == "task.drive":
+            task_id = payload["task_id"]
+            running = self.driving.get(task_id)
+            if running and not running.done():
+                return
+            self.driving[task_id] = asyncio.create_task(
+                self._drive(task_id, link), name=f"drive:{task_id}"
+            )
+            return
         if kind == "approval.respond":
             ok = link.resolve_approval(payload["request_id"], payload["decision"])
             if not ok:
@@ -408,6 +519,22 @@ class Runner:
             )
             return
         raise RuntimeError(f"unknown command kind {kind}")
+
+    async def _drive(self, task_id: str, link: SandboxLink) -> None:
+        advisor = Advisor(self.session_factory, link)
+        try:
+            state = await advisor.drive(task_id)
+            log.info("advisor stopped task=%s state=%s", task_id, state)
+        except Exception:  # noqa: BLE001
+            log.exception("advisor crashed task=%s", task_id)
+        finally:
+            self.driving.pop(task_id, None)
+
+    async def wait_drivers(self, timeout: float = 60) -> None:  # noqa: ASYNC109
+        """测试与优雅停机用：等正在驾驶的顾问停下。"""
+        tasks = list(self.driving.values())
+        if tasks:
+            await asyncio.wait(tasks, timeout=timeout)
 
     async def _start_thread(
         self, link: SandboxLink, client: AppServerClient, session: dict[str, Any]

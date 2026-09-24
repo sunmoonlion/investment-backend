@@ -23,10 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 async def revision(db, direction):
-    path = (
-        ROOT
-        / "alembic/versions/20260911_0007_durable_delivery.py"
-    )
+    path = ROOT / "alembic/versions/20260911_0007_durable_delivery.py"
     spec = importlib.util.spec_from_file_location("shared_agent_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

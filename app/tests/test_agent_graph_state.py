@@ -35,7 +35,9 @@ def test_base_agent_state_allows_refs_but_rejects_cross_layer_payloads() -> None
     state: BaseAgentState = {
         "session_id": "session-1",
         "run_id": "run-1",
-        "artifacts": [{"id": "artifact-1", "uri": "s3://bucket/key", "hash": "sha256:abc"}],
+        "artifacts": [
+            {"id": "artifact-1", "uri": "s3://bucket/key", "hash": "sha256:abc"}
+        ],
     }
 
     validate_base_state_layering(state)
@@ -45,7 +47,9 @@ def test_base_agent_state_allows_refs_but_rejects_cross_layer_payloads() -> None
             {
                 "session_id": "session-1",
                 "run_id": "run-1",
-                "artifacts": [{"id": "artifact-1", "uri": "s3://bucket/key", "body": "..."}],
+                "artifacts": [
+                    {"id": "artifact-1", "uri": "s3://bucket/key", "body": "..."}
+                ],
             }
         )
 

@@ -128,7 +128,9 @@ async def test_stream_subscribes_before_snapshot_and_deduplicates_overlap(
         session=object(),  # type: ignore[arg-type]
     )
     raw_chunks = [chunk async for chunk in response.body_iterator]
-    chunks = [chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in raw_chunks]
+    chunks = [
+        chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in raw_chunks
+    ]
 
     assert pubsub.subscribed == (event_channel, delta_channel)
     assert pubsub.unsubscribed == (event_channel, delta_channel)
@@ -150,7 +152,9 @@ class RecordingSession:
         self.statements: list[tuple[str, dict | None]] = []
         self.committed = False
 
-    async def execute(self, statement: object, parameters: dict | None = None) -> FakeScalarResult:
+    async def execute(
+        self, statement: object, parameters: dict | None = None
+    ) -> FakeScalarResult:
         self.statements.append((str(statement), parameters))
         return FakeScalarResult()
 

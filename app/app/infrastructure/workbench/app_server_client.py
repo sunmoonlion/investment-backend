@@ -166,7 +166,11 @@ class AppServerClient:
             await self.respond_error(rid, -32603, f"handler failed: {exc}")
 
     async def request(
-        self, method: str, params: dict[str, Any] | None = None, *, timeout: float = 60  # noqa: ASYNC109
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float = 60,  # noqa: ASYNC109
     ) -> Any:
         if self._ws is None or self.closed.is_set():
             raise ConnectionError("app-server not connected")

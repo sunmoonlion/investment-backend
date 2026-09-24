@@ -29,7 +29,10 @@ def test_first_m1_graph_uses_base_state_and_completes() -> None:
     assert result.state["status"] == "completed"
     assert result.state["plan"]["id"] == f"plan:{run_id}"
     assert result.state["current_step_id"] == "step-1"
-    assert [message.role for message in result.state["messages"]] == ["user", "assistant"]
+    assert [message.role for message in result.state["messages"]] == [
+        "user",
+        "assistant",
+    ]
     assert result.state["messages"][-1].content == "m1-first-graph:hello"
 
 
@@ -54,7 +57,9 @@ def test_first_m1_graph_returns_structured_budget_error() -> None:
 
 def test_first_m1_graph_rejects_cross_layer_state() -> None:
     try:
-        normalize_input_node({"session_id": "session-1", "run_id": "run-1", "event_history": []})
+        normalize_input_node(
+            {"session_id": "session-1", "run_id": "run-1", "event_history": []}
+        )
     except ValueError as exc:
         assert "cross-layer keys" in str(exc)
     else:

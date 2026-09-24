@@ -80,7 +80,9 @@ def session(surface: str, *scopes: str) -> BrowserSession:
 async def test_admin_and_web_me_use_distinct_cookies_and_minimal_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_admin = FakeAuthService({"admin-session": session("admin", "investment:admin")})
+    fake_admin = FakeAuthService(
+        {"admin-session": session("admin", "investment:admin")}
+    )
     fake_web = FakeAuthService({"web-session": session("web", "profile:read")})
     monkeypatch.setattr(auth_middleware, "admin_auth_service", fake_admin)
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake_web)
@@ -149,17 +151,14 @@ async def test_health_aliases_are_public_and_equivalent() -> None:
         transport=transport, base_url="http://testserver"
     ) as client:
         live_responses = [
-            await client.get(path)
-            for path in ("/health/live", "/health")
+            await client.get(path) for path in ("/health/live", "/health")
         ]
         ready_responses = [
             await client.get(path)
             for path in ("/health/ready", "/ready", "/api/health")
         ]
     assert all(response.status_code == 200 for response in live_responses)
-    assert {str(response.json()) for response in live_responses} == {
-        "{'status': 'ok'}"
-    }
+    assert {str(response.json()) for response in live_responses} == {"{'status': 'ok'}"}
     assert all(response.status_code == 503 for response in ready_responses)
     assert {str(response.json()) for response in ready_responses} == {
         "{'status': 'not_ready'}"

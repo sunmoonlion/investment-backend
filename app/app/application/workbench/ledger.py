@@ -689,13 +689,25 @@ class Ledger:
                         expected_version=int(task["state_version"]),
                         active_interaction_id=None,
                     )
-                    result.update(
-                        await self.transition(
-                            str(task["id"]),
-                            resume_to,
-                            reason={"interaction": interaction_id},
+                    if response.get("decision") == "stop":
+                        result.update(
+                            await self.transition(
+                                str(task["id"]),
+                                TaskState.FAILED,
+                                reason={
+                                    "interaction": interaction_id,
+                                    "by": "user stopped",
+                                },
+                            )
                         )
-                    )
+                    else:
+                        result.update(
+                            await self.transition(
+                                str(task["id"]),
+                                resume_to,
+                                reason={"interaction": interaction_id},
+                            )
+                        )
             else:
                 await self.repo.append_event(
                     session_id=str(session["id"]),

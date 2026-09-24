@@ -481,6 +481,15 @@ async def respond_interaction(
             owner_actor_id=_actor(principal),
             subject_digest=body.subject_digest,
         )
+        if it["task_id"] is not None and result.get("state") == "QUEUED":
+            s2 = await repo.get_session(str(it["session_id"]))
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=str(it["session_id"]),
+                    sandbox_id=str(s2["sandbox_id"]),
+                    kind="task.drive",
+                    payload={"task_id": str(it["task_id"])},
+                )
         if it["kind"] == "tool_approval":
             s = await repo.get_session(str(it["session_id"]))
             async with repo.transaction():

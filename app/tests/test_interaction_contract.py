@@ -114,9 +114,7 @@ async def test_snapshot_action_sse_and_citation_contract(reference_app: None) ->
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
 
-        source = await client.get(
-            f"{prefix}/citations/{REFERENCE_EVIDENCE_ID}/source"
-        )
+        source = await client.get(f"{prefix}/citations/{REFERENCE_EVIDENCE_ID}/source")
         assert source.status_code == 302
         assert source.headers["location"] == (
             f"{prefix}/reference/sources/{REFERENCE_EVIDENCE_ID}"
@@ -170,9 +168,7 @@ async def test_default_provider_fails_closed() -> None:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            response = await client.get(
-                f"/api/web/v1/runs/{REFERENCE_RUN_ID}"
-            )
+            response = await client.get(f"/api/web/v1/runs/{REFERENCE_RUN_ID}")
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "provider_unavailable"
     finally:

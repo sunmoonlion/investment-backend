@@ -49,7 +49,9 @@ def test_file_tool_handler_keeps_large_objects_as_artifact_refs() -> None:
 
     projection = registry.handle(result, lineage=lineage, sequence_no=4)
 
-    assert projection.llm_message.content == "File tool produced 1 artifact reference(s)."
+    assert (
+        projection.llm_message.content == "File tool produced 1 artifact reference(s)."
+    )
     assert projection.artifacts[0].uri == "s3://bucket/report.md"
     assert not hasattr(projection.artifacts[0], "body")
 

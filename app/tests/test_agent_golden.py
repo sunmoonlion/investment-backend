@@ -26,7 +26,9 @@ def test_first_m1_graph_golden_case_is_deterministic() -> None:
 
 
 def test_old_project_planner_react_reference_case_is_compared() -> None:
-    case = load_golden_case(Path("tests/golden/old_project_planner_react_reference.json"))
+    case = load_golden_case(
+        Path("tests/golden/old_project_planner_react_reference.json")
+    )
 
     result = run_golden_case(case)
 

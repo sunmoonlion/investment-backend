@@ -23,11 +23,15 @@ def test_stored_message_upcaster_accepts_current_schema() -> None:
         }
     )
 
-    assert message == StoredMessage(role=MessageRole.user, content="hello", sequence_no=1)
+    assert message == StoredMessage(
+        role=MessageRole.user, content="hello", sequence_no=1
+    )
 
 
 def test_langchain_message_mapping_stays_behind_infrastructure_adapter() -> None:
-    stored = base_message_to_stored(HumanMessage(content="hello", id="m1"), sequence_no=1)
+    stored = base_message_to_stored(
+        HumanMessage(content="hello", id="m1"), sequence_no=1
+    )
 
     assert stored.role == MessageRole.user
     assert stored.content == "hello"

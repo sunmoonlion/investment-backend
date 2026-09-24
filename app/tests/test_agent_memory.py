@@ -43,9 +43,15 @@ async def test_memory_policy_windows_session_memories_and_summarizes() -> None:
     service = AgentMemoryService(repository, policy)
     now = datetime.now(UTC)
 
-    await service.append(make_memory("1", content="old", created_at=now - timedelta(minutes=3)))
-    await service.append(make_memory("2", content="middle", created_at=now - timedelta(minutes=2)))
-    await service.append(make_memory("3", content="new", created_at=now - timedelta(minutes=1)))
+    await service.append(
+        make_memory("1", content="old", created_at=now - timedelta(minutes=3))
+    )
+    await service.append(
+        make_memory("2", content="middle", created_at=now - timedelta(minutes=2))
+    )
+    await service.append(
+        make_memory("3", content="new", created_at=now - timedelta(minutes=1))
+    )
 
     window = await service.build_window("session-1")
 
@@ -77,7 +83,9 @@ async def test_memory_layer_requires_source_confidence_scope_and_safety_flags() 
 
 
 @pytest.mark.asyncio
-async def test_memory_policy_does_not_mix_long_term_memory_into_session_window() -> None:
+async def test_memory_policy_does_not_mix_long_term_memory_into_session_window() -> (
+    None
+):
     repository = InMemoryAgentMemoryRepository()
     service = AgentMemoryService(repository, WindowMemoryPolicy(max_memories=10))
     now = datetime.now(UTC)

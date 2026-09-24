@@ -7,7 +7,9 @@ from app.domain.agent.sandbox import SandboxAction, SandboxRequest
 from app.infrastructure.agent.fake_sandbox import DeterministicFakeSandbox
 
 
-def make_effective_config(*, allowed_tools: set[str], denied_tools: set[str] | None = None):
+def make_effective_config(
+    *, allowed_tools: set[str], denied_tools: set[str] | None = None
+):
     return EffectiveAgentConfig(
         profile_key="test",
         profile_version=1,
