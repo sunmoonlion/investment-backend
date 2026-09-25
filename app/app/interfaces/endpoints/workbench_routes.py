@@ -162,6 +162,11 @@ def provisioning_backends():
     return provisioner, relay_admin, s.workbench_relay_public_url
 
 
+def sandbox_global_limit() -> int:
+    """F-SBX-08 的上限；测试用依赖覆盖。"""
+    return get_settings().workbench_sandbox_global_limit
+
+
 def token_issuer() -> TokenIssuer | None:
     """D10：配置了签名私钥才签 JWT；否则供给走不透明随机令牌。"""
     s = get_settings()
@@ -183,15 +188,6 @@ def _plain(d: dict[str, Any]) -> dict[str, Any]:
             continue
         out[k] = str(v) if isinstance(v, uuid.UUID) else v
     return out
-
-
-def _session_sse_frame(ev: dict[str, Any]) -> str:
-    # The web client uses EventSource.onmessage; keep the transport event at
-    # the default name and carry the domain event type in the JSON payload.
-    return (
-        f"id: {ev.get('cursor')}\nevent: message\n"
-        f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
-    )
 
 
 def _http(exc: WorkbenchError) -> AppException:
@@ -423,6 +419,12 @@ async def list_events(
     }
 
 
+def sse_frame(ev: dict[str, Any]) -> str:
+    """一帧 SSE。不带 `event:` 名：浏览器 EventSource 只把无名（或名为 message）的帧交给 onmessage，
+    带了事件名（如 turn/completed）的帧会被静默丢掉。事件类型在 data 里的 `type` 字段。"""
+    return f"id: {ev.get('cursor')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+
+
 @router.get("/sessions/{session_id}/stream")
 async def stream_events(
     session_id: str,
@@ -450,7 +452,7 @@ async def stream_events(
                     session_id=session_id, after_cursor=after, limit=1000
                 ):
                     last = max(last, int(ev["cursor"]))
-                    yield _session_sse_frame(ev)
+                    yield sse_frame(ev)
             async for message in pubsub.listen():
                 if await request.is_disconnected():
                     break
@@ -460,7 +462,7 @@ async def stream_events(
                 if int(ev.get("cursor", 0)) <= last:
                     continue
                 last = int(ev["cursor"])
-                yield _session_sse_frame(ev)
+                yield sse_frame(ev)
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()
@@ -586,7 +588,12 @@ async def put_conclusion(
 
 # ---------------- sandbox provisioning (0003 D9) ----------------
 def _provisioning(
-    session: AsyncSession, principal: Principal, cipher, backends, issuer=None
+    session: AsyncSession,
+    principal: Principal,
+    cipher,
+    backends,
+    issuer=None,
+    global_limit: int = 0,
 ) -> SandboxProvisioning:
     provisioner, relay_admin, relay_public_url = backends
     return SandboxProvisioning(
@@ -596,6 +603,7 @@ def _provisioning(
         relay_admin=relay_admin,
         relay_public_url=relay_public_url,
         issuer=issuer,
+        global_limit=global_limit,
     )
 
 
@@ -614,11 +622,13 @@ async def provision_sandbox(
     cipher=Depends(credential_cipher),
     backends=Depends(provisioning_backends),
     issuer: TokenIssuer | None = Depends(token_issuer),
+    global_limit: int = Depends(sandbox_global_limit),
 ):
-    """用设置页登记的 key 给这个用户拉起（或更新）他的沙箱。首次同时签发会合点身份，代理令牌只在这次响应里。"""
+    """用设置页登记的 key 给这个用户拉起（或更新）他的沙箱。首次同时签发会合点身份，代理令牌只在这次响应里。
+    全局在跑沙箱数到上限时，新用户得到 503 sandbox_capacity_full（F-SBX-08）。"""
     try:
         result = await _provisioning(
-            session, principal, cipher, backends, issuer
+            session, principal, cipher, backends, issuer, global_limit
         ).provision(_actor(principal))
     except WorkbenchError as exc:
         raise _http(exc) from exc

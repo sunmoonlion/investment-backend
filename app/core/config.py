@@ -185,6 +185,10 @@ class Settings(BaseSettings):
         default="wss://edge.sunmoonai.com/relay",
         validation_alias="WORKBENCH_RELAY_PUBLIC_URL",
     )
+    # F-SBX-08：全局在跑沙箱上限（自助注册的配套闸）；0 = 不设上限
+    workbench_sandbox_global_limit: int = Field(
+        default=20, ge=0, validation_alias="WORKBENCH_SANDBOX_GLOBAL_LIMIT"
+    )
     workbench_sandbox_model_provider: str = Field(
         default="", validation_alias="WORKBENCH_SANDBOX_MODEL_PROVIDER"
     )
