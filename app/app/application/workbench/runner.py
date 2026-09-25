@@ -441,6 +441,10 @@ class Runner:
         if link is None:
             link = SandboxLink(self, await repo.get_sandbox(sandbox_id))
             self.links[sandbox_id] = link
+        elif link.client is None or not link.client.connected:
+            # 要重连时重读沙箱行：回收后重新拉起会换能力令牌（和地址），缓存的旧令牌会一直被 401
+            # （KIND 2026-09-26：回收 → 拉起后会话里每条命令都 "HTTP 401"，重启 runner 才好）
+            link.sandbox = await repo.get_sandbox(sandbox_id)
         return link
 
     async def run_forever(self) -> None:

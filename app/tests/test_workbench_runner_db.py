@@ -724,3 +724,44 @@ async def test_mcp_elicitation_is_accepted_with_schema_defaults(db):
             await link.client.close()
     finally:
         await fake.close()
+
+
+async def test_reconnect_reads_the_current_sandbox_token(db):
+    """回收后重新拉起会换沙箱的能力令牌；runner 重连时要用库里的新令牌，而不是缓存里的旧令牌。"""
+    fake = FakeAppServer()
+    await fake.start()
+    runner = Runner(
+        db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+    )
+    try:
+        _, sb, sid = await seed(db, fake)
+        assert await runner.run_once() == 1  # session.start_thread，用旧令牌连上
+        assert fake.auth_headers[-1] == f"Bearer {TOKEN}"
+        # 沙箱被回收又拉起：连接断了，库里的令牌换了
+        await runner.links[sb].client.close()
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await s.execute(
+                    text(
+                        "update workbench_sandboxes set token_ref = :r where id = :id"
+                    ),
+                    {"r": "inline:cap-token-after-reprovision", "id": sb},
+                )
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": "hello again",
+                        "request_id": "req-2",
+                        "by": "user",
+                    },
+                )
+        await runner.run_once()
+        assert fake.auth_headers[-1] == "Bearer cap-token-after-reprovision"
+    finally:
+        for link in runner.links.values():
+            if link.client is not None:
+                await link.client.close()
+        await fake.close()
