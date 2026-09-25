@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from decimal import Decimal
 from typing import Any
 
@@ -425,6 +426,38 @@ def sse_frame(ev: dict[str, Any]) -> str:
     return f"id: {ev.get('cursor')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
 
 
+async def stream_session_events(
+    *,
+    fetch_after: Callable[[int], Awaitable[list[dict[str, Any]]]],
+    wait_wakeup: Callable[[float], Awaitable[bool]],
+    is_disconnected: Callable[[], Awaitable[bool]],
+    after: int = 0,
+    poll_seconds: float = 2.0,
+    keepalive_seconds: float = 15.0,
+) -> AsyncIterator[str]:
+    """事件流的核心循环。数据库是唯一的顺序来源：Redis 消息只当"有新事件"的唤醒信号，醒了（或每 poll_seconds）
+    就按 cursor 取 last 之后的全部事件依次发出——所以只写库、没发 Redis 的事件（任务状态、顾问步骤、用户发言）
+    也能实时到，而且不会因为先收到后面的事件而把前面没发布的跳过（KIND 09 实测：委托状态要刷新才出现）。
+    空闲 keepalive_seconds 发一行 SSE 注释保活（EventSource 忽略注释）。"""
+    last = after
+    idle = 0.0
+    while True:
+        events = await fetch_after(last)
+        for ev in events:
+            last = max(last, int(ev["cursor"]))
+            yield sse_frame(ev)
+        if events:
+            idle = 0.0
+        if await is_disconnected():
+            return
+        woke = await wait_wakeup(poll_seconds)
+        if not woke:
+            idle += poll_seconds
+            if idle >= keepalive_seconds:
+                idle = 0.0
+                yield ": keepalive\n\n"
+
+
 @router.get("/sessions/{session_id}/stream")
 async def stream_events(
     session_id: str,
@@ -433,7 +466,7 @@ async def stream_events(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    """SSE：先订阅 Redis 再回放数据库（否则两者之间提交的事件会丢），按 cursor 去重。"""
+    """SSE：先订阅 Redis（只作唤醒），再按 cursor 从数据库取事件；见 stream_session_events。"""
     repo = WorkbenchRepository(session)
     try:
         await repo.get_session(session_id, owner_actor_id=_actor(principal))
@@ -442,27 +475,29 @@ async def stream_events(
     channel = f"{get_settings().workbench_redis_key_prefix}:session:{session_id}:events"
 
     async def gen():
-        redis = get_redis().client
-        pubsub = redis.pubsub()
+        pubsub = get_redis().client.pubsub()
         await pubsub.subscribe(channel)
-        last = after
-        try:
+
+        async def fetch_after(cursor: int) -> list[dict[str, Any]]:
             async with get_postgres().session_factory() as s2:
-                for ev in await WorkbenchRepository(s2).list_events(
-                    session_id=session_id, after_cursor=after, limit=1000
-                ):
-                    last = max(last, int(ev["cursor"]))
-                    yield sse_frame(ev)
-            async for message in pubsub.listen():
-                if await request.is_disconnected():
-                    break
-                if message["type"] != "message":
-                    continue
-                ev = json.loads(message["data"])
-                if int(ev.get("cursor", 0)) <= last:
-                    continue
-                last = int(ev["cursor"])
-                yield sse_frame(ev)
+                return await WorkbenchRepository(s2).list_events(
+                    session_id=session_id, after_cursor=cursor, limit=1000
+                )
+
+        async def wait_wakeup(wait_seconds: float) -> bool:
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=wait_seconds
+            )
+            return message is not None
+
+        try:
+            async for frame in stream_session_events(
+                fetch_after=fetch_after,
+                wait_wakeup=wait_wakeup,
+                is_disconnected=request.is_disconnected,
+                after=after,
+            ):
+                yield frame
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()
