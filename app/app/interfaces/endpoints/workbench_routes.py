@@ -185,6 +185,15 @@ def _plain(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _session_sse_frame(ev: dict[str, Any]) -> str:
+    # The web client uses EventSource.onmessage; keep the transport event at
+    # the default name and carry the domain event type in the JSON payload.
+    return (
+        f"id: {ev.get('cursor')}\nevent: message\n"
+        f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+    )
+
+
 def _http(exc: WorkbenchError) -> AppException:
     # 走统一的 problem+json：顶层 code / status / detail
     return AppException(code=exc.code, status_code=exc.http_status, msg=exc.message)
@@ -430,9 +439,6 @@ async def stream_events(
         raise _http(exc) from exc
     channel = f"{get_settings().workbench_redis_key_prefix}:session:{session_id}:events"
 
-    def sse(ev: dict[str, Any]) -> str:
-        return f"id: {ev.get('cursor')}\nevent: {ev.get('type', 'message')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
-
     async def gen():
         redis = get_redis().client
         pubsub = redis.pubsub()
@@ -444,7 +450,7 @@ async def stream_events(
                     session_id=session_id, after_cursor=after, limit=1000
                 ):
                     last = max(last, int(ev["cursor"]))
-                    yield sse(ev)
+                    yield _session_sse_frame(ev)
             async for message in pubsub.listen():
                 if await request.is_disconnected():
                     break
@@ -454,7 +460,7 @@ async def stream_events(
                 if int(ev.get("cursor", 0)) <= last:
                     continue
                 last = int(ev["cursor"])
-                yield sse(ev)
+                yield _session_sse_frame(ev)
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()
