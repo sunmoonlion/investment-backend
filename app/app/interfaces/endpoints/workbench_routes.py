@@ -414,6 +414,12 @@ async def list_events(
     }
 
 
+def sse_frame(ev: dict[str, Any]) -> str:
+    """一帧 SSE。不带 `event:` 名：浏览器 EventSource 只把无名（或名为 message）的帧交给 onmessage，
+    带了事件名（如 turn/completed）的帧会被静默丢掉。事件类型在 data 里的 `type` 字段。"""
+    return f"id: {ev.get('cursor')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+
+
 @router.get("/sessions/{session_id}/stream")
 async def stream_events(
     session_id: str,
@@ -430,9 +436,6 @@ async def stream_events(
         raise _http(exc) from exc
     channel = f"{get_settings().workbench_redis_key_prefix}:session:{session_id}:events"
 
-    def sse(ev: dict[str, Any]) -> str:
-        return f"id: {ev.get('cursor')}\nevent: {ev.get('type', 'message')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
-
     async def gen():
         redis = get_redis().client
         pubsub = redis.pubsub()
@@ -444,7 +447,7 @@ async def stream_events(
                     session_id=session_id, after_cursor=after, limit=1000
                 ):
                     last = max(last, int(ev["cursor"]))
-                    yield sse(ev)
+                    yield sse_frame(ev)
             async for message in pubsub.listen():
                 if await request.is_disconnected():
                     break
@@ -454,7 +457,7 @@ async def stream_events(
                 if int(ev.get("cursor", 0)) <= last:
                     continue
                 last = int(ev["cursor"])
-                yield sse(ev)
+                yield sse_frame(ev)
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()
