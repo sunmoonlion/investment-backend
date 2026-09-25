@@ -771,6 +771,24 @@ class WorkbenchRepository:
             {"o": owner_actor_id},
         )
 
+    async def count_live_provisioned_sandboxes(self) -> int:
+        """F-SBX-08：按需拉起、且没回收的沙箱数（全体用户）。"""
+        r = await self.session.execute(
+            text(
+                "select count(*) from workbench_sandboxes where provisioned = true and status <> 'deleted'"
+            )
+        )
+        return int(r.scalar_one())
+
+    async def has_live_provisioned_sandbox(self, owner_actor_id: str) -> bool:
+        r = await self.session.execute(
+            text(
+                "select 1 from workbench_sandboxes where owner_actor_id = :o and provisioned = true and status <> 'deleted' limit 1"
+            ),
+            {"o": owner_actor_id},
+        )
+        return r.first() is not None
+
     async def upsert_provisioned_sandbox(
         self,
         *,

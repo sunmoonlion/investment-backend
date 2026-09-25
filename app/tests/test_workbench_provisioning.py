@@ -286,3 +286,64 @@ async def test_jwt_identity_and_rotation(make_client, db):  # noqa: F811
     # 再拉起：不再回代理令牌，登记的仍是撤换后的那对
     again = (await http.post("/api/workbench/sandboxes/provision")).json()
     assert again["relay"]["agent_token"] is None and relay.tokens[user][0] == new_agent
+
+
+async def test_global_sandbox_cap(make_client, db):  # noqa: F811
+    """F-SBX-08：上限 1。A 拉起后 B 被拒（503 sandbox_capacity_full）；A 再更新不受限；A 回收后 B 能拉起。"""
+    from test_workbench_routes import B
+
+    from app.interfaces.endpoints.workbench_routes import sandbox_global_limit
+
+    key = Fernet(Fernet.generate_key())
+    fake_api = FakeProvisionerApi()
+    relay = FakeRelayAdmin()
+    provisioner = HttpProvisioner(
+        ProvisionerConfig(
+            url="http://prov", token="prov-secret", model_provider="kimi"
+        ),
+        transport=httpx.MockTransport(fake_api.handler),
+    )
+
+    def client_for(actor):
+        http = make_client(actor)
+        app = http._transport.app  # type: ignore[attr-defined]
+        app.dependency_overrides[credential_cipher] = lambda: key
+        app.dependency_overrides[provisioning_backends] = lambda: (
+            provisioner,
+            relay,
+            "wss://edge.test/relay",
+        )
+        app.dependency_overrides[sandbox_global_limit] = lambda: 1
+        return http
+
+    a = client_for(A)
+    await a.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "sk-live-key-aaaa1111"},
+    )
+    assert (await a.post("/api/workbench/sandboxes/provision")).status_code == 200
+
+    b = client_for(B)
+    await b.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "sk-live-key-bbbb2222"},
+    )
+    r = await b.post("/api/workbench/sandboxes/provision")
+    assert r.status_code == 503 and r.json()["code"] == "sandbox_capacity_full"
+    assert "sk-live" not in r.text
+
+    a = client_for(A)
+    assert (
+        await a.post("/api/workbench/sandboxes/provision")
+    ).status_code == 200  # 更新不受限
+    assert (await a.delete("/api/workbench/sandboxes/provisioned")).json()[
+        "status"
+    ] == "deleted"
+
+    b = client_for(B)
+    assert (await b.post("/api/workbench/sandboxes/provision")).status_code == 200
+
+    # 0 = 不设上限
+    a = client_for(A)
+    a._transport.app.dependency_overrides[sandbox_global_limit] = lambda: 0  # type: ignore[attr-defined]
+    assert (await a.post("/api/workbench/sandboxes/provision")).status_code == 200

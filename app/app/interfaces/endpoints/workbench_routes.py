@@ -162,6 +162,11 @@ def provisioning_backends():
     return provisioner, relay_admin, s.workbench_relay_public_url
 
 
+def sandbox_global_limit() -> int:
+    """F-SBX-08 的上限；测试用依赖覆盖。"""
+    return get_settings().workbench_sandbox_global_limit
+
+
 def token_issuer() -> TokenIssuer | None:
     """D10：配置了签名私钥才签 JWT；否则供给走不透明随机令牌。"""
     s = get_settings()
@@ -583,7 +588,12 @@ async def put_conclusion(
 
 # ---------------- sandbox provisioning (0003 D9) ----------------
 def _provisioning(
-    session: AsyncSession, principal: Principal, cipher, backends, issuer=None
+    session: AsyncSession,
+    principal: Principal,
+    cipher,
+    backends,
+    issuer=None,
+    global_limit: int = 0,
 ) -> SandboxProvisioning:
     provisioner, relay_admin, relay_public_url = backends
     return SandboxProvisioning(
@@ -593,6 +603,7 @@ def _provisioning(
         relay_admin=relay_admin,
         relay_public_url=relay_public_url,
         issuer=issuer,
+        global_limit=global_limit,
     )
 
 
@@ -611,11 +622,13 @@ async def provision_sandbox(
     cipher=Depends(credential_cipher),
     backends=Depends(provisioning_backends),
     issuer: TokenIssuer | None = Depends(token_issuer),
+    global_limit: int = Depends(sandbox_global_limit),
 ):
-    """用设置页登记的 key 给这个用户拉起（或更新）他的沙箱。首次同时签发会合点身份，代理令牌只在这次响应里。"""
+    """用设置页登记的 key 给这个用户拉起（或更新）他的沙箱。首次同时签发会合点身份，代理令牌只在这次响应里。
+    全局在跑沙箱数到上限时，新用户得到 503 sandbox_capacity_full（F-SBX-08）。"""
     try:
         result = await _provisioning(
-            session, principal, cipher, backends, issuer
+            session, principal, cipher, backends, issuer, global_limit
         ).provision(_actor(principal))
     except WorkbenchError as exc:
         raise _http(exc) from exc

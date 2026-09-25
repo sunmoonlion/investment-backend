@@ -37,6 +37,13 @@ class ProvisionerFailed(WorkbenchError):
     http_status = 502
 
 
+class SandboxCapacityFull(WorkbenchError):
+    """F-SBX-08：全局沙箱数到上限。已有沙箱的用户不受影响（更新照常），新用户稍后再试。"""
+
+    code = "sandbox_capacity_full"
+    http_status = 503
+
+
 class RelayAdminFailed(WorkbenchError):
     code = "relay_admin_failed"
     http_status = 502
@@ -175,6 +182,7 @@ class SandboxProvisioning:
         relay_public_url: str,
         codex_version: str = "0.155.1",
         issuer: TokenIssuer | None = None,
+        global_limit: int = 0,
     ) -> None:
         self.repo = repo
         self.cipher = cipher
@@ -183,6 +191,7 @@ class SandboxProvisioning:
         self.relay_public_url = relay_public_url
         self.codex_version = codex_version
         self.issuer = issuer  # D10：有签名密钥时发 JWT；否则不透明随机令牌
+        self.global_limit = global_limit  # F-SBX-08；0 = 不设上限
 
     async def ensure_relay_identity(
         self, owner: str
@@ -274,6 +283,22 @@ class SandboxProvisioning:
             "sandbox_rolled": live.get("status") not in (None, "absent", "deleted"),
         }
 
+    async def _check_capacity(self, owner: str) -> None:
+        """F-SBX-08：只挡"新增一个沙箱"；已有沙箱（在跑或启动中）的用户更新不受限。"""
+        if not self.global_limit or await self.repo.has_live_provisioned_sandbox(owner):
+            return
+        live = await self.repo.count_live_provisioned_sandboxes()
+        if live >= self.global_limit:
+            log.warning(
+                "sandbox capacity full live=%s limit=%s owner=%s",
+                live,
+                self.global_limit,
+                owner,
+            )
+            raise SandboxCapacityFull(
+                "sandbox capacity is full, please try again later"
+            )
+
     async def _upsert_sandbox(
         self,
         owner: str,
@@ -311,6 +336,7 @@ class SandboxProvisioning:
         credential = await self.repo.active_credential(owner)
         if credential is None:
             raise NoCredential("register a model key in settings first")
+        await self._check_capacity(owner)
         identity, fresh_agent_token = await self.ensure_relay_identity(owner)
         sb_id, result = await self._upsert_sandbox(
             owner, identity, identity["_sandbox_token"], credential
