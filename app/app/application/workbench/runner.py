@@ -46,6 +46,16 @@ def event_kind(method: str) -> str:
     return "other"
 
 
+# app-server 说"这条线程没了"的两种文案：内存里没有（turn/start）与盘上没有 rollout（thread/resume，
+# Codex 0.155 thread-store/local/read_thread.rs）。KIND 14：只认前者，后者没走兜底，命令直接失败
+_THREAD_GONE = ("thread not found", "no rollout found")
+
+
+def thread_gone(exc: AppServerError) -> bool:
+    msg = str(exc).lower()
+    return any(k in msg for k in _THREAD_GONE)
+
+
 def thread_id_of(params: dict[str, Any]) -> str | None:
     for path in (
         ("threadId",),
@@ -678,7 +688,7 @@ class Runner:
             await link.ensure_thread(thread_id)
             return session
         except AppServerError as exc:
-            if "not found" not in str(exc).lower():
+            if not thread_gone(exc):
                 raise
         log.warning(
             "thread %s gone on sandbox %s; starting a new one",

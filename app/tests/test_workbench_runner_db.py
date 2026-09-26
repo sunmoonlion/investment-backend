@@ -86,7 +86,8 @@ class FakeAppServer:
                         "id": rid,
                         "error": {
                             "code": -32600,
-                            "message": f"thread not found: {tid}",
+                            # 真 app-server 的文案（thread-store/local/read_thread.rs），和 turn/start 的不一样
+                            "message": f"no rollout found for thread id {tid}",
                         },
                     }
                 )
