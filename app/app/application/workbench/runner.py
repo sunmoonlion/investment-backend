@@ -96,6 +96,9 @@ class SandboxLink:
         self.sandbox_id = str(sandbox["id"])
         self.client: AppServerClient | None = None
         self.threads: dict[str, str] = {}  # thread_id -> session_id
+        # 当前这条连接对面的 app-server 进程已经装载的线程。沙箱回收再拉起是新进程，盘上的 rollout 还在、
+        # 内存里没有：turn/start 前要先 thread/resume（KIND 2026-09-26 第 13 轮：401 修好后改报 thread not found）
+        self.live_threads: set[str] = set()
         self.pending_approvals: dict[
             str, asyncio.Future
         ] = {}  # request_id -> future(decision)
@@ -115,12 +118,23 @@ class SandboxLink:
             )
             await client.connect()
             self.client = client
+            self.live_threads.clear()
             log.info(
                 "sandbox link up sandbox=%s url=%s",
                 self.sandbox_id,
                 self.sandbox["app_server_url"],
             )
             return client
+
+    async def ensure_thread(self, thread_id: str) -> None:
+        """让对面的 app-server 装载这个线程：新进程从盘上 resume；已在跑的线程 resume 等于重新加入，无副作用。
+        rollout 不在了（换过持久卷等）会抛 AppServerError（thread not found），由调用方决定要不要另起线程。"""
+        if thread_id in self.live_threads:
+            return
+        client = await self.ensure_connected()
+        await client.request("thread/resume", {"threadId": thread_id}, timeout=60)
+        self.live_threads.add(thread_id)
+        log.info("thread resumed sandbox=%s thread=%s", self.sandbox_id, thread_id)
 
     async def session_for_thread(
         self, thread_id: str | None, repo: WorkbenchRepository
@@ -193,6 +207,7 @@ class SandboxLink:
     ) -> TurnResult:  # noqa: ASYNC109
         """TurnDriver：顾问在用户的 thread 上发一个 turn 并等它结束。"""
         client = await self.ensure_connected()
+        await self.ensure_thread(thread_id)
         result = await client.request(
             "turn/start",
             {"threadId": thread_id, "input": [{"type": "text", "text": text}]},
@@ -597,6 +612,7 @@ class Runner:
             async with self.session_factory() as s:
                 session = await WorkbenchRepository(s).get_session(session_id)
         if kind == "turn.start":
+            session = await self._ensure_session_thread(link, client, session)
             if session["wheel"] != payload.get("by", "user"):
                 raise RuntimeError(
                     f"wheel is held by {session['wheel']}; turn by {payload.get('by', 'user')} refused"
@@ -628,6 +644,7 @@ class Runner:
                 )
             return
         if kind == "turn.interrupt":
+            await link.ensure_thread(session["thread_id"])
             await client.request(
                 "turn/interrupt",
                 {"threadId": session["thread_id"], "turnId": payload.get("turn_id")},
@@ -652,8 +669,33 @@ class Runner:
         if tasks:
             await asyncio.wait(tasks, timeout=timeout)
 
-    async def _start_thread(
+    async def _ensure_session_thread(
         self, link: SandboxLink, client: AppServerClient, session: dict[str, Any]
+    ) -> dict[str, Any]:
+        """发 turn 前保证会话的线程在对面装载着；rollout 丢了就另起一条并换掉会话记的线程号。"""
+        thread_id = session["thread_id"]
+        try:
+            await link.ensure_thread(thread_id)
+            return session
+        except AppServerError as exc:
+            if "not found" not in str(exc).lower():
+                raise
+        log.warning(
+            "thread %s gone on sandbox %s; starting a new one",
+            thread_id,
+            link.sandbox_id,
+        )
+        await self._start_thread(link, client, session, replaced=thread_id)
+        async with self.session_factory() as s:
+            return await WorkbenchRepository(s).get_session(str(session["id"]))
+
+    async def _start_thread(
+        self,
+        link: SandboxLink,
+        client: AppServerClient,
+        session: dict[str, Any],
+        *,
+        replaced: str | None = None,
     ) -> None:
         settings = dict(session.get("thread_settings") or {})
         env_key = settings.pop("environmentId", self.environment_key)
@@ -672,6 +714,10 @@ class Runner:
         if not thread_id:
             raise RuntimeError(f"thread/start returned no thread id: {result}")
         link.threads[thread_id] = str(session["id"])
+        link.live_threads.add(thread_id)
+        payload: dict[str, Any] = {"thread_id": thread_id, "environment": env_key}
+        if replaced:
+            payload["replaced_thread_id"] = replaced
         async with self.session_factory() as s:
             repo = WorkbenchRepository(s)
             async with repo.transaction():
@@ -680,7 +726,7 @@ class Runner:
                     session_id=str(session["id"]),
                     kind="thread",
                     event_type="session/thread_started",
-                    payload={"thread_id": thread_id, "environment": env_key},
+                    payload=payload,
                 )
             await self.publisher.publish(
                 self.publisher.session_channel(str(session["id"])), ev

@@ -22,10 +22,16 @@ TOKEN = "cap-token-for-tests"
 
 
 class FakeAppServer:
-    """够用的 app-server：initialize、thread/start、turn/start、turn/interrupt；turn 里按输入文本决定要不要发审批请求。"""
+    """够用的 app-server：initialize、thread/start、thread/resume、turn/start、turn/interrupt；turn 里按输入文本决定要不要发审批请求。
+
+    线程分两处记：`disk`（rollout 落了盘）与 `live`（当前进程装载着）。`restart()` 模拟沙箱回收再拉起（进程换了、盘还在），
+    `wipe()` 模拟连盘都没了。`strict_threads` 打开后，对没装载的线程发 turn 会像真 app-server 一样回 thread not found。"""
 
     def __init__(self):
         self.server = None
+        self.disk: set[str] = set()
+        self.live: set[str] = set()
+        self.strict_threads = False
         self.port = 0
         self.elicitations: list[dict] = []
         self.requests: list[dict] = []
@@ -63,10 +69,39 @@ class FakeAppServer:
             )
         elif m == "thread/start":
             tid = f"thread-{uuid.uuid4().hex[:8]}"
+            self.disk.add(tid)
+            self.live.add(tid)
             await send(
                 {"id": rid, "result": {"thread": {"id": tid, "cwd": p.get("cwd")}}}
             )
             await send({"method": "thread/started", "params": {"thread": {"id": tid}}})
+        elif m == "thread/resume":
+            tid = p["threadId"]
+            if tid in self.disk:
+                self.live.add(tid)
+                await send({"id": rid, "result": {"thread": {"id": tid}}})
+            else:
+                await send(
+                    {
+                        "id": rid,
+                        "error": {
+                            "code": -32600,
+                            "message": f"thread not found: {tid}",
+                        },
+                    }
+                )
+        elif (
+            m == "turn/start" and self.strict_threads and p["threadId"] not in self.live
+        ):
+            await send(
+                {
+                    "id": rid,
+                    "error": {
+                        "code": -32600,
+                        "message": f"thread not found: {p['threadId']}",
+                    },
+                }
+            )
         elif m == "turn/start":
             tid = p["threadId"]
             turn_id = f"turn-{uuid.uuid4().hex[:6]}"
@@ -203,9 +238,31 @@ class FakeAppServer:
                 {"id": rid, "error": {"code": -32601, "message": f"unknown {m}"}}
             )
 
+    def restart(self):
+        """沙箱回收再拉起：新进程，盘上的 rollout 还在。"""
+        self.live.clear()
+        self.strict_threads = True
+
+    def wipe(self):
+        """连持久卷都没了。"""
+        self.live.clear()
+        self.disk.clear()
+        self.strict_threads = True
+
     async def close(self):
         self.server.close()
         await self.server.wait_closed()
+
+
+async def turn_completed(db, sid: str, n: int = 1) -> bool:
+    """等会话里出现第 n 条 turn/completed。关连接前要等：不然通知还在写库，下一个用例会被悬着的事务锁住。"""
+
+    async def done():
+        async with db() as s:
+            events = await WorkbenchRepository(s).list_events(session_id=sid)
+        return sum(1 for e in events if e["type"] == "turn/completed") >= n
+
+    return await wait_for(done)
 
 
 async def wait_for(pred, timeout=8.0, step=0.05):  # noqa: ASYNC109
@@ -738,7 +795,9 @@ async def test_reconnect_reads_the_current_sandbox_token(db):
         assert await runner.run_once() == 1  # session.start_thread，用旧令牌连上
         assert fake.auth_headers[-1] == f"Bearer {TOKEN}"
         # 沙箱被回收又拉起：连接断了，库里的令牌换了
-        await runner.links[sb].client.close()
+        client = runner.links[sb].client
+        assert client is not None
+        await client.close()
         async with db() as s:
             repo = WorkbenchRepository(s)
             async with repo.transaction():
@@ -760,8 +819,103 @@ async def test_reconnect_reads_the_current_sandbox_token(db):
                 )
         await runner.run_once()
         assert fake.auth_headers[-1] == "Bearer cap-token-after-reprovision"
+        assert await turn_completed(db, sid)
     finally:
         for link in runner.links.values():
             if link.client is not None:
                 await link.client.close()
+        await fake.close()
+
+
+async def _reconnect_after_sandbox_restart(db, fake, *, wipe: bool):
+    """公共部分：起线程 → 沙箱换了进程（连接断、令牌换）→ 再发一个 turn。返回 (runner, sb, sid, 旧线程号)。"""
+    runner = Runner(
+        db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+    )
+    _, sb, sid = await seed(db, fake)
+    assert await runner.run_once() == 1
+    async with db() as s:
+        old_thread = (await WorkbenchRepository(s).get_session(sid))["thread_id"]
+    assert old_thread in fake.live
+    client = runner.links[sb].client
+    assert client is not None
+    await client.close()
+    fake.wipe() if wipe else fake.restart()
+    async with db() as s:
+        repo = WorkbenchRepository(s)
+        async with repo.transaction():
+            await repo.enqueue_command(
+                session_id=sid,
+                sandbox_id=sb,
+                kind="turn.start",
+                payload={"text": "hello again", "request_id": "req-2", "by": "user"},
+            )
+    await runner.run_once()
+    assert await turn_completed(db, sid)
+    return runner, sb, sid, old_thread
+
+
+async def test_reconnect_resumes_the_thread_on_the_new_app_server(db):
+    """回收再拉起：新进程内存里没有线程，但 rollout 在持久卷上；runner 要先 thread/resume 再 turn/start，线程号不变。"""
+    fake = FakeAppServer()
+    await fake.start()
+    runner = None
+    try:
+        runner, sb, sid, old_thread = await _reconnect_after_sandbox_restart(
+            db, fake, wipe=False
+        )
+        methods = [
+            (r["method"], (r.get("params") or {}).get("threadId"))
+            for r in fake.requests
+            if r["method"] in ("thread/resume", "turn/start", "thread/start")
+        ]
+        assert methods[-2:] == [
+            ("thread/resume", old_thread),
+            ("turn/start", old_thread),
+        ]
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            assert (await repo.get_session(sid))["thread_id"] == old_thread
+            events = await repo.list_events(session_id=sid)
+        accepted = [e for e in events if e["type"] == "turn/accepted"]
+        assert [e["payload"]["request_id"] for e in accepted] == ["req-2"]
+        assert not any(e["type"] == "command/failed" for e in events)
+    finally:
+        if runner is not None:
+            for link in runner.links.values():
+                if link.client is not None:
+                    await link.client.close()
+        await fake.close()
+
+
+async def test_reconnect_starts_a_new_thread_when_the_rollout_is_gone(db):
+    """连 rollout 都没了（换过持久卷）：resume 报 not found，runner 另起一条线程、换掉会话记的线程号，并在时间线里留下痕迹。"""
+    fake = FakeAppServer()
+    await fake.start()
+    runner = None
+    try:
+        runner, sb, sid, old_thread = await _reconnect_after_sandbox_restart(
+            db, fake, wipe=True
+        )
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            new_thread = (await repo.get_session(sid))["thread_id"]
+            events = await repo.list_events(session_id=sid)
+        assert new_thread and new_thread != old_thread
+        started = [e for e in events if e["type"] == "session/thread_started"]
+        assert started[-1]["payload"]["replaced_thread_id"] == old_thread
+        assert started[-1]["payload"]["thread_id"] == new_thread
+        accepted = [e for e in events if e["type"] == "turn/accepted"]
+        assert [e["payload"]["request_id"] for e in accepted] == ["req-2"]
+        turn_threads = [
+            r["params"]["threadId"]
+            for r in fake.requests
+            if r["method"] == "turn/start"
+        ]
+        assert turn_threads[-1] == new_thread
+    finally:
+        if runner is not None:
+            for link in runner.links.values():
+                if link.client is not None:
+                    await link.client.close()
         await fake.close()
