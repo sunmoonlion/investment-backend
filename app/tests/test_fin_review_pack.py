@@ -16,7 +16,13 @@ from app.domain.workbench.packs import (
     find_pack,
 )
 
-KNOWLEDGE_TOOLS = {"list_datasets", "describe_schema", "metric_definitions", "run_sql"}
+KNOWLEDGE_TOOLS = {
+    "list_datasets",
+    "describe_schema",
+    "metric_definitions",
+    "query_metric",
+    "run_sql",
+}
 STEPS = ["scope", "profile", "reconcile", "extract", "metrics", "crosscheck", "note"]
 
 
@@ -179,9 +185,23 @@ def test_every_step_that_reads_data_is_told_to_name_the_dataset():
         text = step(name).method_text
         assert "dataset=<profile.dataset>" in text, name
         assert "never recall or estimate a number" in text, name
+        assert "dialect stated in the description of the run_sql tool" in text, name
     assert "never pick another dataset" in step("profile").method_text
     assert "aggregator_notice_date" in step("profile").method_text
     assert "`conclusion` stays an empty string" in step("note").method_text
+
+
+def test_metrics_are_taken_by_name_when_the_tool_is_there():
+    text = step("metrics").method_text
+    assert step("metrics").tools == ("metric_definitions", "query_metric", "run_sql")
+    assert "queryable=true" in text and "when the tool query_metric is" in text
+    assert "copy value, applicable" in text and "Do not recompute" in text
+    assert "when query_metric is not available, compute with run_sql" in text
+    assert "do not rescale" in text
+    # 别的步骤不给这个工具：取数与勾稽要的是报表里的数，不是算出来的口径
+    assert [s.step_id for s in FIN_REVIEW.workflow if "query_metric" in s.tools] == [
+        "metrics"
+    ]
 
 
 def test_the_pack_writes_no_judgement_rules():
@@ -354,7 +374,7 @@ def test_the_turn_input_names_tools_inputs_and_shape():
         0,
     )
     assert "算指标 (metrics, v1)" in text
-    assert "metric_definitions, run_sql" in text
+    assert "metric_definitions, query_metric, run_sql" in text
     assert "### profile (v2)" in text and "sh600009-financials" in text
     assert "Produce the artifact `metrics`" in text
     assert "TRUNCATED" not in text and "rework" not in text

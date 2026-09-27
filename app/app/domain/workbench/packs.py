@@ -265,6 +265,10 @@ _FIN_DATASET = (
     "Every knowledge tool call in this step MUST pass the argument "
     "dataset=<profile.dataset>; never query the default dataset. "
 )
+_FIN_SQL = (
+    "Write SQL in the dialect stated in the description of the run_sql tool and "
+    "use table names alone, without schema or database prefix. "
+)
 _FIN_NUMBERS = (
     "Use only values returned by the tools in this step or given in the input "
     "artifacts; never recall or estimate a number. "
@@ -407,7 +411,7 @@ FIN_REVIEW = ExpertPack(
                 "quote the note in `note`. If they do not, add the fiscal year to "
                 "`unexplained_breaks`. Report what the queries return. An unbalanced "
                 "check is a finding, not a mistake to correct: never adjust, round "
-                "away or omit a difference. " + _FIN_NUMBERS + JSON_ONLY
+                "away or omit a difference. " + _FIN_SQL + _FIN_NUMBERS + JSON_ONLY
             ),
             tools=("run_sql",),
             output_artifact="reconcile",
@@ -465,7 +469,7 @@ FIN_REVIEW = ExpertPack(
                 "row of `table` is one number and carries the basis of the statement "
                 "row it was read from. At most 120 rows: keep the items the question "
                 "needs. A value that is NULL in the dataset is reported as null, never "
-                "as 0. " + _FIN_NUMBERS + JSON_ONLY
+                "as 0. " + _FIN_SQL + _FIN_NUMBERS + JSON_ONLY
             ),
             tools=("describe_schema", "run_sql"),
             output_artifact="facts",
@@ -513,18 +517,27 @@ FIN_REVIEW = ExpertPack(
                 "Compute the metrics the question needs, using ONLY definitions "
                 "returned by metric_definitions for this dataset. "
                 + _FIN_DATASET
-                + "For each metric and period give the formula, the inputs and the "
-                "value. A ratio whose denominator is negative or within 1 yuan of "
+                + "1) Call metric_definitions. 2) For every needed metric whose "
+                "definition says queryable=true, and when the tool query_metric is "
+                "available, get the values with query_metric (metrics by name, "
+                "filters on report_type and fiscal_year) and copy value, applicable "
+                "and reason exactly as returned; set `source` to query_metric. Do not "
+                "recompute these yourself. 3) For the other metrics, or when "
+                "query_metric is not available, compute with run_sql following the "
+                "definition; set `source` to run_sql and give the formula and the "
+                "inputs. A ratio whose denominator is negative or within 1 yuan of "
                 "zero is NOT applicable: set `applicable` to false, `value` to null and "
-                "give the reason. Follow the applicability condition stated in the "
-                "metric definition. A change between two periods (growth, difference "
-                "of ratios) is computed only when both periods have the same basis in "
+                "give the reason. A metric that needs two periods (an average of "
+                "opening and closing balances, growth, a difference of ratios) is "
+                "computed only when both periods have the same basis in "
                 "profile.periods; otherwise set `applicable` to false with the reason "
-                "口径不同. Do not state whether a value is good or bad. "
+                "口径不同. Ratios are reported as returned (0.25 means 25%); do not "
+                "rescale. Do not state whether a value is good or bad. "
+                + _FIN_SQL
                 + _FIN_NUMBERS
                 + JSON_ONLY
             ),
-            tools=("metric_definitions", "run_sql"),
+            tools=("metric_definitions", "query_metric", "run_sql"),
             output_artifact="metrics",
             output_schema={
                 "table": [
@@ -540,6 +553,7 @@ FIN_REVIEW = ExpertPack(
                         "inputs": {"operate_income": 0.0, "operate_cost": 0.0},
                         "applicable": True,
                         "reason_if_not": "",
+                        "source": "query_metric or run_sql",
                     }
                 ],
                 "sql": ["every SQL statement that was run"],
@@ -576,6 +590,7 @@ FIN_REVIEW = ExpertPack(
                 "basis is listed in `not_covered`, not in `mismatched`. `coverage` says "
                 "in one sentence how many of the periods in scope were compared. A "
                 "disagreement is a finding: never alter a value to make it agree. "
+                + _FIN_SQL
                 + _FIN_NUMBERS
                 + JSON_ONLY
             ),

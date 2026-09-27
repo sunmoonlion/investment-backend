@@ -1,8 +1,11 @@
-"""在线跑臂（专家包发布门的数据采集）：每案每臂一个新会话（新 thread），基线 = 用户一个 turn 直接用 MCP；pack = 交出方向盘由顾问按 DATA_QUERY 驾驶。
+"""在线跑臂（专家包发布门的数据采集）：每案每臂一个新会话（新 thread），基线 = 用户一个 turn 直接用 MCP；pack = 交出方向盘由顾问按专家包驾驶。
 
 不在在线路径上（0007）。费用按 Pricing 粗表或 Task 预算账。评测账户与 key 应与用户分开（F-EVAL-06）：本脚本用 APP_SERVER_* 指到的沙箱。
 env：AGENT_TEST_DATABASE_URL、APP_SERVER_URL、APP_SERVER_TOKEN、ROOT、EVAL_DATASET（sqlite 路径）、ENV_KEY（默认 user-pc）
-用法：uv run python -m eval.run_eval --limit 2 --arms baseline,pack --out eval/reports
+用法（问数二十题，默认）：uv run python -m eval.run_eval --limit 2 --arms baseline,pack --out eval/reports
+用法（财报体检十三题）：uv run python -m eval.run_eval --cases fin_review_13 --profile FIN_REVIEW \
+    --dataset-id sh600009-financials --dialect duckdb --limit 13
+--dialect 要与知识服务一致：语义层开着用 duckdb，关着用 sqlite。
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from app.application.workbench.ledger import Ledger  # noqa: E402
 from app.application.workbench.runner import Publisher, Runner  # noqa: E402
 from app.application.workbench.session_service import SessionService  # noqa: E402
 from app.domain.workbench.models import HandoverRequest  # noqa: E402
+from app.domain.workbench.packs import find_pack  # noqa: E402
 from app.infrastructure.workbench.repository import WorkbenchRepository  # noqa: E402
 from eval.cases import Case, load_cases  # noqa: E402
 from eval.judge import ArmOutput, CaseVerdict, judge  # noqa: E402
@@ -76,13 +80,47 @@ def extract_json(text_: str | None) -> dict[str, Any]:
         return {}
 
 
+def baseline_prompt(dataset_id: str | None) -> str:
+    """基线臂的提示。不给数据集标识时与以前逐字相同（问数二十题的历史结果可比）。"""
+    if dataset_id is None:
+        return BASELINE_PROMPT
+    return (
+        "You have the MCP server `sunmoon_knowledge` with tools list_datasets, "
+        "describe_schema, metric_definitions, run_sql and possibly query_metric. "
+        f'Use the dataset `{dataset_id}`: pass dataset="{dataset_id}" on every tool '
+        "call. Answer the question below with real numbers from the dataset. "
+        "Use the tools; do not invent data. Reply with ONE JSON object only (no "
+        'fences): {"sql": ["every SQL statement you ran"], "data_version": "the '
+        'data_version reported by the tools", "answer": "your answer in Chinese, '
+        'including every caveat the reader needs"}.\n\nQuestion: '
+    )
+
+
+def answer_text(content: Any) -> str | None:
+    """答案里给人看的文字：对象与列表取其中所有的字符串（键名不算）。"""
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        parts = [answer_text(v) for v in content.values()]
+    elif isinstance(content, list):
+        parts = [answer_text(v) for v in content]
+    else:
+        return None
+    return "\n".join(p for p in parts if p) or None
+
+
 def sqls_from_events(
     events: list[dict[str, Any]],
     *,
     turn_id: str | None = None,
     task_id: str | None = None,
 ) -> tuple[list[str], list[str]]:
-    """从事件里取真正跑过的 run_sql 参数与工具回报的 data_version（不信模型的自述）。"""
+    """从事件里取真正跑过的 SQL 与工具回报的 data_version（不信模型的自述）。
+
+    run_sql 取它的参数；query_metric 取工具回报的那条实际执行的 SQL。
+    """
     sqls: list[str] = []
     versions: list[str] = []
     for e in events:
@@ -102,6 +140,13 @@ def sqls_from_events(
                 sqls.append(str(sql))
         res = item.get("result") or {}
         sc = res.get("structuredContent") if isinstance(res, dict) else None
+        if (
+            item.get("tool") == "query_metric"
+            and isinstance(sc, dict)
+            and isinstance(sc.get("sql"), str)
+            and sc["sql"]
+        ):
+            sqls.append(sc["sql"])
         if isinstance(sc, dict) and isinstance(sc.get("citation"), dict):
             v = sc["citation"].get("data_version")
             if v:
@@ -130,13 +175,25 @@ def event_digest(events: list[dict[str, Any]]) -> list[str]:
 
 
 class Bench:
-    def __init__(self, factory, runner: Runner, env_id: str, sb_id: str, root: str):
+    def __init__(
+        self,
+        factory,
+        runner: Runner,
+        env_id: str,
+        sb_id: str,
+        root: str,
+        *,
+        profile: str = "DATA_QUERY",
+        dataset_id: str | None = None,
+    ):
         self.factory = factory
         self.runner = runner
         self.env_id = env_id
         self.sb_id = sb_id
         self.root = root
         self.pricing = Pricing()
+        self.profile = profile
+        self.dataset_id = dataset_id
 
     async def pump(self, seconds: float) -> None:
         end = time.time() + seconds
@@ -226,7 +283,11 @@ class Bench:
             )
             link = await self.runner.link_for(self.sb_id, repo)
         turn = asyncio.create_task(
-            link.run_turn(thread_id, BASELINE_PROMPT + case.question, timeout=timeout)
+            link.run_turn(
+                thread_id,
+                baseline_prompt(self.dataset_id) + case.question,
+                timeout=timeout,
+            )
         )
         started = time.time()
         while not turn.done():
@@ -260,6 +321,7 @@ class Bench:
             turns=1,
             state="COMPLETED" if not res.error else "FAILED",
             error=res.error,
+            answer_text=answer_text(said.get("answer")),
             extra={
                 "tool_versions": versions,
                 "answer": said.get("answer"),
@@ -279,7 +341,7 @@ class Bench:
                     HandoverRequest(
                         idempotency_key=f"eval-{case.case_id}-{uuid.uuid4().hex[:6]}",
                         session_id=sid,
-                        profile_id="DATA_QUERY",
+                        profile_id=self.profile,
                         original_input={"text": case.question},
                         budget_limit=budget,
                     ),
@@ -306,13 +368,20 @@ class Bench:
             c = a["content"] if isinstance(a["content"], dict) else {}
             if a["name"] == "sql" and c.get("sql") and c["sql"] not in sqls:
                 sqls.append(str(c["sql"]))
+        pack = find_pack(self.profile)
+        final = pack.workflow[-1].output_artifact if pack else "note"
+        # 问数包的数据版本在执行结果里；别的包在成稿里
+        cites = "rows" if self.profile == "DATA_QUERY" else final
         cited = [
             str(a["content"].get("data_version"))
             for a in arts
-            if a["name"] == "rows"
+            if a["name"] == cites
             and isinstance(a["content"], dict)
             and a["content"].get("data_version")
         ]
+        written = next(
+            (a["content"] for a in reversed(arts) if a["name"] == final), None
+        )
         state = (
             "COMPLETED"
             if task["state"] == "SUCCEEDED"
@@ -329,6 +398,7 @@ class Bench:
             error=None
             if state == "COMPLETED"
             else f"{task['state']} {task.get('waiting_reason') or ''} {task.get('rejection') or ''}",
+            answer_text=answer_text(written),
             extra={
                 "tool_versions": versions,
                 "artifacts": [(a["name"], a["version"]) for a in arts],
@@ -347,7 +417,14 @@ async def main() -> int:
     ap.add_argument("--budget", default="8")
     ap.add_argument("--timeout", type=float, default=900)
     ap.add_argument("--out", default=str(ROOT_DIR / "eval/reports"))
+    ap.add_argument("--cases", default="data_query_20")
+    ap.add_argument("--profile", default="DATA_QUERY")
+    ap.add_argument("--dataset-id", default=None)
+    ap.add_argument("--dialect", default="sqlite", choices=("sqlite", "duckdb"))
     args = ap.parse_args()
+    pack = find_pack(args.profile)
+    if pack is None:
+        raise SystemExit(f"unknown profile: {args.profile}")
 
     url = os.environ["AGENT_TEST_DATABASE_URL"]
     app_url = os.environ.get("APP_SERVER_URL", "ws://127.0.0.1:47800")
@@ -355,10 +432,10 @@ async def main() -> int:
     root = os.environ["ROOT"]
     dataset = Path(os.environ["EVAL_DATASET"])
     env_key = os.environ.get("ENV_KEY", "user-pc")
-    store = TruthStore(dataset)
+    store = TruthStore(dataset, dialect=args.dialect)
     version = store.data_version()
 
-    cases = load_cases()
+    cases = load_cases(args.cases)
     if args.case_ids:
         wanted = set(args.case_ids.split(","))
         cases = [c for c in cases if c.case_id in wanted]
@@ -404,7 +481,15 @@ async def main() -> int:
                     token_ref=f"inline:{token}",
                     codex_version="0.155.1",
                 )
-        bench = Bench(factory, runner, env_id, sb_id, root)
+        bench = Bench(
+            factory,
+            runner,
+            env_id,
+            sb_id,
+            root,
+            profile=args.profile,
+            dataset_id=args.dataset_id,
+        )
         print(f"--- 评测 {len(cases)} 案 × {arms}，数据版本 {version}")
         for case in cases:
             for arm in arms:
@@ -432,7 +517,7 @@ async def main() -> int:
                     }
                 )
                 print(
-                    f"  {case.case_id:<40} {arm:<9} quality={v.quality:<11} citation={v.citation:<11} cost={v.cost} sqls={len(out.sqls)} {int(time.time() - t0)}s {'; '.join(v.reasons)[:160]}",
+                    f"  {case.case_id:<40} {arm:<9} quality={v.quality:<11} citation={v.citation:<11} caveats={v.caveats:<11} cost={v.cost} sqls={len(out.sqls)} {int(time.time() - t0)}s {'; '.join(v.reasons)[:160]}",
                     flush=True,
                 )
     finally:
@@ -454,13 +539,21 @@ async def main() -> int:
         "dataset_version": version,
         "cases": len(cases),
         "arms": ",".join(arms),
-        "profile": "DATA_QUERY",
-        "pack_version": "1",
+        "profile": pack.profile_id,
+        "pack_version": pack.version,
+        "case_set": args.cases,
+        "dialect": args.dialect,
         "run_at": ts,
     }
+    name = "data_query" if args.cases == "data_query_20" else args.cases
+    title = (
+        "问数二十题：专家包发布门"
+        if args.cases == "data_query_20"
+        else f"{pack.title}（{args.cases}）：专家包发布门"
+    )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240
-    (out_dir / f"{ts}-data_query.json").write_text(  # noqa: ASYNC240
+    (out_dir / f"{ts}-{name}.json").write_text(  # noqa: ASYNC240
         json.dumps(
             {
                 "meta": meta,
@@ -473,8 +566,8 @@ async def main() -> int:
             default=str,
         )
     )
-    (out_dir / f"{ts}-data_query.md").write_text(  # noqa: ASYNC240
-        render_markdown("问数二十题：专家包发布门", verdicts, summaries, gate, meta)
+    (out_dir / f"{ts}-{name}.md").write_text(  # noqa: ASYNC240
+        render_markdown(title, verdicts, summaries, gate, meta)
     )
     for s_ in summaries.values():
         print(
@@ -482,7 +575,7 @@ async def main() -> int:
         )
     if gate:
         print(f"发布门：{gate.level} — {gate.reason}")
-    print(f"报告：{out_dir}/{ts}-data_query.md")
+    print(f"报告：{out_dir}/{ts}-{name}.md")
     return 0
 
 

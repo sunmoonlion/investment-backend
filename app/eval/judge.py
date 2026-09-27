@@ -2,18 +2,20 @@
 
 - 质量：每条真值查询都被候选的某条 SQL 覆盖（同一数据版本上跑出同样的投影结果）；
 - 引用：候选报出的 data_version 与数据集一致；
-- 不可判：臂没跑完（错误、超时、等人）、数据集版本与案例冻结的版本不一致、没有任何 SQL。
+- 不可判：臂没跑完（错误、超时、等人）、数据集版本与案例冻结的版本不一致、没有任何 SQL
+  （案例本身没有真值查询时，没有 SQL 不算不可判：例如只考边界的题）。
+- 提醒：案例给了「必须提醒」的检查时，在答案的文字里按关键词查。这是近似检查，
+  单列一栏，不进发布门；没有答案文字时不可判，案例没有检查时算通过。
 """
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Literal
 
 from .cases import Case
-from .truth import TruthStore, same_result
+from .truth import QueryFailed, TruthStore, same_result
 
 Level = Literal["pass", "fail", "undecidable"]
 
@@ -29,6 +31,7 @@ class ArmOutput:
     turns: int = 0
     state: str = "COMPLETED"  # COMPLETED | WAITING | FAILED | TIMEOUT | ERROR
     error: str | None = None
+    answer_text: str | None = None  # 答案里给人看的全部文字；查「必须提醒」用
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -41,6 +44,7 @@ class CaseVerdict:
     cost: Decimal
     coverage: dict[str, int | None]
     reasons: list[str]
+    caveats: Level = "pass"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -48,13 +52,34 @@ class CaseVerdict:
             "arm": self.arm,
             "quality": self.quality,
             "citation": self.citation,
+            "caveats": self.caveats,
             "cost": str(self.cost),
             "coverage": self.coverage,
             "reasons": self.reasons,
         }
 
 
+def judge_caveats(case: Case, out: ArmOutput) -> tuple[Level, list[str]]:
+    if not case.caveat_checks:
+        return "pass", []
+    if out.state != "COMPLETED" or not (out.answer_text or "").strip():
+        return "undecidable", []
+    text = out.answer_text or ""
+    missed = [c for c in case.caveat_checks if not c.passes(text)]
+    return (
+        "fail" if missed else "pass",
+        [f"caveat {c.check_id}: {c.description}" for c in missed],
+    )
+
+
 def judge(case: Case, out: ArmOutput, store: TruthStore) -> CaseVerdict:
+    verdict = _judge(case, out, store)
+    verdict.caveats, missed = judge_caveats(case, out)
+    verdict.reasons.extend(missed)
+    return verdict
+
+
+def _judge(case: Case, out: ArmOutput, store: TruthStore) -> CaseVerdict:
     reasons: list[str] = []
     version = store.data_version()
     if version != case.data_snapshot_id:
@@ -77,7 +102,7 @@ def judge(case: Case, out: ArmOutput, store: TruthStore) -> CaseVerdict:
             {},
             [f"arm did not complete: {out.state} {out.error or ''}".strip()],
         )
-    if not out.sqls:
+    if not out.sqls and case.truth_queries:
         return CaseVerdict(
             case.case_id,
             out.arm,
@@ -93,7 +118,7 @@ def judge(case: Case, out: ArmOutput, store: TruthStore) -> CaseVerdict:
         try:
             cols, rows = store.query(sql)
             candidates.append((i, cols, rows))
-        except sqlite3.Error as exc:
+        except QueryFailed as exc:
             candidates.append(None)
             reasons.append(f"sql#{i} failed: {str(exc)[:120]}")
 

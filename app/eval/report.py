@@ -19,6 +19,7 @@ class ArmSummary:
     citation_pass: int
     undecidable: int
     cost_total: Decimal
+    caveats_pass: int = 0  # 单列一栏，不进发布门
 
     @property
     def quality_rate(self) -> float:
@@ -41,6 +42,7 @@ class ArmSummary:
             "citation_pass": self.citation_pass,
             "citation_rate": round(self.citation_rate, 4),
             "undecidable": self.undecidable,
+            "caveats_pass": self.caveats_pass,
             "cost_total": str(self.cost_total),
             "cost_mean": str(self.cost_mean.quantize(Decimal("0.0001"))),
         }
@@ -54,6 +56,7 @@ def summarize(verdicts: list[CaseVerdict]) -> dict[str, ArmSummary]:
         s.quality_pass += v.quality == "pass"
         s.citation_pass += v.citation == "pass"
         s.undecidable += v.quality == "undecidable"
+        s.caveats_pass += v.caveats == "pass"
         s.cost_total += v.cost
     return out
 
@@ -122,12 +125,12 @@ def render_markdown(
         "",
         "## 各臂",
         "",
-        "| 臂 | 案例 | 质量通过 | 引用通过 | 不可判 | 费用合计 | 费用均值 |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| 臂 | 案例 | 质量通过 | 引用通过 | 提醒通过 | 不可判 | 费用合计 | 费用均值 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for s in summaries.values():
         lines.append(
-            f"| {s.arm} | {s.n} | {s.quality_pass} ({s.quality_rate:.0%}) | {s.citation_pass} ({s.citation_rate:.0%}) | {s.undecidable} | {s.cost_total} | {s.cost_mean:.4f} |"
+            f"| {s.arm} | {s.n} | {s.quality_pass} ({s.quality_rate:.0%}) | {s.citation_pass} ({s.citation_rate:.0%}) | {s.caveats_pass} | {s.undecidable} | {s.cost_total} | {s.cost_mean:.4f} |"
         )
     if gate is not None:
         lines += ["", f"## 发布门：**{gate.level}**", "", gate.reason]
@@ -135,11 +138,11 @@ def render_markdown(
         "",
         "## 逐案",
         "",
-        "| 案例 | 臂 | 质量 | 引用 | 费用 | 原因 |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| 案例 | 臂 | 质量 | 引用 | 提醒 | 费用 | 原因 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for v in verdicts:
         lines.append(
-            f"| {v.case_id} | {v.arm} | {v.quality} | {v.citation} | {v.cost} | {'; '.join(v.reasons)[:200]} |"
+            f"| {v.case_id} | {v.arm} | {v.quality} | {v.citation} | {v.caveats} | {v.cost} | {'; '.join(v.reasons)[:200]} |"
         )
     return "\n".join(lines) + "\n"
