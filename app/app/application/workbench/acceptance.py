@@ -61,6 +61,42 @@ def _get(obj: Any, path: str | None) -> Any:
     return cur
 
 
+def _text_of(value: Any) -> str:
+    """要查措辞的文字：字符串原样；列表与对象取其中所有的字符串（键名不算）。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(_text_of(v) for v in value.values())
+    if isinstance(value, list):
+        return "\n".join(_text_of(v) for v in value)
+    return ""
+
+
+def _same(left: Any, right: Any) -> bool:
+    # True == 1 在 Python 里成立；验收里布尔和数字不是一回事
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, int | float) and isinstance(right, int | float):
+        return float(left) == float(right)
+    return type(left) is type(right) and left == right
+
+
+def _all_equal(value: Any, name: str | None, expected: Any) -> tuple[bool, str]:
+    """列表的每一项都有这个字段且等于期望值。空列表算通过：要求非空另用 list_min。"""
+    if not isinstance(value, list):
+        return False, "not a list"
+    if not name:
+        return False, "rule has no field"
+    bad = [
+        i
+        for i, item in enumerate(value)
+        if not isinstance(item, dict)
+        or name not in item
+        or not _same(item[name], expected)
+    ]
+    return not bad, f"items {bad[:10]} differ" if bad else f"len={len(value)}"
+
+
 def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
     v = Verdict(ok=True)
     parsed: Any = None
@@ -92,10 +128,20 @@ def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
             detail = f"len={len(val) if isinstance(val, list) else 'n/a'}"
         elif r.kind == "no_positioning_advice":
             val = _get(parsed, r.path)
-            hit = _POSITIONING.search(val) if isinstance(val, str) else None
+            hit = _POSITIONING.search(_text_of(val))
             ok, detail = hit is None, (hit.group(0) if hit else "")
         elif r.kind == "max_chars":
             ok = len(text or "") <= r.max_chars
+        elif r.kind == "all_equal":
+            ok, detail = _all_equal(_get(parsed, r.path), r.field, r.equals)
+        elif r.kind == "list_empty":
+            val = _get(parsed, r.path)
+            ok = isinstance(val, list) and not val
+            detail = f"len={len(val)}" if isinstance(val, list) else "not a list"
+        elif r.kind == "blank":
+            val = _get(parsed, r.path)
+            ok = val is None or (isinstance(val, str) and val.strip() == "")
+            detail = "" if ok else "has content"
         v.checks.append({"rule": r.kind, "path": r.path, "pass": ok, "detail": detail})
         if not ok:
             v.ok = False

@@ -451,8 +451,16 @@ class Advisor:
         if inputs:
             parts += ["", "## Inputs (fixed artifact versions from earlier steps)"]
             for name, v in inputs.items():
+                body = json.dumps(v["content"], ensure_ascii=False)
                 parts.append(f"### {name} (v{v['version']})")
-                parts.append(json.dumps(v["content"], ensure_ascii=False)[:8000])
+                parts.append(body[: step.input_max_chars])
+                if len(body) > step.input_max_chars:
+                    # 截断要说出来：不说的话，模型会把残缺的输入当成完整的
+                    parts.append(
+                        f"[TRUNCATED: `{name}` is {len(body)} characters, only the "
+                        f"first {step.input_max_chars} are shown. Say so in your "
+                        "output and do not assume what the missing part contains.]"
+                    )
         parts += [
             "",
             "## Output",
