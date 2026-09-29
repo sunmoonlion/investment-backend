@@ -515,6 +515,42 @@ class WorkbenchRepository:
         )
         return event
 
+    async def append_event_once(
+        self,
+        *,
+        session_id: str,
+        kind: str,
+        event_type: str,
+        payload: dict,
+        same: dict[str, Any],
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """这段对话里还没有同样的事件才记。「同样」= 种类相同，而且内容里含有 same 的各项。
+
+        先拿这段对话的锁再查：两处同时来记，后到的看得见先到的。已经有了就返回 None。
+        """
+        await self.session.execute(
+            text("select pg_advisory_xact_lock(hashtextextended(:s, 1))"),
+            {"s": session_id},
+        )
+        r = await self.session.execute(
+            text("""select 1 from workbench_session_events
+                    where session_id = :s and event_type = :t
+                      and payload @> cast(:same as jsonb) limit 1"""),
+            {"s": session_id, "t": event_type, "same": _j(same)},
+        )
+        if r.first() is not None:
+            return None
+        return await self.append_event(
+            session_id=session_id,
+            kind=kind,
+            event_type=event_type,
+            payload=payload,
+            task_id=task_id,
+            attempt_id=attempt_id,
+        )
+
     async def list_events(
         self, *, session_id: str, after_cursor: int = 0, limit: int = 500
     ) -> list[dict[str, Any]]:

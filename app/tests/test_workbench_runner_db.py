@@ -125,6 +125,36 @@ class FakeAppServer:
                 }
             )
             text = p["input"][0]["text"]
+            # "QUERY 数据集名 数据集名"：每个名字查一次，知识服务都答没有这个数据集
+            if text.startswith("QUERY "):
+                for n, name in enumerate(text.split()[1:]):
+                    await send(
+                        {
+                            "method": "item/completed",
+                            "params": {
+                                "threadId": tid,
+                                "turnId": turn_id,
+                                "item": {
+                                    "type": "mcpToolCall",
+                                    "id": f"mcp-q{n}",
+                                    "server": "sunmoon_knowledge",
+                                    "tool": "describe_schema",
+                                    "status": "failed",
+                                    "arguments": {"dataset": name},
+                                    "result": {
+                                        "content": [
+                                            {
+                                                "type": "text",
+                                                "text": f"unknown dataset: {name}; "
+                                                "call list_datasets to see what exists",
+                                            }
+                                        ]
+                                    },
+                                    "error": None,
+                                },
+                            },
+                        }
+                    )
             if "NEED_ELICITATION" in text:
                 srid = f"elic-{uuid.uuid4().hex[:6]}"
                 fut = asyncio.get_running_loop().create_future()

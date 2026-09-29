@@ -122,12 +122,29 @@ async def test_a_company_that_was_not_ingested_is_handed_to_the_user(db):
             "non_empty(dataset): 这家公司未入库：没有对应的数据集"
             in subject["failures"]
         )
+        assert subject["missing_data"]["security_code"] == SCOPE["security_code"]
+        # 没有数据，重做也不会有：只做了一次，没有重做，也没有往下走
         assert await attempts_of(db, task_id) == [
             ("scope", "COMPLETED", None),
             ("profile", "FAILED", "acceptance"),
-            ("profile", "FAILED", "acceptance"),
         ]
-        assert len(fake.turn_inputs) == 3  # 没有往下走
+        assert len(fake.turn_inputs) == 2
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            (pending,) = await repo.list_interactions(session_id=sid, status="pending")
+            assert [o["id"] for o in pending["prompt"]["options"]] == ["rework", "stop"]
+            (noted,) = [
+                e
+                for e in await repo.list_events(session_id=sid)
+                if e["type"] == "data.missing"
+            ]
+            assert noted["task_id"] == task_id
+            assert noted["payload"] == {
+                "security_code": SCOPE["security_code"],
+                "market": None,
+                "dataset": None,
+                "source": "expert",
+            }
     finally:
         await close(runner)
         await fake.close()

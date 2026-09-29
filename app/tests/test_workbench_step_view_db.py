@@ -333,6 +333,7 @@ async def test_a_company_without_data(db):
             "waiting",
             "pending",
         ]
+        assert shown["steps"][1]["times"] == 1  # 没有数据不重做
         assert shown["task"]["data"] is None  # 还不知道
         last = (await view(db, task_id, 2))["attempts"][-1]
         assert ("有对应的数据集", False, "这家公司未入库：没有对应的数据集") in [

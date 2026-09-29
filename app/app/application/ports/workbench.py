@@ -284,6 +284,18 @@ class WorkbenchStore(Protocol):
         attempt_id: str | None = None,
     ) -> dict[str, Any]: ...
 
+    async def append_event_once(
+        self,
+        *,
+        session_id: str,
+        kind: str,
+        event_type: str,
+        payload: dict,
+        same: dict[str, Any],
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any] | None: ...
+
     async def list_events(
         self, *, session_id: str, after_cursor: int = 0, limit: int = 500
     ) -> list[dict[str, Any]]: ...

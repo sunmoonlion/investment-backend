@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
 from app.application.workbench.acceptance import judge
 from app.application.workbench.ledger import Ledger
+from app.domain.workbench import missing_data
 from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
@@ -325,6 +326,11 @@ class Advisor:
                 attempt_id=attempt_id,
             )
             await repo.commit()
+            missing = missing_data.from_step(step, verdict.parsed)
+            if missing is not None:
+                return await self._no_data(
+                    led, repo, task, step, attempt_id, verdict, missing
+                )
             if reworks < step.max_reworks:  # 还有返工额度：重做本步
                 await self._requeue(led, task_id)
                 return TaskState.QUEUED
@@ -365,6 +371,50 @@ class Advisor:
                 it["interaction_id"],
             )
             return TaskState.WAITING
+
+    async def _no_data(
+        self,
+        led: Ledger,
+        repo: WorkbenchStore,
+        task: dict[str, Any],
+        step: StepContract,
+        attempt_id: str,
+        verdict: Any,
+        missing: dict[str, Any],
+    ) -> str:
+        """这家公司没有入库：重做也不会有数据，所以不重做，记一条「没有数据」，直接问用户。"""
+        task_id = str(task["id"])
+        await repo.append_event_once(
+            session_id=str(task["session_id"]),
+            kind="data",
+            event_type=missing_data.EVENT,
+            payload=missing,
+            same={"security_code": missing["security_code"]},
+            task_id=task_id,
+            attempt_id=attempt_id,
+        )
+        await repo.commit()
+        await led.open_interaction(
+            task_id,
+            kind="input",
+            prompt=InteractionPrompt(
+                title="这家公司还没有数据",
+                question="数据入库之后可以接着做。现在可以先不答：委托停在这里，不再花钱",
+                options=[
+                    {"id": "rework", "label": "数据已经入库了，接着做"},
+                    {"id": "stop", "label": "停止"},
+                ],
+                subject={
+                    "step_id": step.step_id,
+                    "failures": verdict.failures,
+                    "missing_data": missing,
+                },
+                unknowns=["这家公司的数据什么时候能入库"],
+            ),
+            waiting_reason=WaitingReason.INPUT,
+            attempt_id=attempt_id,
+        )
+        return TaskState.WAITING
 
     async def _requeue(self, led: Ledger, task_id: str) -> bool:
         async with self.stores() as repo:

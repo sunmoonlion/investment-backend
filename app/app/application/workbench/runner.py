@@ -23,6 +23,7 @@ from app.application.ports.workbench import (
     WorkbenchStores,
 )
 from app.application.workbench.advisor import Advisor, TurnResult
+from app.domain.workbench import missing_data
 from app.domain.workbench.packs import find_pack
 from app.domain.workbench.projects import (
     THREAD_CONFIG,
@@ -236,7 +237,29 @@ class SandboxLink:
             await self.runner.publisher.publish(
                 self.runner.publisher.session_channel(session_id), event
             )
+            if method == "item/completed":
+                await self._note_missing_data(repo, session_id, params.get("item"))
         self._feed_turn_waiters(method, params)
+
+    async def _note_missing_data(
+        self, repo: WorkbenchStore, session_id: str, item: Any
+    ) -> None:
+        """查数据的工具答复没有这个数据集、又认得出证券代码：记一条「没有数据」（F-PROJ-07）。"""
+        missing = missing_data.from_tool_call(item)
+        if missing is None:
+            return
+        async with repo.transaction():
+            event = await repo.append_event_once(
+                session_id=session_id,
+                kind="data",
+                event_type=missing_data.EVENT,
+                payload=missing,
+                same={"security_code": missing["security_code"]},
+            )
+        if event is not None:
+            await self.runner.publisher.publish(
+                self.runner.publisher.session_channel(session_id), event
+            )
 
     def _feed_turn_waiters(self, method: str, params: dict[str, Any]) -> None:
         turn_id = params.get("turnId") or (params.get("turn") or {}).get("id")

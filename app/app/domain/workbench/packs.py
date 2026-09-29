@@ -40,6 +40,14 @@ class AcceptanceRule(Strict):
     label: str = ""  # 这条验收的名字，通过时也显示
 
 
+class MissingData(Strict):
+    """这一步的交回物里，哪几项说的是「这家公司没有入库」。"""
+
+    flag: str = "not_ingested"  # 为真就是没有入库
+    dataset: str = "dataset"  # 空的也算没有入库
+    code: str = "security_code"  # 证券代码写在哪
+
+
 class StepContract(Strict):
     step_id: str
     step_version: str = "1"
@@ -63,6 +71,8 @@ class StepContract(Strict):
     )
     reserve: str = "0.05"  # 这一步预留的预算（币种随 Task）
     input_max_chars: int = 8000  # 每个上游交回物放进 turn 输入的字符上限；超出会注明
+    # 这一步会发现「没有数据」的，写明怎么认。认出来就不重做（重做也不会有数据），直接问用户
+    missing_data: MissingData | None = None
 
 
 class DossierBlock(Strict):
@@ -744,6 +754,7 @@ FIN_REVIEW = ExpertPack(
                     label="范围内至少有一期数据",
                 ),
             ),
+            missing_data=MissingData(),
             on_reject="human",
             max_reworks=1,
         ),

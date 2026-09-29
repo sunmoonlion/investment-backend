@@ -46,11 +46,15 @@ def consequence(
     return ""
 
 
-def why(kind: str, step: dict[str, Any] | None, rejected: int) -> str:
+def why(
+    kind: str, step: dict[str, Any] | None, rejected: int, *, missing: bool = False
+) -> str:
     if kind == "resource":
         return "预算不够做下一步了。专家不会超出你给的上限"
     if kind == "tool_approval":
         return "这个动作超出了当前允许的范围，要你点头才做"
+    if missing:
+        return "这家公司还没有入库。没有数据，专家不往下做，也不重做"
     if step is None:
         return "这一步没有通过验收"
     if step["after_rejection"]["reworks"] == 0:
@@ -114,8 +118,15 @@ def review_view(
         "kind": kind,
         "status": status,
         "where": where,
-        "why": why(kind, step, len([a for a in last if a["outcome"] == "rejected"])),
+        "why": why(
+            kind,
+            step,
+            len([a for a in last if a["outcome"] == "rejected"]),
+            missing=bool(subject.get("missing_data")),
+        ),
         "failed": failed,
+        # 停在「没有数据」：页面在这里放「没有数据」卡片
+        "missing_data": subject.get("missing_data"),
         "expires_at": expires,
         "created_at": interaction.get("created_at"),
     }
