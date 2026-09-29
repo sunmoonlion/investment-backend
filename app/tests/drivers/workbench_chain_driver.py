@@ -19,7 +19,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.application.workbench.ledger import Ledger  # noqa: E402
 from app.application.workbench.runner import Runner  # noqa: E402
 from app.application.workbench.session_service import SessionService  # noqa: E402
@@ -29,7 +29,7 @@ from app.domain.workbench.models import HandoverRequest  # noqa: E402
 from app.infrastructure.workbench.publisher import RedisPublisher  # noqa: E402
 from app.infrastructure.workbench.repository import WorkbenchRepository  # noqa: E402
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[2]
 OWNER = str(uuid.uuid4())
 fails = 0
 
@@ -54,18 +54,35 @@ def migrate(connection):
             module.upgrade()
 
 
+async def events_of(factory, sid: str, after: int = 0) -> list[dict]:
+    """一段对话里游标在 after 之后的全部事件。一次最多取 500 条，所以翻页取完。"""
+    out: list[dict] = []
+    async with factory() as s:
+        repo = WorkbenchRepository(s)
+        while True:
+            page = await repo.list_events(session_id=sid, after_cursor=after)
+            if not page:
+                return out
+            out.extend(page)
+            after = int(page[-1]["cursor"])
+
+
 async def wait_event(
     factory,
     sid: str,
     event_type: str,
     timeout: float = 240,  # noqa: ASYNC109
+    *,
+    runner: Runner | None = None,
 ) -> dict | None:
+    """等某种事件出现。等的时候让 runner 接着转：沙箱的租约只有十秒，不续就会被当成丢了。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        async with factory() as s:
-            for e in await WorkbenchRepository(s).list_events(session_id=sid):
-                if e["type"] == event_type:
-                    return e
+        for e in await events_of(factory, sid):
+            if e["type"] == event_type:
+                return e
+        if runner is not None:
+            await runner.run_once()
         await asyncio.sleep(0.5)
     return None
 
@@ -168,7 +185,7 @@ async def main() -> int:
                     },
                 )
         await pump(runner, 1)
-        done = await wait_event(factory, sid, "turn/completed")
+        done = await wait_event(factory, sid, "turn/completed", runner=runner)
         verdict("turn/completed 事件到达", done is not None)
         target = Path(root) / fname
         verdict(
@@ -176,14 +193,11 @@ async def main() -> int:
             os.path.exists(target)  # noqa: ASYNC240
             and Path(target).read_text().strip() == "via-workbench",  # noqa: ASYNC240,
         )
-        async with factory() as s:
-            types = [
-                e["type"]
-                for e in await WorkbenchRepository(s).list_events(session_id=sid)
-            ]
+        types = [e["type"] for e in await events_of(factory, sid)]
         verdict(
             "事件里有 item/completed 且没有 delta",
-            "item/completed" in types and not any(t.endswith("/delta") for t in types),
+            "item/completed" in types
+            and not any(t.lower().endswith("delta") for t in types),
         )
 
         print(
@@ -204,14 +218,15 @@ async def main() -> int:
                     },
                 )
         await pump(runner, 1)
-        opened = await wait_event(factory, sid, "interaction/opened", timeout=180)
+        opened = await wait_event(
+            factory, sid, "interaction/opened", timeout=180, runner=runner
+        )
         verdict(
             "审批请求变成 tool_approval Interaction",
             opened is not None and opened["payload"].get("kind") == "tool_approval",
         )
         if opened is None:
-            async with factory() as s:
-                evs = await WorkbenchRepository(s).list_events(session_id=sid)
+            evs = await events_of(factory, sid)
             print("  [debug] 第三段的事件：")
             for e in evs:
                 if e["cursor"] > 8:
@@ -253,9 +268,9 @@ async def main() -> int:
             second = None
             answered = {str(it["id"])}
             while time.time() < deadline and second is None:
+                evs = await events_of(factory, sid)
                 async with factory() as s:
                     repo = WorkbenchRepository(s)
-                    evs = await repo.list_events(session_id=sid)
                     done_evs = [e for e in evs if e["type"] == "turn/completed"]
                     if len(done_evs) >= 2:
                         second = done_evs[1]

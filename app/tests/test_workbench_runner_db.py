@@ -34,6 +34,7 @@ class FakeAppServer:
         self.disk: set[str] = set()
         self.live: set[str] = set()
         self.strict_threads = False
+        self.refuse_inject = False  # 打开后像不认这个请求的旧 app-server
         self.port = 0
         self.elicitations: list[dict] = []
         self.requests: list[dict] = []
@@ -235,6 +236,8 @@ class FakeAppServer:
                 }
             )
         elif m == "turn/interrupt":
+            await send({"id": rid, "result": {}})
+        elif m == "thread/inject_items" and not self.refuse_inject:
             await send({"id": rid, "result": {}})
         else:
             await send(

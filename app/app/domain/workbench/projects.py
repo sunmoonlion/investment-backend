@@ -24,6 +24,15 @@ _WINDOWS_RESERVED = re.compile(
 )
 
 
+# Codex 0.155.1 认的审批策略。设置页里还能选 on-failure，它已经不认了：按 on-request 发。
+APPROVAL_POLICIES = frozenset({"untrusted", "on-request", "never"})
+DEFAULT_APPROVAL_POLICY = "on-request"
+
+
+def approval_policy(chosen: str | None) -> str:
+    return chosen if chosen in APPROVAL_POLICIES else DEFAULT_APPROVAL_POLICY
+
+
 class ConversationKind(StrEnum):
     CHAT = "chat"  # 一问一答。不改文件，不跑命令
     WORK = "work"  # 代理在项目里动手做。必须属于一个项目
@@ -129,13 +138,84 @@ def default_project_title(relative: str, workspace_root: str) -> str:
     return name[:MAX_TITLE_CHARS]
 
 
+class Mode(StrEnum):
+    """这一轮是在哪种情形下发的。四样设置与给模型的说明都由它定。"""
+
+    CHAT = "chat"  # 聊天：没有项目，或者项目所在的机器不在线
+    CHAT_IN_PROJECT = "chat_in_project"
+    WORK = "work"
+    EXPERT = "expert"
+
+
+# 一条线只有一个 Codex，每一轮都由账房发起、记账、计费。
+# 子代理会另起一条账里没有的线，「目标」会让线自己接着跑：两样都在账外花钱，所以关掉。
+THREAD_CONFIG: dict[str, Any] = {
+    "features.multi_agent": False,
+    "features.goals": False,
+}
+
+
+def mode_of(
+    kind: ConversationKind | str,
+    *,
+    directory: str | None,
+    environment_key: str | None,
+    environment_online: bool,
+    expert: bool = False,
+) -> Mode:
+    kind = ConversationKind(kind)
+    in_project = directory is not None and environment_key is not None
+    if kind is ConversationKind.WORK or expert:
+        if not in_project:
+            raise ValueError("work and expert turns need a project")
+        return Mode.EXPERT if expert else Mode.WORK
+    if in_project and environment_online:
+        return Mode.CHAT_IN_PROJECT
+    return Mode.CHAT
+
+
+def mode_note(mode: Mode | str, *, directory: str | None) -> str:
+    """换了情形之后，插进线里给模型看的一段说明。
+
+    同一条线上先聊天、后进项目、再转成工作，Codex 会换工具与权限，但不会告诉模型
+    「你现在有执行命令的工具了」。模型记得自己先前说过没有，就一直以为没有
+    （2026-09-29 在 Codex 0.155.1 与 kimi-k3 上见到）。所以换情形时明说一次。
+    """
+    mode = Mode(mode)
+    if mode is Mode.CHAT:
+        return (
+            "[workbench] This conversation is now in CHAT mode with no machine "
+            "attached. For this and the following turns you have no shell and no "
+            "access to files. Answer from the conversation and from the data tools. "
+            "If the user asks you to read or change files, say that this needs a "
+            "project and work mode."
+        )
+    if mode is Mode.CHAT_IN_PROJECT:
+        return (
+            "[workbench] This conversation is now in CHAT mode inside the project "
+            f"directory {directory} on the user's machine. For this and the "
+            "following turns the shell tool IS available, whatever was said earlier "
+            "in this conversation: use it to read files in that directory. The file "
+            "system is read-only and nobody will be asked for approval, so do not "
+            "try to create, change or delete anything. If the user asks for a "
+            "change, say that this conversation has to be switched to work mode."
+        )
+    return (
+        "[workbench] This conversation is now in WORK mode inside the project "
+        f"directory {directory} on the user's machine. For this and the following "
+        "turns the shell tool IS available, whatever was said earlier in this "
+        "conversation. You may read files, and create or change files inside the "
+        "project directory. Anything outside the project directory is off limits."
+    )
+
+
 def turn_settings(
     kind: ConversationKind | str,
     *,
     directory: str | None,
     environment_key: str | None,
     environment_online: bool,
-    approval_policy: str,
+    approval: str | None,
     expert: bool = False,
 ) -> dict[str, Any]:
     """这一轮发给 Codex 的四样：执行环境、目录、沙箱策略、审批。每一轮都带全。
@@ -143,11 +223,14 @@ def turn_settings(
     同一条线上可以先聊天、再工作、再交给专家，所以不能指望上一轮留下的设置：
     这一轮是什么，就明明白白发什么。页面传来的设置一概不用（F-PROJ-03）。
     """
-    kind = ConversationKind(kind)
-    in_project = directory is not None and environment_key is not None
-    if kind is ConversationKind.WORK or expert:
-        if not in_project:
-            raise ValueError("work and expert turns need a project")
+    mode = mode_of(
+        kind,
+        directory=directory,
+        environment_key=environment_key,
+        environment_online=environment_online,
+        expert=expert,
+    )
+    if mode in (Mode.WORK, Mode.EXPERT):
         return {
             "environments": [{"environmentId": environment_key, "cwd": directory}],
             "cwd": directory,
@@ -156,7 +239,7 @@ def turn_settings(
                 "writableRoots": [],
                 "networkAccess": False,
             },
-            "approvalPolicy": approval_policy,
+            "approvalPolicy": approval_policy(approval),
         }
     # 聊天：只读，越出只读的动作直接被拒，不问用户
     settings: dict[str, Any] = {
@@ -164,9 +247,39 @@ def turn_settings(
         "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
         "approvalPolicy": "never",
     }
-    if in_project and environment_online:
+    if mode is Mode.CHAT_IN_PROJECT:
         settings["environments"] = [
             {"environmentId": environment_key, "cwd": directory}
         ]
         settings["cwd"] = directory
+    return settings
+
+
+def thread_settings(
+    kind: ConversationKind | str,
+    *,
+    directory: str | None,
+    environment_key: str | None,
+    approval: str | None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """起一条线时的设置。之后每一轮还会各自带全，这里只是让线一开始就是对的。"""
+    kind = ConversationKind(kind)
+    in_project = directory is not None and environment_key is not None
+    if kind is ConversationKind.WORK and not in_project:
+        raise ValueError("work needs a project")
+    settings: dict[str, Any] = {
+        "environments": (
+            [{"environmentId": environment_key, "cwd": directory}] if in_project else []
+        ),
+        "sandbox": "workspace-write" if kind is ConversationKind.WORK else "read-only",
+        "approvalPolicy": (
+            approval_policy(approval) if kind is ConversationKind.WORK else "never"
+        ),
+    }
+    settings["config"] = dict(THREAD_CONFIG)
+    if in_project:
+        settings["cwd"] = directory
+    if model:
+        settings["model"] = model
     return settings

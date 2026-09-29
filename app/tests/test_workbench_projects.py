@@ -7,13 +7,17 @@ import pytest
 from app.domain.workbench.errors import ProjectPathInvalid
 from app.domain.workbench.projects import (
     ConversationKind,
+    approval_policy,
     clean_relative_path,
     clean_title,
     default_project_title,
     default_title,
     is_windows_root,
+    mode_note,
+    mode_of,
     project_dir,
     split_under_roots,
+    thread_settings,
     turn_settings,
 )
 
@@ -143,7 +147,7 @@ def test_chat_outside_a_project_has_no_environment_and_is_read_only():
         directory=None,
         environment_key=None,
         environment_online=False,
-        approval_policy="on-request",
+        approval="on-request",
     )
     assert settings == {
         "environments": [],
@@ -156,7 +160,7 @@ def test_chat_in_a_project_reads_files_only_while_the_machine_is_online():
     common = {
         "directory": "/home/me/research/a",
         "environment_key": "user-pc",
-        "approval_policy": "on-request",
+        "approval": "on-request",
     }
     online = turn_settings(ConversationKind.CHAT, environment_online=True, **common)
     assert online == {
@@ -177,7 +181,7 @@ def test_work_writes_inside_the_project_with_the_users_approval_policy(policy):
         directory="/home/me/research/a",
         environment_key="user-pc",
         environment_online=True,
-        approval_policy=policy,
+        approval=policy,
     )
     assert settings["sandboxPolicy"]["type"] == "workspaceWrite"
     assert settings["sandboxPolicy"]["networkAccess"] is False
@@ -192,7 +196,7 @@ def test_the_expert_works_even_on_a_conversation_that_began_as_chat():
         directory="/home/me/research/a",
         environment_key="user-pc",
         environment_online=True,
-        approval_policy="on-request",
+        approval="on-request",
         expert=True,
     )
     assert settings["sandboxPolicy"]["type"] == "workspaceWrite"
@@ -207,6 +211,109 @@ def test_work_and_expert_turns_cannot_be_built_without_a_project():
                 directory=None,
                 environment_key=None,
                 environment_online=True,
-                approval_policy="on-request",
+                approval="on-request",
                 expert=expert,
             )
+
+
+def test_an_approval_policy_codex_no_longer_knows_falls_back():
+    assert approval_policy("never") == "never"
+    assert approval_policy("untrusted") == "untrusted"
+    for unknown in ("on-failure", "", None, "always"):
+        assert approval_policy(unknown) == "on-request"
+    settings = turn_settings(
+        "work",
+        directory="/p",
+        environment_key="user-pc",
+        environment_online=True,
+        approval="on-failure",
+    )
+    assert settings["approvalPolicy"] == "on-request"
+
+
+def test_the_thread_starts_with_the_settings_of_its_kind():
+    quiet = {"features.multi_agent": False, "features.goals": False}
+    assert thread_settings(
+        "chat", directory=None, environment_key=None, approval="untrusted"
+    ) == {
+        "environments": [],
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "config": quiet,
+    }
+    assert thread_settings(
+        "chat", directory="/p", environment_key="user-pc", approval="untrusted"
+    ) == {
+        "environments": [{"environmentId": "user-pc", "cwd": "/p"}],
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "config": quiet,
+        "cwd": "/p",
+    }
+    assert thread_settings(
+        "work",
+        directory="/p",
+        environment_key="user-pc",
+        approval="untrusted",
+        model="kimi-k3",
+    ) == {
+        "environments": [{"environmentId": "user-pc", "cwd": "/p"}],
+        "sandbox": "workspace-write",
+        "approvalPolicy": "untrusted",
+        "config": quiet,
+        "cwd": "/p",
+        "model": "kimi-k3",
+    }
+    with pytest.raises(ValueError):
+        thread_settings("work", directory=None, environment_key=None, approval=None)
+
+
+@pytest.mark.parametrize(
+    ("kind", "directory", "online", "expert", "expected"),
+    [
+        ("chat", None, True, False, "chat"),
+        ("chat", "/p", False, False, "chat"),  # 机器不在线：和没有项目一样，动不了手
+        ("chat", "/p", True, False, "chat_in_project"),
+        ("work", "/p", True, False, "work"),
+        ("work", "/p", False, False, "work"),
+        ("chat", "/p", True, True, "expert"),
+        ("work", "/p", True, True, "expert"),
+    ],
+)
+def test_the_mode_of_a_turn(kind, directory, online, expert, expected):
+    assert (
+        mode_of(
+            kind,
+            directory=directory,
+            environment_key="user-pc" if directory else None,
+            environment_online=online,
+            expert=expert,
+        )
+        == expected
+    )
+
+
+def test_work_and_expert_need_a_project():
+    for kind, expert in (("work", False), ("chat", True)):
+        with pytest.raises(ValueError):
+            mode_of(
+                kind,
+                directory=None,
+                environment_key=None,
+                environment_online=True,
+                expert=expert,
+            )
+
+
+def test_the_note_says_what_the_model_has_in_hand():
+    chat = mode_note("chat", directory=None)
+    assert "no shell" in chat and "/p" not in chat
+    reading = mode_note("chat_in_project", directory="/p")
+    assert "shell tool IS available" in reading and "read-only" in reading
+    assert "/p" in reading
+    for mode in ("work", "expert"):
+        writing = mode_note(mode, directory="/p")
+        assert "shell tool IS available" in writing and "/p" in writing
+        assert "read-only" not in writing
+    # 说明是给模型看的，开头有固定的标记，页面据此不把它当成用户的话
+    assert all(n.startswith("[workbench] ") for n in (chat, reading))

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import secrets
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,12 +24,20 @@ from app.application.ports.workbench import (
 )
 from app.application.workbench.advisor import Advisor, TurnResult
 from app.domain.workbench.packs import find_pack
+from app.domain.workbench.projects import (
+    THREAD_CONFIG,
+    mode_note,
+    mode_of,
+    thread_settings,
+    turn_settings,
+)
 from app.domain.workbench.states import Wheel
 
 log = logging.getLogger(__name__)
 
 # 不落库的流式通知（条目级事件才进 Session 事件，persistence.md）
-_SKIP_SUFFIXES = ("/delta", "/outputDelta", "/reasoningDelta", "/textDelta")
+# 增量不入账：成段的内容在 item/completed 里。0.155.1 的名字有 …/delta、…/outputDelta、…/summaryTextDelta 等
+_SKIP_SUFFIXES = ("/delta", "Delta")
 _KIND_BY_PREFIX = (
     ("thread/environment/", "environment"),
     ("thread/tokenUsage", "usage"),
@@ -73,6 +82,20 @@ def thread_id_of(params: dict[str, Any]) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class TurnPlan:
+    """这一轮怎么发：四样设置，以及这一轮属于哪种情形。"""
+
+    settings: dict[str, Any] = field(default_factory=dict)
+    mode: str | None = None
+    directory: str | None = None
+    session_id: str | None = None
+
+    @property
+    def signature(self) -> str | None:
+        return None if self.mode is None else f"{self.mode}|{self.directory or ''}"
+
+
 class SandboxLink:
     """一个沙箱一条连接。"""
 
@@ -85,6 +108,8 @@ class SandboxLink:
         # 当前这条连接对面的 app-server 进程已经装载的线程。沙箱回收再拉起是新进程，盘上的 rollout 还在、
         # 内存里没有：turn/start 前要先 thread/resume（KIND 2026-09-26 第 13 轮：401 修好后改报 thread not found）
         self.live_threads: set[str] = set()
+        # 每条线上一次向模型说明的情形。进程重启后会再说一次，多说一次无妨
+        self.announced: dict[str, str] = {}
         self.pending_approvals: dict[
             str, asyncio.Future
         ] = {}  # request_id -> future(decision)
@@ -116,9 +141,68 @@ class SandboxLink:
         if thread_id in self.live_threads:
             return
         client = await self.ensure_connected()
-        await client.request("thread/resume", {"threadId": thread_id}, timeout=60)
+        await client.request(
+            "thread/resume",
+            {"threadId": thread_id, "config": dict(THREAD_CONFIG)},
+            timeout=60,
+        )
         self.live_threads.add(thread_id)
         log.info("thread resumed sandbox=%s thread=%s", self.sandbox_id, thread_id)
+
+    async def announce(self, thread_id: str, plan: TurnPlan) -> None:
+        """情形换了，就往线里插一段说明，再发这一轮。说明进账：模型看到过什么，账里要有。
+
+        插不进去不拦这一轮：四样设置照样随这一轮发出，权限不受影响，只是模型可能不知道自己手里有什么。
+        """
+        signature = plan.signature
+        if signature is None or self.announced.get(thread_id) == signature:
+            return
+        assert plan.mode is not None
+        note = mode_note(plan.mode, directory=plan.directory)
+        client = await self.ensure_connected()
+        injected = True
+        try:
+            await client.request(
+                "thread/inject_items",
+                {
+                    "threadId": thread_id,
+                    "items": [
+                        {
+                            "type": "message",
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": note}],
+                        }
+                    ],
+                },
+                timeout=30,
+            )
+        except AppServerError as exc:
+            injected = False
+            log.warning(
+                "mode note not injected sandbox=%s thread=%s: %s",
+                self.sandbox_id,
+                thread_id,
+                exc,
+            )
+        self.announced[thread_id] = signature
+        if plan.session_id is None:
+            return
+        async with self.runner.stores() as repo:
+            async with repo.transaction():
+                event = await repo.append_event(
+                    session_id=plan.session_id,
+                    kind="session",
+                    event_type="session/mode_announced",
+                    payload={
+                        "mode": plan.mode,
+                        "directory": plan.directory,
+                        "injected": injected,
+                        "note": note,
+                    },
+                )
+            await self.runner.publisher.publish(
+                self.runner.publisher.session_channel(plan.session_id), event
+            )
 
     async def session_for_thread(
         self, thread_id: str | None, repo: WorkbenchStore
@@ -191,9 +275,15 @@ class SandboxLink:
         """TurnDriver：顾问在用户的 thread 上发一个 turn 并等它结束。"""
         client = await self.ensure_connected()
         await self.ensure_thread(thread_id)
+        plan = await self.runner.turn_plan(thread_id=thread_id, expert=True)
+        await self.announce(thread_id, plan)
         result = await client.request(
             "turn/start",
-            {"threadId": thread_id, "input": [{"type": "text", "text": text}]},
+            {
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": text}],
+                **plan.settings,
+            },
             timeout=120,
         )
         turn_id = ((result or {}).get("turn") or {}).get("id")
@@ -596,12 +686,15 @@ class Runner:
                 raise RuntimeError(
                     f"wheel is held by {session['wheel']}; turn by {payload.get('by', 'user')} refused"
                 )
+            plan = await self.turn_plan(session=session, expert=False)
+            await link.announce(session["thread_id"], plan)
             result = await client.request(
                 "turn/start",
                 {
                     "threadId": session["thread_id"],
                     "input": [{"type": "text", "text": payload["text"]}],
                     "clientUserMessageId": payload.get("request_id"),
+                    **plan.settings,
                 },
                 timeout=120,
             )
@@ -630,6 +723,50 @@ class Runner:
             )
             return
         raise RuntimeError(f"unknown command kind {kind}")
+
+    async def turn_plan(
+        self,
+        *,
+        session: dict[str, Any] | None = None,
+        thread_id: str | None = None,
+        expert: bool,
+    ) -> TurnPlan:
+        """这一轮的执行环境、目录、沙箱策略、审批。每一轮都带全，不靠上一轮留下的。
+
+        同一条线上可以先聊天、再工作、再交给专家；是什么由账里的种类与方向盘定，
+        不由页面定（F-PROJ-03）。查不到这条线属于哪段对话时什么都不带，沿用线上原有的。
+        """
+        async with self.stores() as repo:
+            if session is None and thread_id is not None:
+                session = await repo.get_session_by_thread(thread_id)
+            if session is None:
+                return TurnPlan()
+            prefs = await repo.get_prefs(str(session["owner_actor_id"]))
+            online = True
+            if session.get("environment_id") is not None:
+                env = await repo.get_environment(str(session["environment_id"]))
+                online = env.get("status") == "online"
+        legacy = dict(session.get("thread_settings") or {})
+        directory = session.get("project_root")
+        facts: dict[str, Any] = {
+            "directory": directory,
+            "environment_key": (
+                legacy.get("environmentId", self.environment_key) if directory else None
+            ),
+            "environment_online": online,
+            "expert": expert,
+        }
+        kind = session.get("kind") or "work"
+        return TurnPlan(
+            settings=turn_settings(
+                kind,
+                approval=legacy.get("approvalPolicy") or prefs.get("approval_policy"),
+                **facts,
+            ),
+            mode=str(mode_of(kind, **facts)),
+            directory=directory,
+            session_id=str(session["id"]),
+        )
 
     async def _drive(self, task_id: str, link: SandboxLink) -> None:
         advisor = Advisor(self.stores, link)
@@ -677,13 +814,25 @@ class Runner:
     ) -> None:
         settings = dict(session.get("thread_settings") or {})
         env_key = settings.pop("environmentId", self.environment_key)
-        params = {
-            "cwd": session["project_root"],
-            "environments": [
-                {"environmentId": env_key, "cwd": session["project_root"]}
-            ],
-            **settings,
-        }
+        if settings:  # 旧入口建的会话：沿用它记下的设置
+            params = {
+                "cwd": session["project_root"],
+                "environments": [
+                    {"environmentId": env_key, "cwd": session["project_root"]}
+                ],
+                **settings,
+            }
+            params.setdefault("config", dict(THREAD_CONFIG))
+        else:
+            async with self.stores() as repo:
+                prefs = await repo.get_prefs(str(session["owner_actor_id"]))
+            params = thread_settings(
+                session.get("kind") or "work",
+                directory=session.get("project_root"),
+                environment_key=env_key if session.get("project_root") else None,
+                approval=prefs.get("approval_policy"),
+                model=prefs.get("model"),
+            )
         try:
             result = await client.request("thread/start", params, timeout=60)
         except AppServerError as exc:
@@ -693,7 +842,10 @@ class Runner:
             raise RuntimeError(f"thread/start returned no thread id: {result}")
         link.threads[thread_id] = str(session["id"])
         link.live_threads.add(thread_id)
-        payload: dict[str, Any] = {"thread_id": thread_id, "environment": env_key}
+        payload: dict[str, Any] = {
+            "thread_id": thread_id,
+            "environment": env_key if session.get("project_root") else None,
+        }
         if replaced:
             payload["replaced_thread_id"] = replaced
         async with self.stores() as repo:
