@@ -332,15 +332,15 @@ def test_empty_tables_are_rejected():
         ({"data_version": ""}, "non_empty(data_version): 没有数据版本"),
         (
             {"answer": "综合来看建议买入。"},
-            "no_positioning_advice: 含投资建议措辞（F-POS-04）",
+            "no_positioning_advice: 含有评级、目标价或买卖建议的措辞",
         ),
         (
             {"observations": ["目标价 40 元"]},
-            "no_positioning_advice: 含投资建议措辞（F-POS-04）",
+            "no_positioning_advice: 含有评级、目标价或买卖建议的措辞",
         ),
         (
             {"tables": [{"title": "t", "rows": [{"备注": "强烈推荐"}]}]},
-            "no_positioning_advice: 含投资建议措辞（F-POS-04）",
+            "no_positioning_advice: 含有评级、目标价或买卖建议的措辞",
         ),
     ],
 )

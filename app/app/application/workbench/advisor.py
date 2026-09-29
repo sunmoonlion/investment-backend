@@ -20,6 +20,7 @@ from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
 from app.domain.workbench.states import AttemptState, TaskState, WaitingReason
+from app.domain.workbench.step_view import RAW_CHARS
 
 log = logging.getLogger(__name__)
 
@@ -312,6 +313,13 @@ class Advisor:
                     "checks": verdict.checks,
                     "rework": reworks,
                     "on_reject": step.on_reject,
+                    # 没通过的这一次交回了什么，留着：重做之后还看得到（AT-INV-21）
+                    "returned": {
+                        "content": verdict.parsed,
+                        "raw": None
+                        if verdict.parsed is not None
+                        else (result.final_text or "")[:RAW_CHARS],
+                    },
                 },
                 task_id=task_id,
                 attempt_id=attempt_id,

@@ -180,3 +180,43 @@ def test_nested_paths():
     assert verdict({"result": {"checks": [{"unbalanced": 0}]}}, rule).ok
     assert not verdict({"result": {"checks": [{"unbalanced": 4}]}}, rule).ok
     assert not verdict({"result": []}, rule).ok
+
+
+def test_checks_carry_the_words_shown_to_users():
+    rules = (
+        AcceptanceRule(
+            kind="json_object", message="交回物不是 JSON 对象", label="交回的格式对"
+        ),
+        AcceptanceRule(
+            kind="list_min", path="plan", message="计划是空的", label="计划不是空的"
+        ),
+    )
+    good = judge('{"plan": ["a"]}', rules)
+    assert [(c["label"], c["pass"], c["message"]) for c in good.checks] == [
+        ("交回的格式对", True, ""),
+        ("计划不是空的", True, ""),
+    ]
+    bad = judge('{"plan": []}', rules)
+    assert [(c["label"], c["pass"], c["message"]) for c in bad.checks] == [
+        ("交回的格式对", True, ""),
+        ("计划不是空的", False, "计划是空的"),
+    ]
+
+
+def test_when_the_format_is_wrong_the_rest_is_recorded_as_not_checked():
+    rules = (
+        AcceptanceRule(
+            kind="json_object", message="交回物不是 JSON 对象", label="交回的格式对"
+        ),
+        AcceptanceRule(
+            kind="list_min", path="plan", message="计划是空的", label="计划不是空的"
+        ),
+    )
+    result = judge("not json at all", rules)
+    assert not result.ok
+    assert [(c["label"], c["pass"]) for c in result.checks] == [
+        ("交回的格式对", False),
+        ("计划不是空的", None),
+    ]
+    assert result.checks[0]["message"] == "交回物不是 JSON 对象"
+    assert len(result.failures) == 1

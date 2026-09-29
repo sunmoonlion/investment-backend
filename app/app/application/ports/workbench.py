@@ -288,6 +288,24 @@ class WorkbenchStore(Protocol):
         self, *, session_id: str, after_cursor: int = 0, limit: int = 500
     ) -> list[dict[str, Any]]: ...
 
+    async def list_owner_interactions(
+        self, *, owner_actor_id: str, status: str | None, limit: int = 100
+    ) -> list[dict[str, Any]]: ...
+
+    async def interaction_opened_cursor(
+        self, *, session_id: str, interaction_id: str
+    ) -> int | None: ...
+
+    async def list_task_events(
+        self, task_id: str, *, types: tuple[str, ...]
+    ) -> list[dict[str, Any]]: ...
+
+    async def list_turn_items(
+        self, *, session_id: str, turn_ids: list[str]
+    ) -> list[dict[str, Any]]: ...
+
+    async def artifact_contents(self, task_id: str) -> dict[str, Any]: ...
+
     async def find_task_by_idempotency(
         self, *, tenant: str, owner_actor_id: str, profile_id: str, idempotency_key: str
     ) -> dict[str, Any] | None: ...

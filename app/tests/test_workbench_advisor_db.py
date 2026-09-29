@@ -423,7 +423,7 @@ async def test_positioning_advice_is_blocked(db):
                 if e["type"] == "step/rejected"
             ]
             assert any(
-                "F-POS-04" in f for e in rejected for f in e["payload"]["failures"]
+                "买卖建议" in f for e in rejected for f in e["payload"]["failures"]
             )
         await close(runner)
     finally:

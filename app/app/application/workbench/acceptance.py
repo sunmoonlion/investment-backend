@@ -109,7 +109,31 @@ def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
         except ValueError as exc:
             v.ok = False
             v.failures.append(f"json_object: {exc}")
-            v.checks.append({"rule": "json_object", "pass": False, "detail": str(exc)})
+            first = next((r for r in rules if r.kind == "json_object"), None)
+            v.checks.append(
+                {
+                    "rule": "json_object",
+                    "path": None,
+                    "pass": False,
+                    "detail": str(exc),
+                    "label": first.label if first else "",
+                    "message": (first.message if first else "")
+                    or "交回物不是 JSON 对象",
+                }
+            )
+            # 格式不对，后面的各条无从验起：如实记成「没有验」，不记成通过或不通过
+            v.checks += [
+                {
+                    "rule": r.kind,
+                    "path": r.path,
+                    "pass": None,
+                    "detail": "not checked",
+                    "label": r.label,
+                    "message": "",
+                }
+                for r in rules
+                if r is not first
+            ]
             return v
     v.parsed = parsed
     for r in rules:
@@ -142,7 +166,17 @@ def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
             val = _get(parsed, r.path)
             ok = val is None or (isinstance(val, str) and val.strip() == "")
             detail = "" if ok else "has content"
-        v.checks.append({"rule": r.kind, "path": r.path, "pass": ok, "detail": detail})
+        v.checks.append(
+            {
+                "rule": r.kind,
+                "path": r.path,
+                "pass": ok,
+                "detail": detail,
+                # 给用户看的两句：这条验收叫什么；不通过时怎么说
+                "label": r.label,
+                "message": "" if ok else r.message,
+            }
+        )
         if not ok:
             v.ok = False
             v.failures.append(

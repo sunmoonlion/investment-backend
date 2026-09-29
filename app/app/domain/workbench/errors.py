@@ -111,3 +111,17 @@ class NoSandbox(WorkbenchError):
 
     code = "no_sandbox"
     http_status = 409
+
+
+class EnvironmentOffline(WorkbenchError):
+    """项目所在的机器不在线。专家要在上面干活，所以交不出去。"""
+
+    code = "environment_offline"
+    http_status = 409
+
+
+class NoSuchExpert(WorkbenchError):
+    """没有这位专家，或者它不给用户用。"""
+
+    code = "no_such_expert"
+    http_status = 404

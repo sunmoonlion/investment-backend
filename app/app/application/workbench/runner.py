@@ -660,6 +660,7 @@ class Runner:
             running = self.driving.get(task_id)
             if running and not running.done():
                 return
+            await self._thread_for_task(task_id, session, link)
             self.driving[task_id] = asyncio.create_task(
                 self._drive(task_id, link), name=f"drive:{task_id}"
             )
@@ -767,6 +768,25 @@ class Runner:
             directory=directory,
             session_id=str(session["id"]),
         )
+
+    async def _thread_for_task(
+        self, task_id: str, session: dict[str, Any], link: SandboxLink
+    ) -> None:
+        """从专家入口请的专家，对话是新建的，还没有线：先起线，再把线记到委托上。"""
+        if session["thread_id"] is None:
+            client = await link.ensure_connected()
+            await self._start_thread(link, client, session)
+        async with self.stores() as repo:
+            task = await repo.get_task(task_id)
+            if task["thread_id"]:
+                return
+            session = await repo.get_session(str(session["id"]))
+            async with repo.transaction():
+                await repo.cas_task(
+                    task_id,
+                    expected_version=int(task["state_version"]),
+                    thread_id=session["thread_id"],
+                )
 
     async def _drive(self, task_id: str, link: SandboxLink) -> None:
         advisor = Advisor(self.stores, link)

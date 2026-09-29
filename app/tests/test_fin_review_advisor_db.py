@@ -311,7 +311,9 @@ async def test_a_note_with_advice_or_a_conclusion_is_not_handed_back_as_done(db)
                 for e in await repo.list_events(session_id=sid)
                 if e["type"] == "step/rejected"
             ]
-        assert rejected[0] == ["no_positioning_advice: 含投资建议措辞（F-POS-04）"]
+        assert rejected[0] == [
+            "no_positioning_advice: 含有评级、目标价或买卖建议的措辞"
+        ]
     finally:
         await close(runner)
         await fake.close()

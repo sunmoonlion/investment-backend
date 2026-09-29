@@ -45,6 +45,14 @@ def _j(v: Any) -> str:
     return json.dumps(v, ensure_ascii=False, default=str)
 
 
+def _event(row: Any) -> dict[str, Any]:
+    d = dict(row)
+    for k in ("id", "session_id", "task_id", "attempt_id"):
+        if d.get(k) is not None:
+            d[k] = str(d[k])
+    return d
+
+
 class WorkbenchRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -515,14 +523,36 @@ class WorkbenchRepository:
                     from workbench_session_events where session_id = :s and cursor > :c order by cursor asc limit :l"""),
             {"s": session_id, "c": after_cursor, "l": limit},
         )
-        out = []
-        for m in r.mappings().all():
-            d = dict(m)
-            for k in ("id", "session_id", "task_id", "attempt_id"):
-                if d.get(k) is not None:
-                    d[k] = str(d[k])
-            out.append(d)
-        return out
+        return [_event(m) for m in r.mappings().all()]
+
+    async def list_task_events(
+        self, task_id: str, *, types: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        """一个委托名下、指定种类的事件，按先后。步骤视图用：每一次验收的结果记在这里。"""
+        r = await self.session.execute(
+            text("""select id, session_id, cursor, kind, event_type as type, payload, task_id, attempt_id, created_at
+                    from workbench_session_events
+                    where task_id = :t and event_type = any(:types) order by cursor asc"""),
+            {"t": task_id, "types": list(types)},
+        )
+        return [_event(m) for m in r.mappings().all()]
+
+    async def list_turn_items(
+        self, *, session_id: str, turn_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """这几轮里做完的动作（查询、命令）。Codex 发来的事件不带委托编号，按轮次找。"""
+        if not turn_ids:
+            return []
+        r = await self.session.execute(
+            text("""select id, session_id, cursor, kind, event_type as type, payload, task_id, attempt_id, created_at
+                    from workbench_session_events
+                    where session_id = :s and event_type = 'item/completed'
+                      and payload->>'turnId' = any(:turns)
+                      and payload->'item'->>'type' in ('mcpToolCall', 'commandExecution')
+                    order by cursor asc"""),
+            {"s": session_id, "turns": list(turn_ids)},
+        )
+        return [_event(m) for m in r.mappings().all()]
 
     # ---------- tasks ----------
     async def find_task_by_idempotency(
@@ -776,6 +806,39 @@ class WorkbenchRepository:
         r = await self.session.execute(text(sql), {"s": session_id, "st": status})
         return [dict(m) for m in r.mappings().all()]
 
+    async def list_owner_interactions(
+        self, *, owner_actor_id: str, status: str | None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """这个用户各段对话里的待办，新的在前。归属按对话的所有者认。"""
+        sql = (
+            """select i.* from workbench_interactions i
+               join workbench_sessions s on s.id = i.session_id
+               where s.owner_actor_id = :o"""
+            + (" and i.status = :st" if status else "")
+            + (
+                " and (i.expires_at is null or i.expires_at > now())"
+                if status == "pending"
+                else ""
+            )
+            + " order by i.created_at desc limit :l"
+        )
+        r = await self.session.execute(
+            text(sql), {"o": owner_actor_id, "st": status, "l": limit}
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def interaction_opened_cursor(
+        self, *, session_id: str, interaction_id: str
+    ) -> int | None:
+        r = await self.session.execute(
+            text("""select cursor from workbench_session_events
+                    where session_id = :s and event_type = 'interaction/opened'
+                      and payload->>'interaction_id' = :i order by cursor limit 1"""),
+            {"s": session_id, "i": interaction_id},
+        )
+        found = r.scalar_one_or_none()
+        return None if found is None else int(found)
+
     async def consume_interaction(
         self, interaction_id: str, *, response: dict, responded_by: str
     ) -> bool:
@@ -864,6 +927,14 @@ class WorkbenchRepository:
             {"t": task_id},
         )
         return [dict(m) for m in r.mappings().all()]
+
+    async def artifact_contents(self, task_id: str) -> dict[str, Any]:
+        """一个委托的全部交回物的内容，按交回物的编号取。每个版本都在，不只最新的。"""
+        r = await self.session.execute(
+            text("select id, content from workbench_artifacts where task_id = :t"),
+            {"t": task_id},
+        )
+        return {str(m["id"]): m["content"] for m in r.mappings().all()}
 
     async def list_artifacts_with_content(self, task_id: str) -> list[dict[str, Any]]:
         """底稿页用：每个名字取最新版本，带内容。"""

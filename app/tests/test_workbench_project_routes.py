@@ -341,3 +341,23 @@ async def test_nobody_reaches_somebody_elses_projects_or_conversations(
             f"/api/workbench/sessions/{mine}/project", json={"project_id": made["id"]}
         )
         assert refused.status_code == 404 and other_env != env
+
+
+async def test_the_experts_on_offer(make_client, db):  # noqa: F811
+    """AT-INV-17、AT-INV-19"""
+    async with make_client(A) as http:
+        got = await http.get("/api/workbench/packs")
+        assert got.status_code == 200
+        body = got.json()
+        assert body["contract_version"] == 2
+        assert body["budget"] == {"currency": "CNY", "default": None}
+        assert [p["name"] for p in body["packs"]] == ["问数", "财报体检"]
+        assert "method" not in got.text and "Reply with ONE JSON" not in got.text
+
+        one = await http.get("/api/workbench/packs/FIN_REVIEW")
+        assert one.status_code == 200
+        assert len(one.json()["pack"]["steps"]) == 7
+
+        # 只给我们自己测机制用的，不给用户看
+        assert (await http.get("/api/workbench/packs/SMOKE")).status_code == 404
+        assert (await http.get("/api/workbench/packs/NOPE")).status_code == 404

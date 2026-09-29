@@ -15,6 +15,7 @@ from typing import Any
 from app.application.ports.workbench import WorkbenchStore
 from app.domain.workbench.errors import (
     BudgetExhausted,
+    EnvironmentOffline,
     IdempotencyConflict,
     InteractionRejected,
     ProjectBusy,
@@ -96,6 +97,14 @@ class Ledger:
                 raise ProjectRequired(
                     "put this conversation into a project before asking the expert",
                     session_id=req.session_id,
+                )
+            environment = await self.repo.get_environment(
+                str(session["environment_id"])
+            )
+            if environment.get("status") != "online":
+                raise EnvironmentOffline(
+                    "the machine of this project is offline; the expert works on it",
+                    environment_id=str(session["environment_id"]),
                 )
             # 先锁住项目：同一个项目的两次求助排队进行，后到的看得见先到的
             await self.repo.get_project(str(session["project_id"]), for_update=True)
