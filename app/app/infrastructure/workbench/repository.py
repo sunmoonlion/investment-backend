@@ -18,10 +18,16 @@ from functools import wraps
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.dto.outbox import OutboxEvent
-from app.domain.workbench.errors import NotFound, StaleStateVersion
+from app.domain.workbench.errors import (
+    NotFound,
+    ProjectBusy,
+    ProjectExists,
+    StaleStateVersion,
+)
 from app.domain.workbench.tokens import token_hash
 from app.infrastructure.repositories.outbox import SqlOutboxRepository
 
@@ -167,20 +173,160 @@ class WorkbenchRepository:
         )
         return [dict(m) for m in r.mappings().all()]
 
+    async def current_sandbox(self, owner_actor_id: str) -> dict[str, Any] | None:
+        """这个人现在用的沙箱：按需拉起的优先，其次是最近登记的；回收了的不算。"""
+        r = await self.session.execute(
+            text(
+                """select * from workbench_sandboxes where owner_actor_id = :o and status <> 'deleted'
+                   order by provisioned desc, updated_at desc, created_at desc limit 1"""
+            ),
+            {"o": owner_actor_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    # ---------- projects ----------
+    async def create_project(
+        self,
+        *,
+        owner_actor_id: str,
+        environment_id: str,
+        workspace_root: str,
+        path: str,
+        title: str,
+    ) -> str:
+        project_id = str(uuid.uuid4())
+        try:
+            # 保存点：撞上唯一索引时只回退这一句，调用方的事务还能接着用
+            async with self.session.begin_nested():
+                await self.session.execute(
+                    text(
+                        """insert into workbench_projects (id, owner_actor_id, environment_id, workspace_root, path, title)
+                           values (:id, :o, :e, :r, :p, :t)"""
+                    ),
+                    {
+                        "id": project_id,
+                        "o": owner_actor_id,
+                        "e": environment_id,
+                        "r": workspace_root,
+                        "p": path,
+                        "t": title,
+                    },
+                )
+        except IntegrityError as exc:
+            if "uq_workbench_projects_live_dir" in str(exc.orig):
+                raise ProjectExists(
+                    "a project already exists for this directory"
+                ) from None
+            raise
+        return project_id
+
+    async def get_project(
+        self,
+        project_id: str,
+        *,
+        owner_actor_id: str | None = None,
+        for_update: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            key = str(uuid.UUID(str(project_id)))
+        except ValueError:
+            raise NotFound("project not found", project_id=project_id) from None
+        sql = "select * from workbench_projects where id = :id" + (
+            " for update" if for_update else ""
+        )
+        row = (await self.session.execute(text(sql), {"id": key})).mappings().first()
+        if row is None or (
+            owner_actor_id is not None and str(row["owner_actor_id"]) != owner_actor_id
+        ):
+            raise NotFound("project not found", project_id=project_id)
+        return dict(row)
+
+    async def find_project(
+        self,
+        *,
+        owner_actor_id: str,
+        environment_id: str,
+        workspace_root: str,
+        path: str,
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_projects where owner_actor_id = :o and environment_id = :e
+                   and workspace_root = :r and path = :p and archived_at is null"""
+            ),
+            {"o": owner_actor_id, "e": environment_id, "r": workspace_root, "p": path},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def list_projects(
+        self, *, owner_actor_id: str, include_archived: bool = False
+    ) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """select p.*,
+                          (select count(*) from workbench_sessions s where s.project_id = p.id) as conversations,
+                          (select max(s.last_active_at) from workbench_sessions s where s.project_id = p.id) as last_active_at
+                   from workbench_projects p where p.owner_actor_id = :o"""
+                + ("" if include_archived else " and p.archived_at is null")
+                + " order by p.workspace_root, p.path"
+            ),
+            {"o": owner_actor_id},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def update_project(
+        self,
+        project_id: str,
+        *,
+        title: str | None = None,
+        archived: bool | None = None,
+    ) -> None:
+        try:
+            async with self.session.begin_nested():
+                if title is not None:
+                    await self.session.execute(
+                        text(
+                            "update workbench_projects set title = :t, updated_at = now() where id = :id"
+                        ),
+                        {"t": title, "id": project_id},
+                    )
+                if archived is not None:
+                    await self.session.execute(
+                        text(
+                            "update workbench_projects set archived_at = "
+                            + ("now()" if archived else "null")
+                            + ", updated_at = now() where id = :id"
+                        ),
+                        {"id": project_id},
+                    )
+        except IntegrityError as exc:
+            if "uq_workbench_projects_live_dir" in str(exc.orig):
+                raise ProjectExists(
+                    "another project already uses this directory"
+                ) from None
+            raise
+
     # ---------- sessions ----------
     async def create_session(
         self,
         *,
         owner_actor_id: str,
-        environment_id: str,
+        environment_id: str | None,
         sandbox_id: str,
-        project_root: str,
+        project_root: str | None,
         thread_settings: dict,
+        kind: str = "work",
+        project_id: str | None = None,
+        title: str | None = None,
     ) -> str:
         sid = str(uuid.uuid4())
         await self.session.execute(
-            text("""insert into workbench_sessions (id, owner_actor_id, environment_id, sandbox_id, project_root, thread_settings)
-                    values (:id, :owner, :env, :sb, :root, cast(:ts as jsonb))"""),
+            text("""insert into workbench_sessions
+                        (id, owner_actor_id, environment_id, sandbox_id, project_root, thread_settings,
+                         kind, project_id, title)
+                    values (:id, :owner, :env, :sb, :root, cast(:ts as jsonb), :kind, :project, :title)"""),
             {
                 "id": sid,
                 "owner": owner_actor_id,
@@ -188,9 +334,50 @@ class WorkbenchRepository:
                 "sb": sandbox_id,
                 "root": project_root,
                 "ts": _j(thread_settings),
+                "kind": kind,
+                "project": project_id,
+                "title": title,
             },
         )
         return sid
+
+    async def attach_session_project(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        environment_id: str,
+        project_root: str,
+    ) -> None:
+        await self.session.execute(
+            text(
+                """update workbench_sessions set project_id = :p, environment_id = :e, project_root = :r,
+                   last_active_at = now() where id = :id and project_id is null"""
+            ),
+            {"p": project_id, "e": environment_id, "r": project_root, "id": session_id},
+        )
+
+    async def set_session_kind(self, session_id: str, kind: str) -> None:
+        await self.session.execute(
+            text(
+                "update workbench_sessions set kind = :k, last_active_at = now() where id = :id"
+            ),
+            {"k": kind, "id": session_id},
+        )
+
+    async def set_session_title(self, session_id: str, title: str | None) -> None:
+        await self.session.execute(
+            text("update workbench_sessions set title = :t where id = :id"),
+            {"t": title, "id": session_id},
+        )
+
+    async def set_session_title_if_empty(self, session_id: str, title: str) -> None:
+        await self.session.execute(
+            text(
+                "update workbench_sessions set title = :t where id = :id and title is null"
+            ),
+            {"t": title, "id": session_id},
+        )
 
     async def get_session(
         self,
@@ -210,12 +397,21 @@ class WorkbenchRepository:
             raise NotFound("session not found", session_id=session_id)
         return dict(row)
 
-    async def list_sessions(self, *, owner_actor_id: str) -> list[dict[str, Any]]:
+    async def list_sessions(
+        self,
+        *,
+        owner_actor_id: str,
+        project_id: str | None = None,
+        without_project: bool = False,
+    ) -> list[dict[str, Any]]:
+        sql = "select * from workbench_sessions where owner_actor_id = :o"
+        if project_id is not None:
+            sql += " and project_id = :p"
+        if without_project:
+            sql += " and project_id is null"
         r = await self.session.execute(
-            text(
-                "select * from workbench_sessions where owner_actor_id = :o order by last_active_at desc"
-            ),
-            {"o": owner_actor_id},
+            text(sql + " order by last_active_at desc"),
+            {"o": owner_actor_id, "p": project_id},
         )
         return [dict(m) for m in r.mappings().all()]
 
@@ -357,10 +553,20 @@ class WorkbenchRepository:
             c: (_j(task[c]) if c in json_cols and task[c] is not None else task[c])
             for c in cols
         }
-        await self.session.execute(
-            text(f"insert into workbench_tasks ({', '.join(cols)}) values ({values})"),
-            params,
-        )
+        try:
+            async with self.session.begin_nested():
+                await self.session.execute(
+                    text(
+                        f"insert into workbench_tasks ({', '.join(cols)}) values ({values})"
+                    ),
+                    params,
+                )
+        except IntegrityError as exc:
+            if "uq_workbench_tasks_project_active" in str(exc.orig):
+                raise ProjectBusy(
+                    "the expert is already working on something in this project"
+                ) from None
+            raise
 
     async def get_task(
         self,
@@ -381,17 +587,34 @@ class WorkbenchRepository:
         return dict(row)
 
     async def list_tasks(
-        self, *, owner_actor_id: str, session_id: str | None = None
+        self,
+        *,
+        owner_actor_id: str,
+        session_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = (
             "select * from workbench_tasks where owner_actor_id = :o"
             + (" and session_id = :s" if session_id else "")
+            + (" and project_id = :p" if project_id else "")
             + " order by created_at desc"
         )
         r = await self.session.execute(
-            text(sql), {"o": owner_actor_id, "s": session_id}
+            text(sql), {"o": owner_actor_id, "s": session_id, "p": project_id}
         )
         return [dict(m) for m in r.mappings().all()]
+
+    async def active_task_of_project(self, project_id: str) -> dict[str, Any] | None:
+        """这个项目里专家还在做的那件事；没有就是 None。"""
+        r = await self.session.execute(
+            text(
+                """select * from workbench_tasks where project_id = :p
+                   and state not in ('SUCCEEDED','REJECTED','FAILED','CANCELLED') limit 1"""
+            ),
+            {"p": project_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
 
     async def list_nonterminal_tasks(self) -> list[dict[str, Any]]:
         r = await self.session.execute(

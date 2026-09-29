@@ -169,15 +169,80 @@ class WorkbenchStore(Protocol):
 
     async def list_sandboxes(self, *, owner_actor_id: str) -> list[dict[str, Any]]: ...
 
-    async def create_session(
+    async def current_sandbox(self, owner_actor_id: str) -> dict[str, Any] | None: ...
+
+    async def create_project(
         self,
         *,
         owner_actor_id: str,
         environment_id: str,
+        workspace_root: str,
+        path: str,
+        title: str,
+    ) -> str:
+        """同一个人、同一台机器、同一个目录已有没归档的项目时抛 `ProjectExists`。"""
+        ...
+
+    async def get_project(
+        self,
+        project_id: str,
+        *,
+        owner_actor_id: str | None = None,
+        for_update: bool = False,
+    ) -> dict[str, Any]: ...
+
+    async def find_project(
+        self,
+        *,
+        owner_actor_id: str,
+        environment_id: str,
+        workspace_root: str,
+        path: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def list_projects(
+        self, *, owner_actor_id: str, include_archived: bool = False
+    ) -> list[dict[str, Any]]: ...
+
+    async def update_project(
+        self,
+        project_id: str,
+        *,
+        title: str | None = None,
+        archived: bool | None = None,
+    ) -> None: ...
+
+    async def create_session(
+        self,
+        *,
+        owner_actor_id: str,
+        environment_id: str | None,
         sandbox_id: str,
-        project_root: str,
+        project_root: str | None,
         thread_settings: dict,
+        kind: str = "work",
+        project_id: str | None = None,
+        title: str | None = None,
     ) -> str: ...
+
+    async def attach_session_project(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        environment_id: str,
+        project_root: str,
+    ) -> None: ...
+
+    async def set_session_kind(self, session_id: str, kind: str) -> None: ...
+
+    async def set_session_title(self, session_id: str, title: str | None) -> None: ...
+
+    async def set_session_title_if_empty(self, session_id: str, title: str) -> None: ...
+
+    async def active_task_of_project(self, project_id: str) -> dict[str, Any] | None:
+        """这个项目里专家还在做的那件事；没有就是 None。"""
+        ...
 
     async def get_session(
         self,
@@ -187,7 +252,13 @@ class WorkbenchStore(Protocol):
         for_update: bool = False,
     ) -> dict[str, Any]: ...
 
-    async def list_sessions(self, *, owner_actor_id: str) -> list[dict[str, Any]]: ...
+    async def list_sessions(
+        self,
+        *,
+        owner_actor_id: str,
+        project_id: str | None = None,
+        without_project: bool = False,
+    ) -> list[dict[str, Any]]: ...
 
     async def set_session_thread(self, session_id: str, thread_id: str) -> None: ...
 
@@ -232,7 +303,11 @@ class WorkbenchStore(Protocol):
     ) -> dict[str, Any]: ...
 
     async def list_tasks(
-        self, *, owner_actor_id: str, session_id: str | None = None
+        self,
+        *,
+        owner_actor_id: str,
+        session_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     async def list_nonterminal_tasks(self) -> list[dict[str, Any]]: ...

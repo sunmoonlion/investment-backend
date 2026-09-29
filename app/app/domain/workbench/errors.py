@@ -57,3 +57,57 @@ class BudgetExhausted(WorkbenchError):
 class RootOutsideWhitelist(WorkbenchError):
     code = "root_outside_whitelist"
     http_status = 400
+
+
+class ProjectPathInvalid(WorkbenchError):
+    """项目的目录不合规则：越出工作区、带盘符、往上走。"""
+
+    code = "project_path_invalid"
+    http_status = 400
+
+
+class ProjectExists(WorkbenchError):
+    """同一台机器、同一个目录已经有一个项目。"""
+
+    code = "project_exists"
+    http_status = 409
+
+
+class ProjectArchived(WorkbenchError):
+    code = "project_archived"
+    http_status = 409
+
+
+class ProjectRequired(WorkbenchError):
+    """工作与专家必须在项目里；不属于项目的聊天要先放进一个项目。"""
+
+    code = "project_required"
+    http_status = 409
+
+
+class ProjectBusy(WorkbenchError):
+    """这个项目里已经有一件事专家还在做：同一时刻只有一个（所有者 2026-09-29 定）。"""
+
+    code = "project_busy"
+    http_status = 409
+
+
+class ProjectHeldByExpert(WorkbenchError):
+    """专家在这个项目里干活期间，别的对话可以聊天，不可以工作（所有者 2026-09-29 定）。"""
+
+    code = "project_held_by_expert"
+    http_status = 409
+
+
+class ConversationChangeRefused(WorkbenchError):
+    """对话的种类、归属不能这样改：工作不转回聊天；已经归入项目的不能换项目。"""
+
+    code = "conversation_change_refused"
+    http_status = 409
+
+
+class NoSandbox(WorkbenchError):
+    """用户还没有可用的沙箱：先在设置里登记模型 key、拉起沙箱。"""
+
+    code = "no_sandbox"
+    http_status = 409

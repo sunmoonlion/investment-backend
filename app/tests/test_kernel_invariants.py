@@ -54,6 +54,7 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20260924_0009_workbench_prefs.py",
         "20260925_0010_workbench_relay_identity.py",
         "20260925_0011_workbench_sandbox_leases.py",
+        "20260929_0012_workbench_projects.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert sum("down_revision = None" in content for content in contents) == 1

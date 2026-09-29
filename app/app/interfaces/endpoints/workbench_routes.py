@@ -37,7 +37,8 @@ from app.infrastructure.storage.redis import get_redis
 from app.interfaces.http.middleware.auth import get_web_current_user
 from core.config import get_settings
 
-CONTRACT_VERSION = 1
+# 2：项目、对话的种类（PRD/apps/investment.md）。旧的建会话入参仍然接受。
+CONTRACT_VERSION = 2
 
 
 def require_workbench_enabled() -> None:
@@ -73,9 +74,14 @@ class RegisterSandbox(Strict):
 
 
 class CreateSession(Strict):
-    environment_id: str
-    sandbox_id: str
-    project_root: str = Field(min_length=1)
+    """两种写法。新的：`kind`（聊天可不给 `project_id`）。旧的：机器、沙箱、完整目录。"""
+
+    kind: str | None = Field(default=None, pattern=r"^(chat|work)$")
+    project_id: str | None = Field(default=None, max_length=64)
+    title: str | None = Field(default=None, max_length=400)
+    environment_id: str | None = None
+    sandbox_id: str | None = None
+    project_root: str | None = Field(default=None, min_length=1)
     thread_settings: dict[str, Any] | None = None
 
 
@@ -279,6 +285,42 @@ async def create_session(
     session: AsyncSession = Depends(get_db_session),
 ):
     repo = workbench_store(session)
+    if body.kind is not None:
+        if (
+            body.environment_id
+            or body.sandbox_id
+            or body.project_root
+            or body.thread_settings is not None
+        ):
+            # 沙箱由后端取；权限由后端按种类定，页面不能传（F-PROJ-03）
+            raise HTTPException(
+                status_code=422,
+                detail="with kind, only project_id and title may be given",
+            )
+        try:
+            result = await SessionService(repo).start(
+                owner_actor_id=_actor(principal),
+                kind=body.kind,
+                project_id=body.project_id,
+                title=body.title,
+            )
+            created = await repo.get_session(result["session_id"])
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=result["session_id"],
+                    sandbox_id=str(created["sandbox_id"]),
+                    kind="session.start_thread",
+                    payload={},
+                )
+        except WorkbenchError as exc:
+            raise _http(exc) from exc
+        await _publish_commands_wakeup()
+        return result
+    if not (body.environment_id and body.sandbox_id and body.project_root):
+        raise HTTPException(
+            status_code=422,
+            detail="environment_id, sandbox_id and project_root are required",
+        )
     try:
         thread_settings = body.thread_settings
         if thread_settings is None:  # 用户设置面的偏好进 thread 设置（0002「设置」）
@@ -311,15 +353,27 @@ async def create_session(
 
 @router.get("/sessions")
 async def list_sessions(
+    project_id: str | None = Query(default=None, max_length=64),
+    without_project: bool = Query(default=False),
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    """我的对话。可只要某个项目里的，或只要不属于任何项目的聊天。"""
     repo = workbench_store(session)
+    if project_id is not None:
+        try:
+            await repo.get_project(project_id, owner_actor_id=_actor(principal))
+        except WorkbenchError as exc:
+            raise _http(exc) from exc
     return {
         "contract_version": CONTRACT_VERSION,
         "sessions": [
             _plain(x)
-            for x in await repo.list_sessions(owner_actor_id=_actor(principal))
+            for x in await repo.list_sessions(
+                owner_actor_id=_actor(principal),
+                project_id=project_id,
+                without_project=without_project,
+            )
         ],
     }
 

@@ -17,6 +17,8 @@ from app.domain.workbench.errors import (
     BudgetExhausted,
     IdempotencyConflict,
     InteractionRejected,
+    ProjectBusy,
+    ProjectRequired,
     StaleStateVersion,
     WheelHeldByOther,
 )
@@ -90,6 +92,20 @@ class Ledger:
                     "the advisor already holds the wheel of this session",
                     session_id=req.session_id,
                 )
+            if session["project_id"] is None:
+                raise ProjectRequired(
+                    "put this conversation into a project before asking the expert",
+                    session_id=req.session_id,
+                )
+            # 先锁住项目：同一个项目的两次求助排队进行，后到的看得见先到的
+            await self.repo.get_project(str(session["project_id"]), for_update=True)
+            busy = await self.repo.active_task_of_project(str(session["project_id"]))
+            if busy is not None:
+                raise ProjectBusy(
+                    "the expert is already working on something in this project",
+                    project_id=str(session["project_id"]),
+                    active_task_id=str(busy["id"]),
+                )
             task_id = str(uuid.uuid4())
             budget = Budget(currency=req.budget_currency, limit=req.budget_limit)
             await self.repo.insert_task(
@@ -111,6 +127,7 @@ class Ledger:
                     "thread_id": session["thread_id"],
                     "environment_id": str(session["environment_id"]),
                     "project_root": session["project_root"],
+                    "project_id": str(session["project_id"]),
                     "state": TaskState.RECEIVED,
                     "budget": budget.as_json(),
                 }
