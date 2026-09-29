@@ -76,6 +76,7 @@ def build_runner(
     runner_id: str,
     environment_key: str = "user-pc",
     poll_seconds: float = 1.0,
+    records: bool = False,
 ) -> Runner:
     return Runner(
         workbench_stores(session_factory),
@@ -84,4 +85,5 @@ def build_runner(
         runner_id=runner_id,
         environment_key=environment_key,
         poll_seconds=poll_seconds,
+        records=records,
     )

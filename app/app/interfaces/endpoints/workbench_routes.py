@@ -692,7 +692,14 @@ def _provisioning(
         relay_public_url=relay_public_url,
         issuer=issuer,
         global_limit=global_limit,
+        records_url=records_mcp_url(),
     )
+
+
+def records_mcp_url() -> str:
+    """沙箱里要不要配读项目记录的工具服务：开关开着、地址也配了才配。"""
+    s = get_settings()
+    return s.workbench_records_mcp_url if s.workbench_records_mcp_enabled else ""
 
 
 @router.get("/token-keys")

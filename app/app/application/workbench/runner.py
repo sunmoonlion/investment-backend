@@ -533,7 +533,9 @@ class Runner:
         runner_id: str,
         environment_key: str = "user-pc",
         poll_seconds: float = 1.0,
+        records: bool = False,
     ):
+        self.records = records
         self.stores = stores
         self.connector = connector
         self.publisher = publisher
@@ -812,7 +814,7 @@ class Runner:
                 )
 
     async def _drive(self, task_id: str, link: SandboxLink) -> None:
-        advisor = Advisor(self.stores, link)
+        advisor = Advisor(self.stores, link, records=self.records)
         try:
             state = await advisor.drive(task_id)
             log.info("advisor stopped task=%s state=%s", task_id, state)

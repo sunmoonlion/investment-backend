@@ -14,6 +14,7 @@ from app.interfaces.http.web.workbench_expert import (
 from app.interfaces.http.web.workbench_projects import (
     router as workbench_projects_router,
 )
+from app.interfaces.mcp.workbench_mcp import router as workbench_mcp_router
 
 router = APIRouter()
 router.include_router(admin_auth_router)
@@ -24,3 +25,4 @@ router.include_router(web_interactions_router)
 router.include_router(workbench_router)
 router.include_router(workbench_projects_router)
 router.include_router(workbench_expert_router)
+router.include_router(workbench_mcp_router)

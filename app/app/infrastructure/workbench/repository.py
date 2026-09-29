@@ -561,6 +561,39 @@ class WorkbenchRepository:
         )
         return [_event(m) for m in r.mappings().all()]
 
+    async def conversation_digests(
+        self, *, project_id: str, owner_actor_id: str
+    ) -> list[dict[str, Any]]:
+        """一个项目里的各段对话：几轮、第一句话。给专家挑着读。"""
+        r = await self.session.execute(
+            text("""select s.id, s.kind, s.title, s.created_at, s.last_active_at,
+                           (select count(*) from workbench_session_events e
+                             where e.session_id = s.id
+                               and e.event_type = 'turn/completed') as turns,
+                           (select e.payload->>'text' from workbench_session_events e
+                             where e.session_id = s.id
+                               and e.event_type = 'turn/requested'
+                               and coalesce(e.payload->>'by', 'user') = 'user'
+                             order by e.cursor limit 1) as first_message
+                    from workbench_sessions s
+                    where s.project_id = :p and s.owner_actor_id = :o
+                    order by s.created_at, s.id"""),
+            {"p": project_id, "o": owner_actor_id},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def list_record_events(
+        self, *, session_id: str, types: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        """一段对话里指定种类的全部事件，按先后。不分页：分页在记录上做，不在事件上做。"""
+        r = await self.session.execute(
+            text("""select id, session_id, cursor, kind, event_type as type, payload, task_id, attempt_id, created_at
+                    from workbench_session_events
+                    where session_id = :s and event_type = any(:types) order by cursor asc"""),
+            {"s": session_id, "types": list(types)},
+        )
+        return [_event(m) for m in r.mappings().all()]
+
     async def list_task_events(
         self, task_id: str, *, types: tuple[str, ...]
     ) -> list[dict[str, Any]]:

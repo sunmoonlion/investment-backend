@@ -347,3 +347,55 @@ async def test_global_sandbox_cap(make_client, db):  # noqa: F811
     a = client_for(A)
     a._transport.app.dependency_overrides[sandbox_global_limit] = lambda: 0  # type: ignore[attr-defined]
     assert (await a.post("/api/workbench/sandboxes/provision")).status_code == 200
+
+
+async def test_the_records_tools_are_given_to_the_sandbox_only_when_configured(
+    make_client,
+    db,  # noqa: F811
+    monkeypatch,
+):
+    """专家读项目记录的工具服务：开关开着、地址配了，供给沙箱时才带上地址与令牌。"""
+    from app.interfaces.endpoints import workbench_routes
+
+    http = make_client(A)
+    app = http._transport.app  # type: ignore[attr-defined]
+    fake_api = FakeProvisionerApi()
+    issuer = TokenIssuer(generate_private_key_pem(), issuer="wb-test")
+    provisioner = HttpProvisioner(
+        ProvisionerConfig(
+            url="http://prov", token="prov-secret", model_provider="kimi"
+        ),
+        transport=httpx.MockTransport(fake_api.handler),
+    )
+    cipher = Fernet(Fernet.generate_key())
+    app.dependency_overrides[credential_cipher] = lambda: cipher
+    app.dependency_overrides[provisioning_backends] = lambda: (
+        provisioner,
+        FakeRelayAdmin(),
+        "wss://edge.test/relay",
+    )
+    app.dependency_overrides[token_issuer] = lambda: issuer
+    await http.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "test-model-key-0001"},
+    )
+
+    assert workbench_routes.records_mcp_url() == ""  # 默认是关着的
+    assert (await http.post("/api/workbench/sandboxes/provision")).status_code == 200
+    assert "records_mcp_url" not in fake_api.specs[0]
+    assert "records_mcp_token" not in fake_api.specs[0]
+
+    address = "http://investment-api.svc/api/mcp/workbench"
+    monkeypatch.setattr(workbench_routes, "records_mcp_url", lambda: address)
+    assert (await http.post("/api/workbench/sandboxes/provision")).status_code == 200
+    spec = fake_api.specs[1]
+    assert spec["records_mcp_url"] == address
+    assert issuer.owner_of_records_token(spec["records_mcp_token"]) == A
+    # 这张令牌只能读记录：拿去当知识服务的、会合点的令牌都验不过
+    for audience in ("knowledge", "relay"):
+        try:
+            verify(spec["records_mcp_token"], issuer.public_pem(), audience=audience)
+        except ValueError:
+            continue
+        raise AssertionError(audience)
+    assert issuer.owner_of_records_token(spec["knowledge_mcp_token"]) is None

@@ -300,6 +300,14 @@ class WorkbenchStore(Protocol):
         self, *, session_id: str, after_cursor: int = 0, limit: int = 500
     ) -> list[dict[str, Any]]: ...
 
+    async def conversation_digests(
+        self, *, project_id: str, owner_actor_id: str
+    ) -> list[dict[str, Any]]: ...
+
+    async def list_record_events(
+        self, *, session_id: str, types: tuple[str, ...]
+    ) -> list[dict[str, Any]]: ...
+
     async def list_owner_interactions(
         self, *, owner_actor_id: str, status: str | None, limit: int = 100
     ) -> list[dict[str, Any]]: ...

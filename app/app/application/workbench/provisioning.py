@@ -67,7 +67,9 @@ class SandboxProvisioning:
         codex_version: str = "0.155.1",
         issuer: TokenIssuer | None = None,
         global_limit: int = 0,
+        records_url: str = "",
     ) -> None:
+        self.records_url = records_url  # 空 = 沙箱里不配读项目记录的工具服务
         self.repo = repo
         self.cipher = cipher
         self.provisioner = provisioner
@@ -203,6 +205,14 @@ class SandboxProvisioning:
             spec["knowledge_mcp_token"] = self.issuer.knowledge_token(
                 identity["relay_user"], sandbox=identity["relay_user"]
             ).token
+            if self.records_url:
+                # 专家读本项目别的对话与底稿的工具服务。供给器认得这两项之后才会配进沙箱
+                spec["records_mcp_url"] = self.records_url
+                spec["records_mcp_token"] = self.issuer.records_token(
+                    identity["relay_user"],
+                    owner_actor_id=owner,
+                    sandbox=identity["relay_user"],
+                ).token
         result = await self.provisioner.upsert(identity["relay_user"], spec)
         del model_key, spec
         async with self.repo.transaction():

@@ -125,3 +125,10 @@ class NoSuchExpert(WorkbenchError):
 
     code = "no_such_expert"
     http_status = 404
+
+
+class RecordsRefused(WorkbenchError):
+    """专家读项目记录被拒：不是处理期间，或者要读的东西不在这个项目里。"""
+
+    code = "records_refused"
+    http_status = 403

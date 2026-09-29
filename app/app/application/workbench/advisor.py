@@ -77,10 +77,13 @@ class Advisor:
         driver: TurnDriver,
         *,
         pricing: Pricing | None = None,
+        records: bool = False,
     ):
         self.stores = stores  # 每次调用开一个工作单元
         self.driver = driver
         self.pricing = pricing or Pricing()
+        # 沙箱里配好了读项目记录的工具：每一步的说明里告诉模型有这组工具、委托编号是什么
+        self.records = records
 
     # ---------------- 入口 ----------------
     async def drive(self, task_id: str) -> str:
@@ -202,7 +205,13 @@ class Advisor:
             await repo.commit()
             thread_id = task["thread_id"]
             question = task["original_input"].get("input", {})
-            text = self.compose(step, question, inputs, reworks)
+            text = self.compose(
+                step,
+                question,
+                inputs,
+                reworks,
+                records_task=task_id if self.records else None,
+            )
 
         result = await self.driver.run_turn(thread_id, text)
 
@@ -491,6 +500,8 @@ class Advisor:
         question: dict[str, Any],
         inputs: dict[str, Any],
         reworks: int,
+        *,
+        records_task: str | None = None,
     ) -> str:
         parts = [
             f"# Advisor step: {step.title} ({step.step_id}, v{step.step_version})",
@@ -517,6 +528,17 @@ class Advisor:
                         f"first {step.input_max_chars} are shown. Say so in your "
                         "output and do not assume what the missing part contains.]"
                     )
+        if records_task:
+            parts += [
+                "",
+                "## Records of this project (read only when needed)",
+                "Earlier conversations and working papers of this project can be read "
+                "with the tools list_project_conversations, read_project_conversation, "
+                "list_project_dossiers and read_project_dossier. Pass "
+                f'task="{records_task}" on every call. Use them only when the question '
+                "refers to earlier work in this project. They never replace the data "
+                "tools: numbers still come from the data tools of this step.",
+            ]
         parts += [
             "",
             "## Output",

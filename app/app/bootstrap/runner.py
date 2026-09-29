@@ -35,6 +35,7 @@ async def main() -> None:
         runner_id=settings.workbench_runner_id,
         environment_key=settings.workbench_environment_key,
         poll_seconds=settings.workbench_poll_seconds,
+        records=settings.workbench_records_mcp_enabled,
     )
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

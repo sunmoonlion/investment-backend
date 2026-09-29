@@ -187,6 +187,18 @@ class Settings(BaseSettings):
         default="", validation_alias="WORKBENCH_SANDBOX_PROVIDER_BASE_URL"
     )
 
+    # 专家读本项目别的对话与底稿的工具服务（PRD/apps/investment.md 7.4）。
+    # 沙箱里的 Codex 配好这个服务之后才打开：打开后专家每一步的说明里会提到这组工具
+    workbench_records_mcp_enabled: bool = Field(
+        default=False, validation_alias="WORKBENCH_RECORDS_MCP_ENABLED"
+    )
+    workbench_records_mcp_url: str = Field(
+        default="", validation_alias="WORKBENCH_RECORDS_MCP_URL"
+    )
+    workbench_records_mcp_rate_per_minute: int = Field(
+        default=60, ge=1, validation_alias="WORKBENCH_RECORDS_MCP_RATE_PER_MINUTE"
+    )
+
     @field_validator("database_url", "migration_database_url", mode="before")
     @classmethod
     def normalize_postgres_url(cls, value: str | None) -> str | None:
