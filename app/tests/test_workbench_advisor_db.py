@@ -13,12 +13,12 @@ from websockets.asyncio.server import serve
 
 from app.application.workbench.acceptance import judge
 from app.application.workbench.ledger import Ledger
-from app.application.workbench.runner import Publisher
 from app.application.workbench.session_service import SessionService
 from app.bootstrap.workbench import build_runner
 from app.domain.workbench.models import HandoverRequest
 from app.domain.workbench.packs import SMOKE, AcceptanceRule
 from app.domain.workbench.states import TaskState
+from app.infrastructure.workbench.publisher import RedisPublisher
 from app.infrastructure.workbench.repository import WorkbenchRepository
 
 PLAN = json.dumps({"plan": ["read README", "answer"], "assumptions": []})
@@ -136,7 +136,7 @@ async def seed(db, fake, *, profile="SMOKE", budget="10"):
                 session_id=sid, sandbox_id=sb, kind="session.start_thread", payload={}
             )
     runner = build_runner(
-        db, publisher=Publisher(None, "t"), runner_id="r", poll_seconds=0.05
+        db, publisher=RedisPublisher(None, "t"), runner_id="r", poll_seconds=0.05
     )
     await runner.run_once()
     async with db() as s:

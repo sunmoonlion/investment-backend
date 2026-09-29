@@ -8,16 +8,16 @@ from test_workbench_ledger_db import db as db  # noqa: F401
 from test_workbench_routes import A  # noqa: F401
 from test_workbench_routes import make_client as make_client
 
-from app.application.workbench.provisioning import (
-    HttpProvisioner,
-    ProvisionerConfig,
-    relay_user_for,
-)
+from app.application.workbench.provisioning import relay_user_for
 from app.application.workbench.tokens import (
     TokenIssuer,
     generate_private_key_pem,
     jti_of,
     verify,
+)
+from app.infrastructure.workbench.provisioner import (
+    HttpProvisioner,
+    ProvisionerConfig,
 )
 from app.interfaces.endpoints.workbench_routes import (
     credential_cipher,

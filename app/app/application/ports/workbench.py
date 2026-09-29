@@ -47,6 +47,60 @@ class AppServerConnection(Protocol):
     async def respond_error(self, rid: Any, code: int, message: str) -> None: ...
 
 
+class EventPublisher(Protocol):
+    """把事件实时推给正在看的页面。推不出去不算错：事件已经在账里，页面重连会补。"""
+
+    def session_channel(self, session_id: str) -> str: ...
+
+    def commands_channel(self) -> str: ...
+
+    async def publish(self, channel: str, payload: dict[str, Any]) -> None: ...
+
+
+class Cipher(Protocol):
+    def encrypt(self, data: bytes) -> bytes: ...
+
+    def decrypt(self, token: bytes) -> bytes: ...
+
+
+class RelayAdmin(Protocol):
+    """会合点的管理通道。"""
+
+    async def set_tokens(self, user: str, agent: str, sandbox: str) -> None: ...
+
+    async def revoke(self, user: str) -> None: ...
+
+    async def set_public_key(self, pem: str) -> None: ...
+
+    async def revoke_jti(self, jtis: list[str]) -> None: ...
+
+
+class SandboxModel(Protocol):
+    """新建沙箱时默认用哪个模型。"""
+
+    @property
+    def model_provider(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def provider_base_url(self) -> str: ...
+
+
+class Provisioner(Protocol):
+    """沙箱供给器：按用户建、查、删沙箱。"""
+
+    @property
+    def config(self) -> SandboxModel: ...
+
+    async def upsert(self, user: str, spec: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def status(self, user: str) -> dict[str, Any]: ...
+
+    async def delete(self, user: str, purge: bool = False) -> dict[str, Any]: ...
+
+
 class AppServerConnector(Protocol):
     def open(
         self,

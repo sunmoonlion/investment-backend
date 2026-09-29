@@ -17,6 +17,7 @@ from app.application.ports.workbench import (
     AppServerConnection,
     AppServerConnector,
     AppServerError,
+    EventPublisher,
     WorkbenchStore,
     WorkbenchStores,
 )
@@ -70,30 +71,6 @@ def thread_id_of(params: dict[str, Any]) -> str | None:
         if isinstance(cur, str):
             return cur
     return None
-
-
-class Publisher:
-    """Redis 发布；测试里可以传 None。"""
-
-    def __init__(self, redis, prefix: str):
-        self.redis = redis
-        self.prefix = prefix
-
-    def session_channel(self, session_id: str) -> str:
-        return f"{self.prefix}:session:{session_id}:events"
-
-    def commands_channel(self) -> str:
-        return f"{self.prefix}:commands"
-
-    async def publish(self, channel: str, payload: dict[str, Any]) -> None:
-        if self.redis is None:
-            return
-        try:
-            await self.redis.publish(
-                channel, json.dumps(payload, ensure_ascii=False, default=str)
-            )
-        except Exception:  # noqa: BLE001
-            log.warning("redis publish failed channel=%s", channel)
 
 
 class SandboxLink:
@@ -439,7 +416,7 @@ class Runner:
         stores: WorkbenchStores,
         *,
         connector: AppServerConnector,
-        publisher: Publisher,
+        publisher: EventPublisher,
         runner_id: str,
         environment_key: str = "user-pc",
         poll_seconds: float = 1.0,

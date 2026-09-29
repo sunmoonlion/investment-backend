@@ -14,9 +14,10 @@ from test_workbench_ledger_db import db as db
 from websockets.asyncio.server import serve
 
 from app.application.workbench.ledger import Ledger
-from app.application.workbench.runner import Publisher, event_kind, thread_id_of
+from app.application.workbench.runner import event_kind, thread_id_of
 from app.application.workbench.session_service import SessionService
 from app.bootstrap.workbench import build_runner
+from app.infrastructure.workbench.publisher import RedisPublisher
 from app.infrastructure.workbench.repository import WorkbenchRepository
 
 TOKEN = "cap-token-for-tests"
@@ -329,7 +330,7 @@ async def test_start_thread_and_user_turn_project_events(db):
     try:
         _, sb, sid = await seed(db, fake)
         runner = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         assert await runner.run_once() == 1  # session.start_thread
         async with db() as s:
@@ -394,7 +395,7 @@ async def test_user_wheel_approval_becomes_interaction_and_decision_returns(db):
     try:
         _, sb, sid = await seed(db, fake)
         runner = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         await runner.run_once()
         async with db() as s:
@@ -490,7 +491,7 @@ async def test_turn_refused_when_advisor_holds_wheel(db):
     try:
         _, sb, sid = await seed(db, fake)
         runner = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         await runner.run_once()
         async with db() as s:
@@ -574,7 +575,7 @@ async def test_lease_takeover_expires_pending_approvals_and_requeues_drives(db):
     try:
         _, sb, sid = await seed(db, fake)
         r1 = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         assert await r1.run_once() == 1
         async with db() as s:
@@ -618,7 +619,7 @@ async def test_lease_takeover_expires_pending_approvals_and_requeues_drives(db):
                     session_id=sid, sandbox_id=sb, kind="noop", payload={}
                 )
         r2 = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r2", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r2", poll_seconds=0.05
         )
         await r2.run_once()
         async with db() as s:
@@ -694,7 +695,7 @@ async def test_takeover_requeues_running_tasks(db):
                     session_id=sid, sandbox_id=sb, kind="noop", payload={}
                 )
         r2 = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r2", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r2", poll_seconds=0.05
         )
         await r2.run_once()  # 首次拿租约 = 接管：QUEUED 的 Task 得到一条 task.drive
         async with db() as s:
@@ -738,7 +739,7 @@ async def test_mcp_elicitation_is_accepted_with_schema_defaults(db):
     try:
         _, sb, sid = await seed(db, fake)
         runner = build_runner(
-            db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         assert await runner.run_once() == 1
         async with db() as s:
@@ -790,7 +791,7 @@ async def test_reconnect_reads_the_current_sandbox_token(db):
     fake = FakeAppServer()
     await fake.start()
     runner = build_runner(
-        db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
     )
     try:
         _, sb, sid = await seed(db, fake)
@@ -832,7 +833,7 @@ async def test_reconnect_reads_the_current_sandbox_token(db):
 async def _reconnect_after_sandbox_restart(db, fake, *, wipe: bool):
     """公共部分：起线程 → 沙箱换了进程（连接断、令牌换）→ 再发一个 turn。返回 (runner, sb, sid, 旧线程号)。"""
     runner = build_runner(
-        db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
     )
     _, sb, sid = await seed(db, fake)
     assert await runner.run_once() == 1

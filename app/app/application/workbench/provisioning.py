@@ -6,16 +6,17 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import secrets
-from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
-import httpx
-
-from app.application.ports.workbench import WorkbenchStore
+from app.application.ports.workbench import (
+    Cipher,
+    Provisioner,
+    RelayAdmin,
+    WorkbenchStore,
+)
 from app.application.workbench.tokens import TokenIssuer, jti_of
 from app.domain.workbench.errors import WorkbenchError
 
@@ -49,123 +50,6 @@ class RelayAdminFailed(WorkbenchError):
     http_status = 502
 
 
-class Cipher(Protocol):
-    def encrypt(self, data: bytes) -> bytes: ...
-    def decrypt(self, token: bytes) -> bytes: ...
-
-
-class RelayAdmin(Protocol):
-    async def set_tokens(self, user: str, agent: str, sandbox: str) -> None: ...
-    async def revoke(self, user: str) -> None: ...
-    async def set_public_key(self, pem: str) -> None: ...
-    async def revoke_jti(self, jtis: list[str]) -> None: ...
-
-
-class WsRelayAdmin:
-    """会合点管理通道：一条短连接，hello 后发一条命令。"""
-
-    def __init__(self, url: str, token: str) -> None:
-        self.url = url.rstrip("/") + "/admin"
-        self.token = token
-
-    async def _send(self, message: dict[str, Any]) -> dict[str, Any]:
-        from websockets.asyncio.client import connect
-
-        try:
-            async with connect(self.url, open_timeout=10) as ws:
-                await ws.send(
-                    json.dumps({"type": "hello", "role": "admin", "token": self.token})
-                )
-                welcome = json.loads(await ws.recv())
-                if welcome.get("type") != "welcome":
-                    raise RelayAdminFailed("relay admin auth failed")
-                await ws.send(json.dumps(message))
-                reply = json.loads(await ws.recv())
-        except (OSError, ValueError) as exc:
-            raise RelayAdminFailed("relay admin channel unreachable") from exc
-        except Exception as exc:  # websockets 的异常族
-            if isinstance(exc, WorkbenchError):
-                raise
-            raise RelayAdminFailed("relay admin channel failed") from exc
-        if reply.get("type") != "ok":
-            raise RelayAdminFailed(f"relay refused: {reply.get('reason', 'unknown')}")
-        return reply
-
-    async def set_tokens(self, user: str, agent: str, sandbox: str) -> None:
-        await self._send(
-            {"type": "set_tokens", "user": user, "agent": agent, "sandbox": sandbox}
-        )
-
-    async def revoke(self, user: str) -> None:
-        await self._send({"type": "revoke", "user": user})
-
-    async def set_public_key(self, pem: str) -> None:
-        """D10：把工作台验签公钥推到边缘（边缘不能回源取 JWKS）。"""
-        await self._send({"type": "set_public_key", "pem": pem})
-
-    async def revoke_jti(self, jtis: list[str]) -> None:
-        await self._send({"type": "revoke_jti", "jtis": jtis})
-
-
-@dataclass(frozen=True)
-class ProvisionerConfig:
-    url: str
-    token: str
-    model_provider: str = ""
-    model: str = ""
-    provider_base_url: str = ""
-
-
-class HttpProvisioner:
-    def __init__(
-        self,
-        config: ProvisionerConfig,
-        transport: httpx.AsyncBaseTransport | None = None,
-    ) -> None:
-        self.config = config
-        self.transport = transport
-
-    def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            base_url=self.config.url,
-            headers={"Authorization": f"Bearer {self.config.token}"},
-            timeout=60,
-            transport=self.transport,
-        )
-
-    async def upsert(self, user: str, spec: dict[str, Any]) -> dict[str, Any]:
-        async with self._client() as c:
-            try:
-                r = await c.put(f"/sandboxes/{user}", json=spec)
-            except httpx.HTTPError as exc:
-                raise ProvisionerFailed("provisioner unreachable") from exc
-        if r.status_code != 200:
-            raise ProvisionerFailed(f"provisioner returned {r.status_code}")
-        return r.json()
-
-    async def status(self, user: str) -> dict[str, Any]:
-        async with self._client() as c:
-            try:
-                r = await c.get(f"/sandboxes/{user}")
-            except httpx.HTTPError as exc:
-                raise ProvisionerFailed("provisioner unreachable") from exc
-        if r.status_code != 200:
-            raise ProvisionerFailed(f"provisioner returned {r.status_code}")
-        return r.json()
-
-    async def delete(self, user: str, purge: bool = False) -> dict[str, Any]:
-        async with self._client() as c:
-            try:
-                r = await c.delete(
-                    f"/sandboxes/{user}", params={"purge": "true"} if purge else None
-                )
-            except httpx.HTTPError as exc:
-                raise ProvisionerFailed("provisioner unreachable") from exc
-        if r.status_code != 200:
-            raise ProvisionerFailed(f"provisioner returned {r.status_code}")
-        return r.json()
-
-
 def relay_user_for(owner_actor_id: str) -> str:
     """稳定、可读、合 DNS 标签：u-<actor id 前 12 位>。"""
     return "u-" + re.sub(r"[^0-9a-f]", "", owner_actor_id.lower())[:12]
@@ -177,7 +61,7 @@ class SandboxProvisioning:
         repo: WorkbenchStore,
         *,
         cipher: Cipher,
-        provisioner: HttpProvisioner,
+        provisioner: Provisioner,
         relay_admin: RelayAdmin,
         relay_public_url: str,
         codex_version: str = "0.155.1",

@@ -19,15 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.errors.exceptions import AppException
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.provisioning import (
-    HttpProvisioner,
-    ProvisionerConfig,
     ProvisioningUnavailable,
     SandboxProvisioning,
-    WsRelayAdmin,
 )
 from app.application.workbench.session_service import SessionService
 from app.application.workbench.tokens import TokenIssuer
-from app.bootstrap.workbench import workbench_store
+from app.bootstrap.workbench import (
+    build_provisioner,
+    build_relay_admin,
+    workbench_store,
+)
 from app.domain.security import Principal
 from app.domain.workbench.errors import WorkbenchError
 from app.domain.workbench.models import HandoverRequest
@@ -148,19 +149,17 @@ def provisioning_backends():
         and s.workbench_relay_admin_token
     ):
         raise _http(ProvisioningUnavailable("sandbox provisioning is not configured"))
-    provisioner = HttpProvisioner(
-        ProvisionerConfig(
-            url=s.workbench_provisioner_url,
-            token=s.workbench_provisioner_token,
-            model_provider=s.workbench_sandbox_model_provider,
-            model=s.workbench_sandbox_model,
-            provider_base_url=s.workbench_sandbox_provider_base_url,
-        )
+    provisioner = build_provisioner(
+        url=s.workbench_provisioner_url,
+        token=s.workbench_provisioner_token,
+        model_provider=s.workbench_sandbox_model_provider,
+        model=s.workbench_sandbox_model,
+        provider_base_url=s.workbench_sandbox_provider_base_url,
     )
-    relay_admin = WsRelayAdmin(
+    admin = build_relay_admin(
         s.workbench_relay_admin_url, s.workbench_relay_admin_token
     )
-    return provisioner, relay_admin, s.workbench_relay_public_url
+    return provisioner, admin, s.workbench_relay_public_url
 
 
 def sandbox_global_limit() -> int:

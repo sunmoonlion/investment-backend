@@ -142,9 +142,3 @@ forbidden_modules = [
     "sqlite3",
 ]
 allow_indirect_imports = true
-# 旧账的放行清单：只减不增，还掉一条删一条。
-ignore_imports = [
-    # 本仓的：会合点管理通道与供给器的实现写在了应用层。账本 H1。
-    "app.application.workbench.provisioning -> httpx",
-    "app.application.workbench.provisioning -> websockets",
-]

@@ -9,11 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.ports.workbench import (
     AppServerConnector,
+    EventPublisher,
+    Provisioner,
+    RelayAdmin,
     WorkbenchStore,
     WorkbenchStores,
 )
-from app.application.workbench.runner import Publisher, Runner
+from app.application.workbench.runner import Runner
 from app.infrastructure.workbench.app_server_client import WsAppServerConnector
+from app.infrastructure.workbench.provisioner import HttpProvisioner, ProvisionerConfig
+from app.infrastructure.workbench.publisher import RedisPublisher
+from app.infrastructure.workbench.relay_admin import WsRelayAdmin
 from app.infrastructure.workbench.repository import (
     SqlWorkbenchStores,
     WorkbenchRepository,
@@ -35,10 +41,38 @@ def app_server_connector() -> AppServerConnector:
     return WsAppServerConnector()
 
 
+def event_publisher(redis, prefix: str) -> EventPublisher:
+    """`redis` 给 None 时什么都不发（测试、评测）。"""
+    return RedisPublisher(redis, prefix)
+
+
+def build_provisioner(
+    *,
+    url: str,
+    token: str,
+    model_provider: str = "",
+    model: str = "",
+    provider_base_url: str = "",
+) -> Provisioner:
+    return HttpProvisioner(
+        ProvisionerConfig(
+            url=url,
+            token=token,
+            model_provider=model_provider,
+            model=model,
+            provider_base_url=provider_base_url,
+        )
+    )
+
+
+def build_relay_admin(url: str, token: str) -> RelayAdmin:
+    return WsRelayAdmin(url, token)
+
+
 def build_runner(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    publisher: Publisher,
+    publisher: EventPublisher,
     runner_id: str,
     environment_key: str = "user-pc",
     poll_seconds: float = 1.0,

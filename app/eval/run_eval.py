@@ -29,11 +29,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.application.workbench.advisor import Pricing  # noqa: E402
 from app.application.workbench.ledger import Ledger  # noqa: E402
-from app.application.workbench.runner import Publisher, Runner  # noqa: E402
+from app.application.workbench.runner import Runner  # noqa: E402
 from app.application.workbench.session_service import SessionService  # noqa: E402
 from app.bootstrap.workbench import build_runner  # noqa: E402
 from app.domain.workbench.models import HandoverRequest  # noqa: E402
 from app.domain.workbench.packs import find_pack  # noqa: E402
+from app.infrastructure.workbench.publisher import RedisPublisher  # noqa: E402
 from app.infrastructure.workbench.repository import WorkbenchRepository  # noqa: E402
 from eval.cases import Case, load_cases  # noqa: E402
 from eval.judge import ArmOutput, CaseVerdict, judge  # noqa: E402
@@ -456,7 +457,7 @@ async def main() -> int:
     factory = async_sessionmaker(engine, expire_on_commit=False)
     runner = build_runner(
         factory,
-        publisher=Publisher(None, "eval"),
+        publisher=RedisPublisher(None, "eval"),
         runner_id="eval",
         environment_key=env_key,
         poll_seconds=0.2,
