@@ -131,18 +131,6 @@ class Settings(BaseSettings):
         default=False, validation_alias="CELERY_TASK_TOPOLOGY_PREDECLARED"
     )
 
-    # Investment Agent runtime. These settings are process-role neutral and
-    # are consumed only by the API/Worker adapters that enable Agent features.
-    agent_session_lock_ttl_seconds: int = Field(default=300, ge=1, le=3600)
-    agent_v4_traffic_enabled: bool = Field(
-        default=False, validation_alias="AGENT_V4_TRAFFIC_ENABLED"
-    )
-    agent_redis_key_prefix: str = Field(
-        default="investment:agent", validation_alias="AGENT_REDIS_KEY_PREFIX"
-    )
-    agent_pilot_enabled: bool = Field(
-        default=False, validation_alias="AGENT_PILOT_ENABLED"
-    )
     # 工作台（0001-workbench）：网页接口与 runner 角色的开关
     workbench_enabled: bool = Field(default=False, validation_alias="WORKBENCH_ENABLED")
     workbench_redis_key_prefix: str = Field(
@@ -197,83 +185,6 @@ class Settings(BaseSettings):
     )
     workbench_sandbox_provider_base_url: str = Field(
         default="", validation_alias="WORKBENCH_SANDBOX_PROVIDER_BASE_URL"
-    )
-    agent_pilot_internal_auth_application: str = Field(
-        default="sunmoonai-investment-runtime",
-        validation_alias="AGENT_PILOT_INTERNAL_AUTH_APPLICATION",
-    )
-    agent_pilot_internal_auth_discovery_url: str | None = Field(
-        default=None,
-        validation_alias="AGENT_PILOT_INTERNAL_AUTH_DISCOVERY_URL",
-    )
-    agent_pilot_internal_auth_backchannel_endpoint: str | None = Field(
-        default=None,
-        validation_alias="AGENT_PILOT_INTERNAL_AUTH_BACKCHANNEL_ENDPOINT",
-    )
-    agent_pilot_internal_auth_audience: str | None = Field(
-        default=None, validation_alias="AGENT_PILOT_INTERNAL_AUTH_AUDIENCE"
-    )
-    agent_pilot_internal_auth_subjects: str = Field(
-        default="", validation_alias="AGENT_PILOT_INTERNAL_AUTH_SUBJECTS"
-    )
-    agent_pilot_internal_auth_required_scope: str = Field(
-        default="investment:runtime",
-        validation_alias="AGENT_PILOT_INTERNAL_AUTH_REQUIRED_SCOPE",
-    )
-    agent_pilot_internal_auth_policy_version: str = Field(
-        default="investment-runtime-v1",
-        validation_alias="AGENT_PILOT_INTERNAL_AUTH_POLICY_VERSION",
-    )
-    agent_pilot_dataset_keys: str = Field(
-        default="", validation_alias="AGENT_PILOT_DATASET_KEYS"
-    )
-    agent_pilot_llm_base_url: str = Field(
-        default="", validation_alias="AGENT_PILOT_LLM_BASE_URL"
-    )
-    agent_pilot_llm_api_key: str | None = Field(
-        default=None, validation_alias="AGENT_PILOT_LLM_API_KEY"
-    )
-    agent_pilot_llm_model: str = Field(
-        default="qwen-plus", validation_alias="AGENT_PILOT_LLM_MODEL"
-    )
-    agent_pilot_llm_timeout_seconds: float = Field(
-        default=60.0,
-        gt=0,
-        le=120,
-        validation_alias="AGENT_PILOT_LLM_TIMEOUT_SECONDS",
-    )
-
-    # Knowledge is a separate App and remains behind an explicit service
-    # identity relationship.
-    knowledge_retrieval_url: str | None = Field(
-        default=None, validation_alias="KNOWLEDGE_RETRIEVAL_URL"
-    )
-    knowledge_retrieval_service_application: str = Field(
-        default="sunmoonai-investment-knowledge-retrieve",
-        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_APPLICATION",
-    )
-    knowledge_retrieval_service_discovery_url: str | None = Field(
-        default=None, validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_DISCOVERY_URL"
-    )
-    knowledge_retrieval_service_backchannel_endpoint: str | None = Field(
-        default=None,
-        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_BACKCHANNEL_ENDPOINT",
-    )
-    knowledge_retrieval_service_client_id: str | None = Field(
-        default=None, validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_CLIENT_ID"
-    )
-    knowledge_retrieval_service_client_secret: str | None = Field(
-        default=None, validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_CLIENT_SECRET"
-    )
-    knowledge_retrieval_service_scope: str = Field(
-        default="knowledge:retrieve",
-        validation_alias="KNOWLEDGE_RETRIEVAL_SERVICE_SCOPE",
-    )
-    knowledge_retrieval_timeout_seconds: float = Field(
-        default=20.0,
-        gt=0,
-        le=120,
-        validation_alias="KNOWLEDGE_RETRIEVAL_TIMEOUT_SECONDS",
     )
 
     @field_validator("database_url", "migration_database_url", mode="before")
@@ -339,8 +250,6 @@ class Settings(BaseSettings):
             for char in self.web_frontend_default_locale
         ):
             raise ValueError("WEB_FRONTEND_DEFAULT_LOCALE is invalid")
-        if self.agent_pilot_enabled:
-            self.require_agent_pilot()
         _ = self.auth_allowed_algorithm_list
         return self
 
@@ -654,41 +563,6 @@ class Settings(BaseSettings):
             raise ValueError("SERVICE_AUTH_SUBJECT_BINDINGS_JSON cannot be empty")
         if not self.casdoor_discovery_endpoint:
             raise ValueError("CASDOOR discovery is required for service identity")
-
-    @property
-    def knowledge_retrieval_enabled(self) -> bool:
-        return bool(
-            self.knowledge_retrieval_url
-            and self.knowledge_retrieval_service_client_id
-            and self.knowledge_retrieval_service_client_secret
-        )
-
-    @property
-    def agent_pilot_internal_auth_subject_list(self) -> frozenset[str]:
-        return frozenset(self._split_csv(self.agent_pilot_internal_auth_subjects))
-
-    @property
-    def agent_pilot_dataset_key_list(self) -> tuple[str, ...]:
-        return self._split_csv(self.agent_pilot_dataset_keys)
-
-    def require_agent_pilot(self) -> None:
-        required = {
-            "AGENT_PILOT_INTERNAL_AUTH_AUDIENCE": (
-                self.agent_pilot_internal_auth_audience
-            ),
-            "AGENT_PILOT_INTERNAL_AUTH_SUBJECTS": (
-                self.agent_pilot_internal_auth_subjects
-            ),
-            "AGENT_PILOT_DATASET_KEYS": self.agent_pilot_dataset_keys,
-            "AGENT_PILOT_LLM_BASE_URL": self.agent_pilot_llm_base_url,
-            "AGENT_PILOT_LLM_API_KEY": self.agent_pilot_llm_api_key,
-            "AGENT_PILOT_LLM_MODEL": self.agent_pilot_llm_model,
-        }
-        missing = sorted(name for name, value in required.items() if not value)
-        if missing:
-            raise ValueError(f"agent pilot configuration missing: {', '.join(missing)}")
-        if not self.knowledge_retrieval_enabled:
-            raise ValueError("Knowledge retrieval must be configured for agent pilot")
 
     @property
     def celery_enabled(self) -> bool:

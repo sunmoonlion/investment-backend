@@ -100,6 +100,8 @@ def _shared_outbox_used_by_services() -> bool:
     )
 
 
+# 2026-09-29：旧运行时（2026-07 的 LangGraph 智能体运行时）已按所有者的决定删除，
+# 关于它的七条声明一并删去。它们说的能力不是「接上了」，而是不存在了。
 DORMANT: tuple[Dormant, ...] = (
     Dormant(
         name="domain/{models,repositories,services} 仍是模板空壳",
@@ -126,113 +128,6 @@ DORMANT: tuple[Dormant, ...] = (
         still_dormant=lambda: (
             "return UnavailableWebInteractionAdapter()"
             in _read("app/application/services/web_interaction.py")
-        ),
-    ),
-    Dormant(
-        name="RunBudget 在生产生效",
-        kind="pending",
-        evidence=(
-            "全仓仅三处引用：定义处、非生产图 first_m1_graph、其测试。"
-            "生产链路 pilot_service 只有一行 budget_exceeded→failed 的状态映射，"
-            "从不构造也不消费预算，故 budget_exceeded 在生产中不可达。"
-            "载体是内存态 pydantic model，跨进程即失——归入 dev-plan 的 U3 四本账"
-        ),
-        anchor_exists=lambda: "class RunBudget" in _read("app/domain/agent/runtime.py"),
-        still_dormant=lambda: (
-            sorted(_grep_files("RunBudget"))
-            == [
-                "app/domain/agent/runtime.py",
-                "app/infrastructure/graph/first_m1_graph.py",
-            ]
-        ),
-    ),
-    Dormant(
-        name="Web 面接 Agent/Pilot",
-        kind="pending",
-        evidence="/api/web/v1 默认 Unavailable 适配器；Pilot 只经 internal 面暴露",
-        anchor_exists=lambda: _exists("app/application/services/web_interaction.py"),
-        still_dormant=lambda: (
-            "return UnavailableWebInteractionAdapter()"
-            in _read("app/application/services/web_interaction.py")
-        ),
-    ),
-    Dormant(
-        name="Attempt / Invocation 落库",
-        kind="pending",
-        evidence=(
-            "只有 execution_identity_spike 里的内存类，infrastructure/models 与"
-            "迁移链中都没有对应表"
-        ),
-        anchor_exists=lambda: _exists(
-            "app/infrastructure/graph/execution_identity_spike.py"
-        ),
-        still_dormant=lambda: (
-            not _grep_files(
-                r"class (Attempt|Invocation)\b", where="app/infrastructure/models"
-            )
-        ),
-    ),
-    Dormant(
-        name="AgentMemoryService",
-        kind="pending",
-        evidence="类在 application/agent/memory_service.py，生产无任何调用方",
-        anchor_exists=lambda: _exists("app/application/agent/memory_service.py"),
-        still_dormant=lambda: (
-            _grep_files("AgentMemoryService")
-            == ["app/application/agent/memory_service.py"]
-        ),
-    ),
-    Dormant(
-        name="CancelRunCommand 的 HTTP 端点",
-        kind="pending",
-        evidence="领域命令已定义，interfaces/ 下无对应端点",
-        anchor_exists=lambda: (
-            "CancelRunCommand" in _read("app/domain/agent/commands.py")
-        ),
-        still_dormant=lambda: (
-            not _grep_files("CancelRunCommand", where="app/interfaces")
-        ),
-    ),
-    Dormant(
-        name="first_m1_graph 与两个 spike 不在生产链",
-        kind="deliberate",
-        evidence=(
-            "first_m1_graph 只被 tests 与 scripts/agent_golden.py 用；"
-            "execution_identity_spike / runtime_selection_spike 同理"
-        ),
-        anchor_exists=lambda: all(
-            _exists(f"app/infrastructure/graph/{n}.py")
-            for n in (
-                "first_m1_graph",
-                "execution_identity_spike",
-                "runtime_selection_spike",
-            )
-        ),
-        still_dormant=lambda: (
-            not _grep_files(
-                "first_m1_graph|execution_identity_spike", where="app/tasks"
-            )
-        ),
-    ),
-    Dormant(
-        name="AgentProfile 在执行期生效",
-        kind="pending",
-        evidence=(
-            "RunService.create_run 解析 profile 并把 key/version 写进 run 行，"
-            "但当前持久执行命令未向执行器传递完整 Profile effective_config——"
-            "effective_config 到不了图里。两条生产图对 allowed_tools、denied_tools、"
-            "model_key、system_prompt_id、memory_policy 的引用数均为 0。"
-            "即：Profile 被记录，不被执行；它现在是审计字段，不是约束"
-        ),
-        anchor_exists=lambda: (
-            "class AgentProfile" in _read("app/domain/agent/profiles.py")
-            and _exists("app/application/agent/run_service.py")
-        ),
-        still_dormant=lambda: (
-            not _grep_files(
-                r"allowed_tools|denied_tools|model_key|system_prompt_id|memory_policy",
-                where="app/tasks",
-            )
         ),
     ),
 )

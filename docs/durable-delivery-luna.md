@@ -1,5 +1,10 @@
 # Investment 公共可靠投递开发候选
 
+> **2026-09-29：本文讲的 Agent 投递代码已经删除**（旧运行时退役，所有者定）。
+> `AgentDelivery`、`app/tasks/agent_delivery.py`、`scripts/agent_delivery_admin.py` 都不在了，下面的命令不能再执行。
+> 本文留着只为说明数据库里那几张表的来历：`agent_delivery_failures_legacy_0006` 等表还在库里，
+> 已发布的迁移不删不改，以后用新的迁移去掉。公共的可靠投递（`app.cli.durable_delivery`）不受影响。
+
 本轮承接模板 → Info → Knowledge 已验证的公共实现。没有部署生产、迁移业务库，
 也没有推送正式发布标签；实际验证结果及未覆盖边界以父仓对齐报告为准。
 
