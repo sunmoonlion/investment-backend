@@ -31,6 +31,7 @@ from app.application.workbench.advisor import Pricing  # noqa: E402
 from app.application.workbench.ledger import Ledger  # noqa: E402
 from app.application.workbench.runner import Publisher, Runner  # noqa: E402
 from app.application.workbench.session_service import SessionService  # noqa: E402
+from app.bootstrap.workbench import build_runner  # noqa: E402
 from app.domain.workbench.models import HandoverRequest  # noqa: E402
 from app.domain.workbench.packs import find_pack  # noqa: E402
 from app.infrastructure.workbench.repository import WorkbenchRepository  # noqa: E402
@@ -453,7 +454,7 @@ async def main() -> int:
         connect_args={"server_settings": {"search_path": schema}},
     )
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    runner = Runner(
+    runner = build_runner(
         factory,
         publisher=Publisher(None, "eval"),
         runner_id="eval",

@@ -10,7 +10,8 @@ import asyncio
 import logging
 import signal
 
-from app.application.workbench.runner import Publisher, Runner
+from app.application.workbench.runner import Publisher
+from app.bootstrap.workbench import build_runner
 from app.infrastructure.logging.logging import setup_logging
 from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.redis import get_redis
@@ -27,7 +28,7 @@ async def main() -> None:
         raise SystemExit(2)
     await get_redis().init()
     await get_postgres().init()
-    runner = Runner(
+    runner = build_runner(
         get_postgres().session_factory,
         publisher=Publisher(get_redis().client, settings.workbench_redis_key_prefix),
         runner_id=settings.workbench_runner_id,

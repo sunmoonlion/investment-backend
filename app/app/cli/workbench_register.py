@@ -18,8 +18,8 @@ import sys
 
 from sqlalchemy import text
 
+from app.bootstrap.workbench import workbench_store
 from app.infrastructure.storage.postgres import get_postgres
-from app.infrastructure.workbench.repository import WorkbenchRepository
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -62,7 +62,7 @@ async def register(session_factory, args: argparse.Namespace) -> dict:
                 f"no auth_user with email {args.email}: the user must log in once first"
             )
         owner = str(row[0])
-        repo = WorkbenchRepository(s)
+        repo = workbench_store(s)
         envs = await repo.list_environments(owner_actor_id=owner)
         sbs = await repo.list_sandboxes(owner_actor_id=owner)
         async with repo.transaction():

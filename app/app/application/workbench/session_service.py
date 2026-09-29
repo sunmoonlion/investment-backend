@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.application.ports.workbench import WorkbenchStore
 from app.domain.workbench.errors import RootOutsideWhitelist, WheelHeldByOther
 from app.domain.workbench.states import Wheel
-from app.infrastructure.workbench.repository import WorkbenchRepository
 
 
 class SessionService:
-    def __init__(self, repo: WorkbenchRepository):
+    def __init__(self, repo: WorkbenchStore):
         self.repo = repo
 
     async def create(

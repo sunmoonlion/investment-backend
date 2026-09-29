@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from app.application.ports.workbench import WorkbenchStore
 from app.domain.workbench.errors import (
     BudgetExhausted,
     IdempotencyConflict,
@@ -32,7 +33,7 @@ from app.domain.workbench.states import (
     validate_task_transition,
     wheel_after_task_state,
 )
-from app.infrastructure.workbench.repository import WorkbenchRepository, token_hash
+from app.domain.workbench.tokens import token_hash
 
 INTERACTION_TTL = timedelta(hours=72)
 
@@ -48,7 +49,7 @@ def _budget(row: dict[str, Any]) -> Budget:
 
 
 class Ledger:
-    def __init__(self, repo: WorkbenchRepository):
+    def __init__(self, repo: WorkbenchStore):
         self.repo = repo
 
     # ---------------- 建单 = 交出方向盘 ----------------
@@ -454,7 +455,7 @@ class Ledger:
             )
             # 预算硬停：Attempt 超限 → Task WAITING(RESOURCE)，追加须用户批准（C-A10、AT-12）
             if target is AttemptState.BUDGET_EXCEEDED:
-                await self.repo.session.flush()
+                await self.repo.flush()
                 await self._enter_waiting_resource(str(task["id"]), version)
             return {
                 "attempt_id": attempt_id,

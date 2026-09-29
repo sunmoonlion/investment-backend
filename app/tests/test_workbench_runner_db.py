@@ -14,8 +14,9 @@ from test_workbench_ledger_db import db as db
 from websockets.asyncio.server import serve
 
 from app.application.workbench.ledger import Ledger
-from app.application.workbench.runner import Publisher, Runner, event_kind, thread_id_of
+from app.application.workbench.runner import Publisher, event_kind, thread_id_of
 from app.application.workbench.session_service import SessionService
+from app.bootstrap.workbench import build_runner
 from app.infrastructure.workbench.repository import WorkbenchRepository
 
 TOKEN = "cap-token-for-tests"
@@ -327,7 +328,7 @@ async def test_start_thread_and_user_turn_project_events(db):
     await fake.start()
     try:
         _, sb, sid = await seed(db, fake)
-        runner = Runner(
+        runner = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         assert await runner.run_once() == 1  # session.start_thread
@@ -392,7 +393,7 @@ async def test_user_wheel_approval_becomes_interaction_and_decision_returns(db):
     await fake.start()
     try:
         _, sb, sid = await seed(db, fake)
-        runner = Runner(
+        runner = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         await runner.run_once()
@@ -488,7 +489,7 @@ async def test_turn_refused_when_advisor_holds_wheel(db):
     await fake.start()
     try:
         _, sb, sid = await seed(db, fake)
-        runner = Runner(
+        runner = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         await runner.run_once()
@@ -572,7 +573,7 @@ async def test_lease_takeover_expires_pending_approvals_and_requeues_drives(db):
     await fake.start()
     try:
         _, sb, sid = await seed(db, fake)
-        r1 = Runner(
+        r1 = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         assert await r1.run_once() == 1
@@ -616,7 +617,7 @@ async def test_lease_takeover_expires_pending_approvals_and_requeues_drives(db):
                 await repo.enqueue_command(
                     session_id=sid, sandbox_id=sb, kind="noop", payload={}
                 )
-        r2 = Runner(
+        r2 = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r2", poll_seconds=0.05
         )
         await r2.run_once()
@@ -692,7 +693,7 @@ async def test_takeover_requeues_running_tasks(db):
                 await repo.enqueue_command(
                     session_id=sid, sandbox_id=sb, kind="noop", payload={}
                 )
-        r2 = Runner(
+        r2 = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r2", poll_seconds=0.05
         )
         await r2.run_once()  # 首次拿租约 = 接管：QUEUED 的 Task 得到一条 task.drive
@@ -736,7 +737,7 @@ async def test_mcp_elicitation_is_accepted_with_schema_defaults(db):
     await fake.start()
     try:
         _, sb, sid = await seed(db, fake)
-        runner = Runner(
+        runner = build_runner(
             db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
         )
         assert await runner.run_once() == 1
@@ -788,7 +789,7 @@ async def test_reconnect_reads_the_current_sandbox_token(db):
     """回收后重新拉起会换沙箱的能力令牌；runner 重连时要用库里的新令牌，而不是缓存里的旧令牌。"""
     fake = FakeAppServer()
     await fake.start()
-    runner = Runner(
+    runner = build_runner(
         db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
     )
     try:
@@ -830,7 +831,7 @@ async def test_reconnect_reads_the_current_sandbox_token(db):
 
 async def _reconnect_after_sandbox_restart(db, fake, *, wipe: bool):
     """公共部分：起线程 → 沙箱换了进程（连接断、令牌换）→ 再发一个 turn。返回 (runner, sb, sid, 旧线程号)。"""
-    runner = Runner(
+    runner = build_runner(
         db, publisher=Publisher(None, "t"), runner_id="r1", poll_seconds=0.05
     )
     _, sb, sid = await seed(db, fake)

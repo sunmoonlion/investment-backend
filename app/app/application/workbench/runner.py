@@ -13,17 +13,16 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
+from app.application.ports.workbench import (
+    AppServerConnection,
+    AppServerConnector,
+    AppServerError,
+    WorkbenchStore,
+    WorkbenchStores,
+)
 from app.application.workbench.advisor import Advisor, TurnResult
 from app.domain.workbench.packs import find_pack
 from app.domain.workbench.states import Wheel
-from app.infrastructure.workbench.app_server_client import (
-    AppServerClient,
-    AppServerError,
-    resolve_token_ref,
-)
-from app.infrastructure.workbench.repository import WorkbenchRepository
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +103,7 @@ class SandboxLink:
         self.runner = runner
         self.sandbox = sandbox
         self.sandbox_id = str(sandbox["id"])
-        self.client: AppServerClient | None = None
+        self.client: AppServerConnection | None = None
         self.threads: dict[str, str] = {}  # thread_id -> session_id
         # 当前这条连接对面的 app-server 进程已经装载的线程。沙箱回收再拉起是新进程，盘上的 rollout 还在、
         # 内存里没有：turn/start 前要先 thread/resume（KIND 2026-09-26 第 13 轮：401 修好后改报 thread not found）
@@ -115,14 +114,12 @@ class SandboxLink:
         self._lock = asyncio.Lock()
         self.turn_waiters: dict[str, dict[str, Any]] = {}  # turn_id -> waiter
 
-    async def ensure_connected(self) -> AppServerClient:
+    async def ensure_connected(self) -> AppServerConnection:
         async with self._lock:
             if self.client is not None and self.client.connected:
                 return self.client
-            token = resolve_token_ref(self.sandbox["token_ref"])
-            client = AppServerClient(
-                self.sandbox["app_server_url"],
-                token,
+            client = self.runner.connector.open(
+                self.sandbox,
                 on_notification=self.on_notification,
                 on_server_request=self.on_server_request,
             )
@@ -147,7 +144,7 @@ class SandboxLink:
         log.info("thread resumed sandbox=%s thread=%s", self.sandbox_id, thread_id)
 
     async def session_for_thread(
-        self, thread_id: str | None, repo: WorkbenchRepository
+        self, thread_id: str | None, repo: WorkbenchStore
     ) -> str | None:
         if thread_id is None:
             return None
@@ -163,8 +160,7 @@ class SandboxLink:
     async def on_notification(self, method: str, params: dict[str, Any]) -> None:
         if method.endswith(_SKIP_SUFFIXES):
             return
-        async with self.runner.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.runner.stores() as repo:
             session_id = await self.session_for_thread(thread_id_of(params), repo)
             if session_id is None:
                 log.debug("notification without session method=%s", method)
@@ -322,8 +318,7 @@ class SandboxLink:
             )
             return
         request_id = f"{self.sandbox_id}:{rid}"
-        async with self.runner.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.runner.stores() as repo:
             session_id = await self.session_for_thread(thread_id_of(params), repo)
             if session_id is None:
                 await client.respond(rid, {"decision": "decline"})
@@ -417,8 +412,7 @@ class SandboxLink:
             decision = "decline"
         finally:
             self.pending_approvals.pop(request_id, None)
-        async with self.runner.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.runner.stores() as repo:
             async with repo.transaction():
                 await repo.log_approval(
                     session_id=session_id,
@@ -442,14 +436,16 @@ class SandboxLink:
 class Runner:
     def __init__(
         self,
-        session_factory: async_sessionmaker[AsyncSession],
+        stores: WorkbenchStores,
         *,
+        connector: AppServerConnector,
         publisher: Publisher,
         runner_id: str,
         environment_key: str = "user-pc",
         poll_seconds: float = 1.0,
     ):
-        self.session_factory = session_factory
+        self.stores = stores
+        self.connector = connector
         self.publisher = publisher
         self.runner_id = runner_id
         self.environment_key = environment_key
@@ -461,7 +457,7 @@ class Runner:
         self.lease_ttl_seconds = max(10, int(poll_seconds * 30))
         self.leased: set[str] = set()
 
-    async def link_for(self, sandbox_id: str, repo: WorkbenchRepository) -> SandboxLink:
+    async def link_for(self, sandbox_id: str, repo: WorkbenchStore) -> SandboxLink:
         link = self.links.get(sandbox_id)
         if link is None:
             link = SandboxLink(self, await repo.get_sandbox(sandbox_id))
@@ -488,8 +484,7 @@ class Runner:
         for link in self.links.values():
             if link.client:
                 await link.client.close()
-        async with self.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             async with repo.transaction():
                 await repo.release_leases(runner_id=self.runner_id)
 
@@ -510,7 +505,7 @@ class Runner:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _take_over(self, repo: WorkbenchRepository, sandbox_id: str) -> None:
+    async def _take_over(self, repo: WorkbenchStore, sandbox_id: str) -> None:
         """刚拿到一个沙箱的租约（首次或接管）：作废上一任留下的未决工具审批，把没有驾驶者的 Task 重新排队。"""
         expired = await repo.expire_pending_tool_approvals(
             sandbox_id=sandbox_id, reason="runner restarted; Codex will ask again"
@@ -542,8 +537,7 @@ class Runner:
         log.info("took over sandbox=%s expired_approvals=%d", sandbox_id, len(expired))
 
     async def run_once(self) -> int:
-        async with self.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             async with repo.transaction():
                 await repo.requeue_stale_commands()
                 kept = set(
@@ -568,8 +562,7 @@ class Runner:
             except Exception as exc:  # noqa: BLE001
                 log.exception("command failed id=%s kind=%s", cmd["id"], cmd["kind"])
                 error = f"{type(exc).__name__}: {exc}"[:2000]
-            async with self.session_factory() as s:
-                repo = WorkbenchRepository(s)
+            async with self.stores() as repo:
                 async with repo.transaction():
                     await repo.finish_command(cmd["id"], error=error)
                     if error:
@@ -592,8 +585,7 @@ class Runner:
     # ---- 命令 ----
     async def handle(self, cmd: dict[str, Any]) -> None:
         kind, payload, session_id = cmd["kind"], cmd["payload"], cmd["session_id"]
-        async with self.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             session = await repo.get_session(session_id)
             link = await self.link_for(str(session["sandbox_id"]), repo)
         if kind == "task.drive":
@@ -619,8 +611,8 @@ class Runner:
             await self._start_thread(link, client, session)
             if kind == "session.start_thread":
                 return
-            async with self.session_factory() as s:
-                session = await WorkbenchRepository(s).get_session(session_id)
+            async with self.stores() as repo:
+                session = await repo.get_session(session_id)
         if kind == "turn.start":
             session = await self._ensure_session_thread(link, client, session)
             if session["wheel"] != payload.get("by", "user"):
@@ -636,8 +628,7 @@ class Runner:
                 },
                 timeout=120,
             )
-            async with self.session_factory() as s:
-                repo = WorkbenchRepository(s)
+            async with self.stores() as repo:
                 async with repo.transaction():
                     ev = await repo.append_event(
                         session_id=session_id,
@@ -664,7 +655,7 @@ class Runner:
         raise RuntimeError(f"unknown command kind {kind}")
 
     async def _drive(self, task_id: str, link: SandboxLink) -> None:
-        advisor = Advisor(self.session_factory, link)
+        advisor = Advisor(self.stores, link)
         try:
             state = await advisor.drive(task_id)
             log.info("advisor stopped task=%s state=%s", task_id, state)
@@ -680,7 +671,7 @@ class Runner:
             await asyncio.wait(tasks, timeout=timeout)
 
     async def _ensure_session_thread(
-        self, link: SandboxLink, client: AppServerClient, session: dict[str, Any]
+        self, link: SandboxLink, client: AppServerConnection, session: dict[str, Any]
     ) -> dict[str, Any]:
         """发 turn 前保证会话的线程在对面装载着；rollout 丢了就另起一条并换掉会话记的线程号。"""
         thread_id = session["thread_id"]
@@ -696,13 +687,13 @@ class Runner:
             link.sandbox_id,
         )
         await self._start_thread(link, client, session, replaced=thread_id)
-        async with self.session_factory() as s:
-            return await WorkbenchRepository(s).get_session(str(session["id"]))
+        async with self.stores() as repo:
+            return await repo.get_session(str(session["id"]))
 
     async def _start_thread(
         self,
         link: SandboxLink,
-        client: AppServerClient,
+        client: AppServerConnection,
         session: dict[str, Any],
         *,
         replaced: str | None = None,
@@ -728,8 +719,7 @@ class Runner:
         payload: dict[str, Any] = {"thread_id": thread_id, "environment": env_key}
         if replaced:
             payload["replaced_thread_id"] = replaced
-        async with self.session_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             async with repo.transaction():
                 await repo.set_session_thread(str(session["id"]), thread_id)
                 ev = await repo.append_event(

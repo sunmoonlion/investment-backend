@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
+from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
 from app.application.workbench.acceptance import judge
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
 from app.domain.workbench.states import AttemptState, TaskState, WaitingReason
-from app.infrastructure.workbench.repository import WorkbenchRepository
 
 log = logging.getLogger(__name__)
 
@@ -70,17 +70,20 @@ class Pricing:
 
 class Advisor:
     def __init__(
-        self, repo_factory, driver: TurnDriver, *, pricing: Pricing | None = None
+        self,
+        stores: WorkbenchStores,
+        driver: TurnDriver,
+        *,
+        pricing: Pricing | None = None,
     ):
-        self.repo_factory = repo_factory  # async ctx manager -> AsyncSession
+        self.stores = stores  # 每次调用开一个工作单元
         self.driver = driver
         self.pricing = pricing or Pricing()
 
     # ---------------- 入口 ----------------
     async def drive(self, task_id: str) -> str:
         """把一个 Task 推到停下为止：终态，或 WAITING（等人 / 等预算 / 等环境）。返回停下时的状态。"""
-        async with self.repo_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             led = Ledger(repo)
             task = await repo.get_task(task_id)
             if task["state"] == TaskState.RECEIVED:
@@ -118,7 +121,7 @@ class Advisor:
                         "steps": [st.step_id for st in pack.workflow],
                     },
                 )
-                await repo.session.commit()
+                await repo.commit()
                 await led.transition(task_id, TaskState.QUEUED)
         while True:
             state = await self._step_once(task_id)
@@ -127,8 +130,7 @@ class Advisor:
 
     # ---------------- 一步 ----------------
     async def _step_once(self, task_id: str) -> str:
-        async with self.repo_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             led = Ledger(repo)
             task = await repo.get_task(task_id)
             if task["state"] not in (TaskState.QUEUED, TaskState.RUNNING):
@@ -195,15 +197,14 @@ class Advisor:
                 task_id=task_id,
                 attempt_id=attempt_id,
             )
-            await repo.session.commit()
+            await repo.commit()
             thread_id = task["thread_id"]
             question = task["original_input"].get("input", {})
             text = self.compose(step, question, inputs, reworks)
 
         result = await self.driver.run_turn(thread_id, text)
 
-        async with self.repo_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             led = Ledger(repo)
             await led.attempt_transition(
                 attempt_id, AttemptState.RUNNING, turn_id=result.turn_id
@@ -285,7 +286,7 @@ class Advisor:
                     task_id=task_id,
                     attempt_id=attempt_id,
                 )
-                await repo.session.commit()
+                await repo.commit()
                 if pack.step(int(task["current_step"]) + 1) is None:
                     return await self._finish(
                         led, repo, await repo.get_task(task_id), pack
@@ -315,7 +316,7 @@ class Advisor:
                 task_id=task_id,
                 attempt_id=attempt_id,
             )
-            await repo.session.commit()
+            await repo.commit()
             if reworks < step.max_reworks:  # 还有返工额度：重做本步
                 await self._requeue(led, task_id)
                 return TaskState.QUEUED
@@ -326,7 +327,7 @@ class Advisor:
                     expected_version=int(task["state_version"]),
                     current_step=pack.index_of(step.back_to),
                 )
-                await repo.session.commit()
+                await repo.commit()
                 await self._requeue(led, task_id)
                 return TaskState.QUEUED
             # 返工用尽：交人（AT-24）
@@ -358,17 +359,14 @@ class Advisor:
             return TaskState.WAITING
 
     async def _requeue(self, led: Ledger, task_id: str) -> bool:
-        async with self.repo_factory() as s:
-            repo = WorkbenchRepository(s)
+        async with self.stores() as repo:
             task = await repo.get_task(task_id)
             if task["state"] == TaskState.RUNNING:
                 await Ledger(repo).transition(task_id, TaskState.QUEUED)
                 return True
             return task["state"] == TaskState.QUEUED
 
-    async def _hard_stop(
-        self, led: Ledger, repo: WorkbenchRepository, task_id: str
-    ) -> str:
+    async def _hard_stop(self, led: Ledger, repo: WorkbenchStore, task_id: str) -> str:
         task = await repo.get_task(task_id)
         # 没有 Attempt 可开：直接进 WAITING(RESOURCE)，让用户追加
         await led.open_interaction(
@@ -390,7 +388,7 @@ class Advisor:
     async def _finish(
         self,
         led: Ledger,
-        repo: WorkbenchRepository,
+        repo: WorkbenchStore,
         task: dict[str, Any],
         pack: ExpertPack,
     ) -> str:
@@ -417,7 +415,7 @@ class Advisor:
             kind="handback",
             content=handback,
         )
-        await repo.session.commit()
+        await repo.commit()
         task = await repo.get_task(task_id)
         if task["state"] == TaskState.QUEUED:  # 重启后从游标续到末尾的情形
             await led.transition(task_id, TaskState.RUNNING)

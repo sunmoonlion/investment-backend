@@ -18,10 +18,11 @@ from functools import wraps
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.dto.outbox import OutboxEvent
 from app.domain.workbench.errors import NotFound, StaleStateVersion
+from app.domain.workbench.tokens import token_hash
 from app.infrastructure.repositories.outbox import SqlOutboxRepository
 
 
@@ -36,10 +37,6 @@ def atomic(method):
 
 def _j(v: Any) -> str:
     return json.dumps(v, ensure_ascii=False, default=str)
-
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 class WorkbenchRepository:
@@ -61,6 +58,12 @@ class WorkbenchRepository:
             raise
         finally:
             self._depth -= 1
+
+    async def commit(self) -> None:
+        await self.session.commit()
+
+    async def flush(self) -> None:
+        await self.session.flush()
 
     # ---------- environments / sandboxes ----------
     async def register_environment(
@@ -1094,3 +1097,15 @@ class WorkbenchRepository:
         )
         row = r.mappings().first()
         return dict(row) if row else None
+
+
+class SqlWorkbenchStores:
+    """端口 `WorkbenchStores` 的实现：每个工作单元一个数据库会话、一个仓储。"""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sessions = session_factory
+
+    @asynccontextmanager
+    async def __call__(self):
+        async with self._sessions() as session:
+            yield WorkbenchRepository(session)

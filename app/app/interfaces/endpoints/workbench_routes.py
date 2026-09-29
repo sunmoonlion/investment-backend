@@ -27,12 +27,12 @@ from app.application.workbench.provisioning import (
 )
 from app.application.workbench.session_service import SessionService
 from app.application.workbench.tokens import TokenIssuer
+from app.bootstrap.workbench import workbench_store
 from app.domain.security import Principal
 from app.domain.workbench.errors import WorkbenchError
 from app.domain.workbench.models import HandoverRequest
 from app.infrastructure.storage.postgres import get_db_session, get_postgres
 from app.infrastructure.storage.redis import get_redis
-from app.infrastructure.workbench.repository import WorkbenchRepository
 from app.interfaces.http.middleware.auth import get_web_current_user
 from core.config import get_settings
 
@@ -211,7 +211,7 @@ async def list_environments(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     return {
         "contract_version": CONTRACT_VERSION,
         "environments": [
@@ -227,7 +227,7 @@ async def register_environment(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     async with repo.transaction():
         env_id = await repo.register_environment(
             owner_actor_id=_actor(principal),
@@ -245,7 +245,7 @@ async def list_sandboxes(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     return {
         "contract_version": CONTRACT_VERSION,
         "sandboxes": [
@@ -261,7 +261,7 @@ async def register_sandbox(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     async with repo.transaction():
         sb_id = await repo.register_sandbox(
             owner_actor_id=_actor(principal),
@@ -279,7 +279,7 @@ async def create_session(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         thread_settings = body.thread_settings
         if thread_settings is None:  # 用户设置面的偏好进 thread 设置（0002「设置」）
@@ -315,7 +315,7 @@ async def list_sessions(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     return {
         "contract_version": CONTRACT_VERSION,
         "sessions": [
@@ -332,7 +332,7 @@ async def get_session(
     session: AsyncSession = Depends(get_db_session),
 ):
     try:
-        return await SessionService(WorkbenchRepository(session)).view(
+        return await SessionService(workbench_store(session)).view(
             session_id, owner_actor_id=_actor(principal)
         )
     except WorkbenchError as exc:
@@ -346,7 +346,7 @@ async def start_turn(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         event = await SessionService(repo).record_user_turn_requested(
             session_id,
@@ -379,7 +379,7 @@ async def interrupt(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         s = await SessionService(repo).assert_user_may_drive(
             session_id, owner_actor_id=_actor(principal)
@@ -405,7 +405,7 @@ async def list_events(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         await repo.get_session(session_id, owner_actor_id=_actor(principal))
     except WorkbenchError as exc:
@@ -467,7 +467,7 @@ async def stream_events(
     session: AsyncSession = Depends(get_db_session),
 ):
     """SSE：先订阅 Redis（只作唤醒），再按 cursor 从数据库取事件；见 stream_session_events。"""
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         await repo.get_session(session_id, owner_actor_id=_actor(principal))
     except WorkbenchError as exc:
@@ -480,7 +480,7 @@ async def stream_events(
 
         async def fetch_after(cursor: int) -> list[dict[str, Any]]:
             async with get_postgres().session_factory() as s2:
-                return await WorkbenchRepository(s2).list_events(
+                return await workbench_store(s2).list_events(
                     session_id=session_id, after_cursor=cursor, limit=1000
                 )
 
@@ -513,7 +513,7 @@ async def handover(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     req = HandoverRequest(session_id=session_id, **body.model_dump())
     try:
         result = await Ledger(repo).handover(req, owner_actor_id=_actor(principal))
@@ -538,7 +538,7 @@ async def list_tasks(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     return {
         "contract_version": CONTRACT_VERSION,
         "tasks": [
@@ -557,7 +557,7 @@ async def get_task(
     session: AsyncSession = Depends(get_db_session),
 ):
     try:
-        return await Ledger(WorkbenchRepository(session)).task_view(
+        return await Ledger(workbench_store(session)).task_view(
             task_id, owner_actor_id=_actor(principal)
         )
     except WorkbenchError as exc:
@@ -571,7 +571,7 @@ async def cancel_task(
     session: AsyncSession = Depends(get_db_session),
 ):
     try:
-        return await Ledger(WorkbenchRepository(session)).request_cancel(
+        return await Ledger(workbench_store(session)).request_cancel(
             task_id, owner_actor_id=_actor(principal)
         )
     except WorkbenchError as exc:
@@ -585,7 +585,7 @@ async def task_artifacts(
     session: AsyncSession = Depends(get_db_session),
 ):
     """底稿页：每个交回物的最新版本带内容。不渲染任何评级、目标价字段（F-WEB-05 由网页守，后端只给事实）。"""
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         await repo.get_task(task_id, owner_actor_id=_actor(principal))
     except WorkbenchError as exc:
@@ -605,7 +605,7 @@ async def put_conclusion(
     session: AsyncSession = Depends(get_db_session),
 ):
     """结论栏是用户草稿：落为 conclusion 交回物的新版本，永远标 kind=user_draft。"""
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     try:
         await repo.get_task(task_id, owner_actor_id=_actor(principal))
         async with repo.transaction():
@@ -632,7 +632,7 @@ def _provisioning(
 ) -> SandboxProvisioning:
     provisioner, relay_admin, relay_public_url = backends
     return SandboxProvisioning(
-        WorkbenchRepository(session),
+        workbench_store(session),
         cipher=cipher,
         provisioner=provisioner,
         relay_admin=relay_admin,
@@ -727,7 +727,7 @@ async def get_prefs(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    prefs = await WorkbenchRepository(session).get_prefs(_actor(principal))
+    prefs = await workbench_store(session).get_prefs(_actor(principal))
     return {"contract_version": CONTRACT_VERSION, **_plain(prefs)}
 
 
@@ -737,7 +737,7 @@ async def put_prefs(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     async with repo.transaction():
         prefs = await repo.put_prefs(
             _actor(principal), model=body.model, approval_policy=body.approval_policy
@@ -750,7 +750,7 @@ async def list_credentials(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    rows = await WorkbenchRepository(session).list_credentials(_actor(principal))
+    rows = await workbench_store(session).list_credentials(_actor(principal))
     return {
         "contract_version": CONTRACT_VERSION,
         "credentials": [_plain(r) for r in rows],
@@ -765,7 +765,7 @@ async def add_credential(
     cipher=Depends(credential_cipher),
 ):
     """key 只经 HTTPS 提交一次，服务端存密文，接口永不回显（F-WEB-01、C-D9）。"""
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     if body.sandbox_id:
         try:
             await repo.get_sandbox(body.sandbox_id, owner_actor_id=_actor(principal))
@@ -789,7 +789,7 @@ async def revoke_credential(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     async with repo.transaction():
         ok = await repo.revoke_credential(
             credential_id, owner_actor_id=_actor(principal)
@@ -809,7 +809,7 @@ async def respond_interaction(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    repo = WorkbenchRepository(session)
+    repo = workbench_store(session)
     response: dict[str, Any] = {
         k: v
         for k, v in {

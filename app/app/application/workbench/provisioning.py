@@ -15,9 +15,9 @@ from typing import Any, Protocol
 
 import httpx
 
+from app.application.ports.workbench import WorkbenchStore
 from app.application.workbench.tokens import TokenIssuer, jti_of
 from app.domain.workbench.errors import WorkbenchError
-from app.infrastructure.workbench.repository import WorkbenchRepository
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ def relay_user_for(owner_actor_id: str) -> str:
 class SandboxProvisioning:
     def __init__(
         self,
-        repo: WorkbenchRepository,
+        repo: WorkbenchStore,
         *,
         cipher: Cipher,
         provisioner: HttpProvisioner,

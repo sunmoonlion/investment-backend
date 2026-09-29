@@ -10,23 +10,26 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Mapping
 from typing import Any
 
 import websockets
 from websockets.asyncio.client import ClientConnection, connect
 
+from app.application.ports.workbench import (
+    AppServerError,
+    NotificationHandler,
+    ServerRequestHandler,
+)
+
+__all__ = [
+    "AppServerClient",
+    "AppServerError",
+    "WsAppServerConnector",
+    "resolve_token_ref",
+]
+
 log = logging.getLogger(__name__)
-
-NotificationHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
-ServerRequestHandler = Callable[[Any, str, dict[str, Any]], Awaitable[None]]
-
-
-class AppServerError(RuntimeError):
-    def __init__(self, method: str, error: dict[str, Any]):
-        super().__init__(f"{method}: {error.get('message', error)}")
-        self.method = method
-        self.error = error
 
 
 def resolve_token_ref(ref: str) -> str:
@@ -209,4 +212,22 @@ class AppServerClient:
                     "error": {"code": code, "message": message},
                 }
             )
+        )
+
+
+class WsAppServerConnector:
+    """端口 `AppServerConnector` 的实现：解出令牌，建一条 WebSocket 连接。"""
+
+    def open(
+        self,
+        sandbox: Mapping[str, Any],
+        *,
+        on_notification: NotificationHandler,
+        on_server_request: ServerRequestHandler,
+    ) -> AppServerClient:
+        return AppServerClient(
+            sandbox["app_server_url"],
+            resolve_token_ref(sandbox["token_ref"]),
+            on_notification=on_notification,
+            on_server_request=on_server_request,
         )
