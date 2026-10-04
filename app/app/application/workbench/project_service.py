@@ -10,6 +10,7 @@ from app.domain.workbench.errors import (
     ProjectBusy,
     RootOutsideWhitelist,
 )
+from app.domain.workbench.packs import find_pack
 from app.domain.workbench.projects import (
     clean_relative_path,
     clean_title,
@@ -17,6 +18,8 @@ from app.domain.workbench.projects import (
     project_dir,
     split_under_roots,
 )
+from app.domain.workbench.states import TASK_TERMINAL
+from app.domain.workbench.step_view import TERMINAL_WORDS, money
 
 ONLINE = "online"
 
@@ -171,10 +174,18 @@ class ProjectService:
                     "id": str(t["id"]),
                     "session_id": str(t["session_id"]),
                     "profile_id": t["profile_id"],
+                    # 给页面看的是专家的名字和终态的白话，不是代号
+                    "expert": _expert_name(t),
                     "state": t["state"],
+                    "state_word": TERMINAL_WORDS.get(t["state"]),
                     "question": _question(t),
                     "budget": t["budget"],
+                    "spent": money((t["budget"] or {}).get("used")),
+                    "currency": (t["budget"] or {}).get("currency") or "CNY",
                     "created_at": t["created_at"],
+                    "ended_at": t["updated_at"]
+                    if t["state"] in TASK_TERMINAL
+                    else None,
                 }
                 for t in tasks
             ],
@@ -213,6 +224,11 @@ class ProjectService:
         if project.get("archived_at") is not None:
             raise ProjectArchived("this project is archived; restore it first")
         return project
+
+
+def _expert_name(task: dict[str, Any]) -> str:
+    pack = find_pack(task["profile_id"], task.get("profile_version"))
+    return (pack.name or pack.title) if pack else ""
 
 
 def _question(task: dict[str, Any]) -> str | None:
