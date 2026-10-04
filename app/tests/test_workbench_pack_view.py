@@ -113,7 +113,7 @@ def test_what_happens_after_a_rejection():
         "scope": "重做，最多 1 次；仍不过，停下来问你",
         "profile": "重做，最多 1 次；仍不过，停下来问你",
         "reconcile": "停下来问你",  # 勾稽不平不重做：重做等于催它把数改平
-        "extract": "重做，最多 1 次；仍不过，退回第 2 步",
+        "extract": "重做，最多 1 次；仍不过，退回第 2 步，最多 1 次；仍不过，停下来问你",
         "metrics": "重做，最多 2 次；仍不过，停下来问你",
         "crosscheck": "停下来问你",
         "note": "重做，最多 1 次；仍不过，停下来问你",
@@ -123,7 +123,8 @@ def test_what_happens_after_a_rejection():
         "reworks": 1,
         "then": "back",
         "back_to": 2,
-        "text": "重做，最多 1 次；仍不过，退回第 2 步",
+        "backs": 1,
+        "text": "重做，最多 1 次；仍不过，退回第 2 步，最多 1 次；仍不过，停下来问你",
     }
 
 

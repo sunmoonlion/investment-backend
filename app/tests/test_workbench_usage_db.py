@@ -299,6 +299,13 @@ async def test_stopping_the_expert_in_the_middle_of_a_step(make_client, db):  # 
             return (budget["used"], budget["running"]) == ("0.10", "0.05")
 
         assert await d.until(third_step_running, 40)
+        # 现在在干什么、为什么、没有卡住：第 3 步，工具用完了，在想；runner 握着沙箱
+        shown = (await d.http.get(f"/api/workbench/tasks/{task_id}/steps")).json()
+        now = shown["now"]
+        assert (now["step"]["index"], now["step"]["title"]) == (3, "勾稽")
+        assert now["step"]["why"].startswith("三张表对不上")
+        assert now["doing"]["code"] == "thinking" and now["held"] is True
+        assert now["since"] <= now["last_event_at"]
         sheet = await d.sheet(task_id)
         # 做完的两步记了 0.10；正在做的这一步已经调用过一次模型，又是 0.05：页面上是 0.15
         assert (sheet["budget"]["used"], sheet["budget"]["running"]) == ("0.10", "0.05")
@@ -326,6 +333,7 @@ async def test_stopping_the_expert_in_the_middle_of_a_step(make_client, db):  # 
         assert after["task"]["reason_text"] == "你取消了这个委托"
         assert after["task"]["budget"]["spent"] == "0.15"
         assert after["task"]["budget"]["running"] == "0.00"
+        assert after["now"] is None  # 结束了，没有「现在」
         assert [s["status"] for s in after["steps"]][:4] == [
             "accepted",
             "accepted",

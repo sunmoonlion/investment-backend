@@ -516,6 +516,10 @@ class WorkbenchStore(Protocol):
         """续本 runner 的租约；返回仍归本 runner 的沙箱 id（丢了的就不在里面）。"""
         ...
 
+    async def sandbox_held(self, sandbox_id: str) -> bool:
+        """这个沙箱现在有没有 runner 握着（租约没过期）。给页面一个真的「没有掉线」的信号。"""
+        ...
+
     async def release_leases(self, *, runner_id: str) -> None:
         # 到期而不是删除：运行身份对这张表只有 SELECT/INSERT/UPDATE（数据库策略不发 DELETE）
         ...

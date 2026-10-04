@@ -23,14 +23,18 @@ def after_rejection(step: StepContract, pack: ExpertPack) -> dict[str, Any]:
     parts: list[str] = []
     if step.max_reworks > 0:
         parts.append(f"重做，最多 {step.max_reworks} 次")
-    if finally_ == "back" and back_index is not None:
-        parts.append(f"退回第 {back_index + 1} 步")
-    else:
-        parts.append("停下来问你")
+    backs = 0
+    if finally_ == "back" and back_index is not None and step.max_backs > 0:
+        backs = step.max_backs
+        parts.append(f"退回第 {back_index + 1} 步，最多 {backs} 次")
+    parts.append("停下来问你")
+    if backs == 0 and finally_ == "back":
+        finally_, back_index = "human", None  # 一次都不许退：等于交人
     return {
         "reworks": step.max_reworks,
         "then": finally_,
         "back_to": None if back_index is None else back_index + 1,
+        "backs": backs,
         "text": "；仍不过，".join(parts),
     }
 
@@ -51,6 +55,7 @@ def step_view(step: StepContract, pack: ExpertPack, index: int) -> dict[str, Any
         "step_id": step.step_id,
         "title": step.title,
         "summary": step.summary,
+        "why": step.why,
         "uses": uses,
         "tools": list(step.tools),
         "returns": step.output_artifact,

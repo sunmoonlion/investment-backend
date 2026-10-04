@@ -340,23 +340,50 @@ class Advisor:
             if reworks < step.max_reworks:  # 还有返工额度：重做本步
                 await self._requeue(led, task_id)
                 return TaskState.QUEUED
+            backs = 0
             if step.on_reject == "back" and step.back_to:  # 回到指定的前一步
-                task = await repo.get_task(task_id)
-                await repo.cas_task(
-                    task_id,
-                    expected_version=int(task["state_version"]),
-                    current_step=pack.index_of(step.back_to),
+                backs = sum(
+                    1
+                    for e in await repo.list_task_events(
+                        task_id, types=("step/went_back",)
+                    )
+                    if e["payload"].get("step_id") == step.step_id
                 )
-                await repo.commit()
-                await self._requeue(led, task_id)
-                return TaskState.QUEUED
-            # 返工用尽：交人（AT-24）
+                if backs < step.max_backs:
+                    task = await repo.get_task(task_id)
+                    await repo.append_event(
+                        session_id=str(task["session_id"]),
+                        kind="task",
+                        event_type="step/went_back",
+                        payload={
+                            "step_id": step.step_id,
+                            "back_to": step.back_to,
+                            "time": backs + 1,
+                            "of": step.max_backs,
+                        },
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                    )
+                    await repo.cas_task(
+                        task_id,
+                        expected_version=int(task["state_version"]),
+                        current_step=pack.index_of(step.back_to),
+                    )
+                    await repo.commit()
+                    await self._requeue(led, task_id)
+                    return TaskState.QUEUED
+            # 返工用尽、退回的次数也用尽：交人（AT-24）
             it = await led.open_interaction(
                 task_id,
                 kind="input",
                 prompt=InteractionPrompt(
                     title=f"第「{step.title}」步没有通过验收",
-                    question="要继续返工、跳过这一步交回现有产物，还是停止？",
+                    question=(
+                        f"这一步已经退回前面重做过 {backs} 次，回来仍然没有通过。"
+                        "要再试一次，还是停止？"
+                        if backs
+                        else "要再试一次，还是停止？"
+                    ),
                     options=[
                         {"id": "rework", "label": "再试一次"},
                         {"id": "stop", "label": "停止"},
@@ -365,6 +392,7 @@ class Advisor:
                         "step_id": step.step_id,
                         "failures": verdict.failures,
                         "last_output": (result.final_text or "")[:2000],
+                        "backs": backs,
                     },
                     unknowns=verdict.failures,
                 ),

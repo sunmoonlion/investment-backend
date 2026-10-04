@@ -47,7 +47,12 @@ def consequence(
 
 
 def why(
-    kind: str, step: dict[str, Any] | None, rejected: int, *, missing: bool = False
+    kind: str,
+    step: dict[str, Any] | None,
+    rejected: int,
+    *,
+    missing: bool = False,
+    backs: int = 0,
 ) -> str:
     if kind == "resource":
         return "预算不够做下一步了。专家不会超出你给的上限"
@@ -57,6 +62,11 @@ def why(
         return "这家公司还没有入库。没有数据，专家不往下做，也不重做"
     if step is None:
         return "这一步没有通过验收"
+    if backs:
+        return (
+            f"这一步做了 {rejected} 次都没有通过验收，其间退回前面重做过 {backs} 次。"
+            "专家不再自己来回，停下来问你"
+        )
     if step["after_rejection"]["reworks"] == 0:
         return "这一步没有通过验收。这一步不通过时专家不重做，直接问你"
     return f"这一步做了 {rejected} 次，都没有通过验收"
@@ -123,6 +133,7 @@ def review_view(
             step,
             len([a for a in last if a["outcome"] == "rejected"]),
             missing=bool(subject.get("missing_data")),
+            backs=int(subject.get("backs") or 0),
         ),
         "failed": failed,
         # 停在「没有数据」：页面在这里放「没有数据」卡片

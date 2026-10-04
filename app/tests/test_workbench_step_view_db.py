@@ -375,3 +375,38 @@ async def test_only_the_owner_sees_it(db):
     finally:
         await close(runner)
         await fake.close()
+
+
+async def test_going_back_is_allowed_once_then_the_expert_asks(db):
+    """所有者 2026-10-04 定：退回前面最多 1 次。回来仍然不过，专家不再自己来回，停下来问。"""
+    empty = FACTS | {"table": []}
+    fake, runner, sid, _, task_id = await run(
+        db, [SCOPE, PROFILE, RECONCILE, empty, empty, PROFILE, RECONCILE, empty]
+    )
+    try:
+        shown = await view(db, task_id)
+        assert shown["task"]["state"] == "WAITING"
+        statuses = {s["title"]: s["status"] for s in shown["steps"]}
+        assert statuses["取数"] == "waiting"
+        assert statuses["数据摸底"] == "accepted" and statuses["勾稽"] == "accepted"
+        assert shown["steps"][3]["rejected"] == 3
+        assert shown["steps"][3]["after_rejection"] == {
+            "reworks": 1,
+            "then": "back",
+            "back_to": 2,
+            "backs": 1,
+            "text": "重做，最多 1 次；仍不过，退回第 2 步，最多 1 次；仍不过，停下来问你",
+        }
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            backs = await repo.list_task_events(task_id, types=("step/went_back",))
+            waiting = await repo.list_interactions(session_id=sid, status="pending")
+        assert [e["payload"] for e in backs] == [
+            {"step_id": "extract", "back_to": "profile", "time": 1, "of": 1}
+        ]
+        assert len(waiting) == 1 and waiting[0]["kind"] == "input"
+        assert "已经退回前面重做过 1 次" in waiting[0]["prompt"]["question"]
+        assert waiting[0]["prompt"]["subject"]["backs"] == 1
+    finally:
+        await close(runner)
+        await fake.close()

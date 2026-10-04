@@ -53,6 +53,8 @@ class StepContract(Strict):
     step_version: str = "1"
     title: str
     summary: str = ""  # 给用户看的一句白话。方法的原文不给用户看
+    # 为什么要做这一步，也是给用户看的一句白话。专家处理期间一直摆在页面上（所有者 2026-10-04）
+    why: str = ""
     input_refs: tuple[str, ...] = ()  # 上游步骤的 artifact 名（取最新版本）
     method_text: str
     tools: tuple[
@@ -66,6 +68,9 @@ class StepContract(Strict):
     on_reject: Literal["rework", "back", "human"] = "rework"
     back_to: str | None = None
     max_reworks: int = 1
+    # 这一步最多把专家退回前面几次。用完了仍然不过，就停下来问用户（所有者 2026-10-04 定：1 次）。
+    # 没有这个上限的话，专家可以在两步之间一直来回；现在又没有预算上限拦着
+    max_backs: int = 1
     mode: Literal["single", "compete"] = (
         "single"  # compete 第一期不开（C-A10），位置留好
     )
@@ -285,6 +290,7 @@ DATA_QUERY = ExpertPack(
             step_id="rewrite",
             title="改写问题",
             summary="把问题改写成没有歧义的：查什么、哪个期间、什么口径",
+            why="口语的问题常有歧义：哪一年、合并报表还是母公司。先说清楚查什么，免得查出来的不是你要的。",
             method_text="Rewrite the user's data question into an unambiguous analytical question: entities, metrics, period, grain, filters. "
             + JSON_ONLY,
             output_artifact="rewritten",
@@ -313,6 +319,7 @@ DATA_QUERY = ExpertPack(
             step_id="sql_generate",
             title="生成 SQL",
             summary="对照数据的结构写出查询，并说明每一列的口径",
+            why="查询照着数据的真实结构写，每一列是什么口径写明白。你看得到它到底查了什么。",
             input_refs=("rewritten",),
             method_text="Using the schema tool, write ONE SQL statement answering the rewritten question. Explain each column's 口径. "
             + JSON_ONLY,
@@ -347,6 +354,7 @@ DATA_QUERY = ExpertPack(
             step_id="sql_execute",
             title="执行 SQL",
             summary="执行查询，原样带回结果和数据版本",
+            why="查询的结果原样带回，不改数；同时记下数据版本，以后能复查。",
             input_refs=("sql",),
             method_text="Run the SQL with the run_sql tool. Return rows verbatim (max 200) and the data version reported by the tool. "
             + JSON_ONLY,
@@ -374,6 +382,7 @@ DATA_QUERY = ExpertPack(
             step_id="normalize",
             title="整理结果",
             summary="统一单位、币种、期间的写法，标出缺的值",
+            why="单位、币种、期间的写法统一之后才好比较。缺的值标出来，不补、不估。",
             input_refs=("rewritten", "rows"),
             method_text="Normalize rows into the answer table: units, currency, period labels; flag missing values. "
             + JSON_ONLY,
@@ -398,6 +407,7 @@ DATA_QUERY = ExpertPack(
             step_id="final",
             title="成稿",
             summary="写出答案：每个数带数据版本和口径，写明局限；结论栏留空",
+            why="答案里每个数都带出处和口径，并写明局限。只给事实，不给评级和买卖建议。",
             input_refs=("rewritten", "table"),
             method_text="Write the research note: the answer table, each number with its data version and 口径, limitations. Conclusion field stays empty for the user. "
             + JSON_ONLY,
@@ -628,6 +638,7 @@ FIN_REVIEW = ExpertPack(
             step_id="scope",
             title="定范围",
             summary="认出公司、期间、报告类型",
+            why="先把问的是哪家公司、哪几年、哪种报告认准。认错了，后面每一步都白做。",
             method_text=(
                 "Rewrite the user's question into the scope of a financial statement "
                 "review of ONE A-share listed company: the six-digit security code, the "
@@ -681,6 +692,7 @@ FIN_REVIEW = ExpertPack(
             step_id="profile",
             title="数据摸底",
             summary="确认有这家公司的数据、数据到哪一天、各期是什么口径",
+            why="先看我们有没有这家公司的数据、数据到哪一天。没有数据就停下，不拿别处的数来凑。",
             input_refs=("scope",),
             method_text=(
                 "Find the dataset and describe what it can support, before any number "
@@ -762,6 +774,7 @@ FIN_REVIEW = ExpertPack(
             step_id="reconcile",
             title="勾稽",
             summary="三张表之间、前后两年之间对不对得上",
+            why="三张表对不上，说明数据本身有问题；带着问题往下算，指标都不可信。所以对不上就停下来问你，不自己把数改平。",
             input_refs=("scope", "profile"),
             method_text=(
                 "Check that the statements in scope are internally consistent before "
@@ -840,6 +853,7 @@ FIN_REVIEW = ExpertPack(
             step_id="extract",
             title="取数",
             summary="把问题要用到的报表科目按期取出来，每个数带口径",
+            why="只取问题用得到的科目，每个数记下出自哪一期、什么口径。后面的指标只用这里取出来的数。",
             input_refs=("scope", "profile"),
             method_text=(
                 "Extract the statement items needed for the aspects in scope, for the "
@@ -904,6 +918,7 @@ FIN_REVIEW = ExpertPack(
             step_id="metrics",
             title="算指标",
             summary="按数据集里登记的口径算指标；分母不成立或口径不同的，标为不适用",
+            why="指标按数据集里登记的口径算，不临时发明算法。分母不成立的标「不适用」，不硬算。",
             input_refs=("scope", "profile", "facts"),
             method_text=(
                 "Compute the metrics the question needs, using ONLY definitions "
@@ -979,6 +994,7 @@ FIN_REVIEW = ExpertPack(
             step_id="crosscheck",
             title="对照官方",
             summary="拿取到的数和公司年报里自己披露的数逐项对照",
+            why="我们的数是采集来的。和公司年报里自己披露的数对一遍，对不上的要让你知道。",
             input_refs=("scope", "profile", "facts"),
             method_text=(
                 "Compare the key items in facts with the figures the company itself "
@@ -1057,6 +1073,7 @@ FIN_REVIEW = ExpertPack(
             step_id="note",
             title="成稿",
             summary="只用前面各步的结果写底稿：列事实和提醒，结论栏留空",
+            why="底稿只写前面各步验过的事实和提醒。结论栏留空：下结论是你的事。",
             input_refs=(
                 "scope",
                 "profile",

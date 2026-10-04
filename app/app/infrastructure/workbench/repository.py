@@ -1342,6 +1342,15 @@ class WorkbenchRepository:
                 fresh.append(str(row["sandbox_id"]))
         return fresh
 
+    async def sandbox_held(self, sandbox_id: str) -> bool:
+        r = await self.session.execute(
+            text(
+                "select 1 from workbench_sandbox_leases where sandbox_id = :s and expires_at > now()"
+            ),
+            {"s": sandbox_id},
+        )
+        return r.first() is not None
+
     async def renew_leases(self, *, runner_id: str, ttl_seconds: int) -> list[str]:
         """续本 runner 的租约；返回仍归本 runner 的沙箱 id（丢了的就不在里面）。"""
         r = await self.session.execute(

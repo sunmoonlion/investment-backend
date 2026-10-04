@@ -12,6 +12,7 @@ from typing import Any
 from app.application.ports.workbench import WorkbenchStore
 from app.domain.workbench.dossier_view import dossier_markdown, dossier_view
 from app.domain.workbench.errors import NotFound
+from app.domain.workbench.now_view import now_view
 from app.domain.workbench.packs import ExpertPack, find_pack
 from app.domain.workbench.review_view import review_view
 from app.domain.workbench.states import TASK_TERMINAL, TaskState
@@ -123,6 +124,30 @@ class ExpertDesk:
                 seen = amount((event["payload"].get("cost") or {}).get("turn")) or seen
         return None if seen is None else str(seen)
 
+    async def _now(
+        self, task: dict[str, Any], steps: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """现在在干什么。看的是正在做的这一次开做之后的事件。"""
+        task_id = str(task["id"])
+        active = task.get("active_attempt_id")
+        started = [
+            e
+            for e in await self.repo.list_task_events(task_id, types=("step/started",))
+            if active and e.get("attempt_id") == str(active)
+        ]
+        events: list[dict[str, Any]] = []
+        since = task.get("updated_at")
+        if started:
+            since = started[-1]["created_at"]
+            events = await self.repo.list_events(
+                session_id=str(task["session_id"]),
+                after_cursor=int(started[-1]["cursor"]),
+                limit=1000,
+            )
+        session = await self.repo.get_session(str(task["session_id"]))
+        held = await self.repo.sandbox_held(str(session["sandbox_id"]))
+        return now_view(task, steps, events=events, since=since, held=held)
+
     async def _sheet(
         self,
         task: dict[str, Any],
@@ -168,12 +193,14 @@ class ExpertDesk:
         if pack is None:  # 受理时就打回了：没有步骤可言
             return {
                 "task": await self._sheet(task, None, []),
+                "now": None,
                 "position": None,
                 "steps": [],
             }
         steps = await self._steps(task, pack, attempts, only=None)
         return {
             "task": await self._sheet(task, pack, steps),
+            "now": await self._now(task, steps),
             "position": None
             if task["state"] == TaskState.REJECTED
             else position(pack, task),
