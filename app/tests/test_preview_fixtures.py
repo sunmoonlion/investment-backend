@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
+from cryptography.fernet import Fernet
 from preview_recorder import Recorder
 from preview_replay import HANG, Plan, ReplayAppServer
 from preview_samples import (
@@ -35,10 +37,16 @@ from preview_samples import (
 )
 from sqlalchemy import text
 from test_workbench_ledger_db import db as db  # noqa: F401
+from test_workbench_provisioning import FakeProvisionerApi, FakeRelayAdmin
 from test_workbench_routes import make_client as make_client  # noqa: F401
 
 from app.bootstrap.workbench import build_runner
+from app.infrastructure.workbench.provisioner import HttpProvisioner, ProvisionerConfig
 from app.infrastructure.workbench.publisher import RedisPublisher
+from app.interfaces.endpoints.workbench_routes import (
+    credential_cipher,
+    provisioning_backends,
+)
 
 WORKSPACE = "/home/demo/research"
 TAPES = json.loads(
@@ -433,6 +441,28 @@ def fin_review(company: Company, **changes: Any) -> list[Any]:
     return out
 
 
+async def sandbox_status(rec: Recorder, http) -> None:
+    """设置页要看「我的沙箱」的状态。云端拉起沙箱那一套在测试里用替身：
+    样例里的人没有在云端拉起过沙箱，所以答的是「还没有」。"""
+    app = http._transport.app
+    app.dependency_overrides[credential_cipher] = lambda: Fernet(Fernet.generate_key())
+    app.dependency_overrides[provisioning_backends] = lambda: (
+        HttpProvisioner(
+            ProvisionerConfig(
+                url="http://prov",
+                token="preview",
+                model_provider="kimi",
+                model="kimi-k3",
+                provider_base_url="https://api.moonshot.cn/v1",
+            ),
+            transport=httpx.MockTransport(FakeProvisionerApi().handler),
+        ),
+        FakeRelayAdmin(),
+        "wss://edge.example/relay",
+    )
+    await rec.get(http, "/api/workbench/sandboxes/provisioned")
+
+
 async def record_everything(world: World) -> None:
     rec, http = world.rec, world.http
     for path in (
@@ -449,6 +479,7 @@ async def record_everything(world: World) -> None:
         "credentials",
     ):
         await rec.get(http, f"/api/workbench/{path}")
+    await sandbox_status(rec, http)
     await rec.get(http, "/api/workbench/projects", include_archived="true")
     await rec.get(http, "/api/workbench/sessions", without_project="true")
     await rec.get(http, "/api/workbench/interactions", status="all")
@@ -745,6 +776,7 @@ async def build_empty(world: World) -> None:
         "credentials",
     ):
         await rec.get(http, f"/api/workbench/{path}")
+    await sandbox_status(rec, http)
     await rec.call(
         http,
         "POST",

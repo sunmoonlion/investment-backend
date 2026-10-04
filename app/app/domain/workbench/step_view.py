@@ -10,6 +10,7 @@ from collections import Counter
 from decimal import Decimal
 from typing import Any
 
+from app.domain.workbench.field_words import labels_of
 from app.domain.workbench.pack_view import step_view
 from app.domain.workbench.packs import ExpertPack
 from app.domain.workbench.states import TASK_TERMINAL, AttemptState, TaskState
@@ -241,6 +242,9 @@ def attempts_view(
                     "content": kept.get("content"),
                     "raw": kept.get("raw"),
                 }
+            if returned is not None:
+                # 字段各叫什么：页面上不让用户看英文字段名
+                returned["labels"] = labels_of(returned.get("content"))
             entry["returned"] = returned
             entry["process"] = lines
         out.append(entry)

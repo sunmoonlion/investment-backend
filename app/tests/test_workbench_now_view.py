@@ -100,3 +100,30 @@ def test_now_while_waiting_and_after_the_end():
     assert offline is not None and offline["doing"]["code"] == "offline"
     for ended in ("SUCCEEDED", "FAILED", "CANCELLED", "REJECTED"):
         assert now_view(task(ended), STEPS, events=[], since="t0", held=False) is None
+
+
+def test_every_field_an_expert_hands_back_has_a_word_for_the_user():
+    """交回物的字段名是英文。专家包里约定的每一个字段都要有给用户看的叫法。"""
+    from app.domain.workbench.field_words import FIELD_WORDS, labels_of
+
+    def keys(value) -> set[str]:
+        if isinstance(value, dict):
+            return set(value) | {k for v in value.values() for k in keys(v)}
+        if isinstance(value, list):
+            return {k for v in value for k in keys(v)}
+        return set()
+
+    for pack in listed_packs():
+        for step in pack.workflow:
+            missing = keys(step.output_schema) - set(FIELD_WORDS)
+            # inputs 里面是科目名，随指标变，不登记
+            allowed = {"operate_income", "operate_cost"}
+            assert missing <= allowed, (pack.profile_id, step.step_id, missing)
+    assert labels_of(
+        {"checks": [{"rule": "x", "unknown_one": 1}], "data_version": "v"}
+    ) == {
+        "checks": "勾稽结果",
+        "rule": "规则",
+        "data_version": "数据版本",
+    }
+    assert labels_of("文字") == {}

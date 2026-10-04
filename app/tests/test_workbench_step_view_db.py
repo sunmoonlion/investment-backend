@@ -168,11 +168,14 @@ async def test_seven_steps_done(db):
         ]
         (attempt,) = step["attempts"]
         assert attempt["outcome"] == "accepted"
+        labels = attempt["returned"].pop("labels")
         assert attempt["returned"] == {
             "artifact": "reconcile",
             "version": 1,
             "content": RECONCILE,
         }
+        # 字段各叫什么：页面上不让用户看英文字段名
+        assert labels["checks"] == "勾稽结果" and labels["rule"] == "规则"
         assert [(c["label"], c["pass"], c["message"]) for c in attempt["checks"]] == [
             ("交回的格式对", True, ""),
             ("有勾稽结果、跨期连续性、未解释的断点", True, ""),
