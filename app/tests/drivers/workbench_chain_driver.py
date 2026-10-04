@@ -17,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.application.workbench.ledger import Ledger  # noqa: E402
@@ -27,6 +27,7 @@ from app.bootstrap.workbench import build_runner  # noqa: E402
 from app.domain.workbench.errors import WheelHeldByOther  # noqa: E402
 from app.domain.workbench.models import HandoverRequest  # noqa: E402
 from app.domain.workbench.step_view import amount as step_amount  # noqa: E402
+from app.infrastructure.storage.postgres import make_session_factory
 from app.infrastructure.workbench.publisher import RedisPublisher  # noqa: E402
 from app.infrastructure.workbench.repository import WorkbenchRepository  # noqa: E402
 
@@ -112,7 +113,7 @@ async def main() -> int:
         url.replace("postgresql://", "postgresql+asyncpg://"),
         connect_args={"server_settings": {"search_path": schema}},
     )
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = make_session_factory(engine)
     runner = build_runner(
         factory,
         publisher=RedisPublisher(None, "it"),

@@ -14,7 +14,7 @@ import pytest_asyncio
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.session_service import SessionService
@@ -33,6 +33,7 @@ from app.domain.workbench.states import (
     TaskState,
     WaitingReason,
 )
+from app.infrastructure.storage.postgres import make_session_factory
 from app.infrastructure.workbench.repository import WorkbenchRepository
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,7 +64,7 @@ async def db():
         url.replace("postgresql://", "postgresql+asyncpg://"),
         connect_args={"server_settings": {"search_path": schema}},
     )
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = make_session_factory(engine)
     try:
         yield factory
     finally:
