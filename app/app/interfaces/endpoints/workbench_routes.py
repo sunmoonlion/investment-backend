@@ -187,10 +187,14 @@ def _actor(principal: Principal) -> str:
     return str(principal.actor_id)
 
 
+# 不给浏览器的列。token_ref 是沙箱的令牌在哪（按需拉起的沙箱，它就是令牌本身）
+_NEVER_TO_THE_BROWSER = frozenset({"token_hash", "token_ref"})
+
+
 def _plain(d: dict[str, Any]) -> dict[str, Any]:
     out = {}
     for k, v in d.items():
-        if k in ("token_hash",):
+        if k in _NEVER_TO_THE_BROWSER:
             continue
         out[k] = str(v) if isinstance(v, uuid.UUID) else v
     return out

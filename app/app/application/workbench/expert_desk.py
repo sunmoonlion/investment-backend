@@ -18,6 +18,7 @@ from app.domain.workbench.step_view import (
     TERMINAL_WORDS,
     budget_view,
     position,
+    reason_text,
     steps_view,
 )
 
@@ -128,7 +129,8 @@ class ExpertDesk:
             "state_word": TERMINAL_WORDS.get(state),
             "waiting_reason": task.get("waiting_reason"),
             "cancel_requested": task.get("cancel_requested_at") is not None,
-            "reason": await self._reason(task),
+            "reason": (reason := await self._reason(task)),
+            "reason_text": reason_text(state, reason) if state in TASK_TERMINAL else "",
             "budget": budget_view(task["budget"]),
             "data": data,  # 第 2 步做完之前是 None：还不知道
             "started_at": started,
@@ -280,6 +282,7 @@ class ExpertDesk:
             for w in await self.waiting_for_me(owner_actor_id=owner_actor_id)
             if w["where"]["task"] is not None
         ]
+        asked = {w["where"]["task"]["id"] for w in waiting}
         running: list[dict[str, Any]] = []
         returned: list[dict[str, Any]] = []
         for task in await self.repo.list_tasks(owner_actor_id=owner_actor_id):
@@ -305,7 +308,10 @@ class ExpertDesk:
             }
             if ended:
                 line["reason"] = await self._reason(task)
+                line["reason_text"] = reason_text(task["state"], line["reason"])
                 returned.append(line)
-            else:
+            elif str(task["id"]) not in asked:
+                # 等我决定的已经列在上面了，这里不再列一遍。
+                # 等机器回来的没有待办，留在这里，页面标「暂停」
                 running.append(line)
         return {"waiting": waiting, "running": running, "returned": returned}

@@ -14,7 +14,7 @@ from app.domain.workbench.packs import (
     SMOKE,
     listed_packs,
 )
-from app.domain.workbench.step_view import budget_view, money
+from app.domain.workbench.step_view import budget_view, money, reason_text
 
 LISTED = [p.profile_id for p in listed_packs()]
 
@@ -196,3 +196,39 @@ def test_data_that_changed_version_midway_is_not_hidden():
         "as_of": "2025-12-31",
         "versions_seen": ["v1", "v2"],
     }
+
+
+@pytest.mark.parametrize(
+    ("state", "reason", "said"),
+    [
+        ("SUCCEEDED", None, ""),
+        ("CANCELLED", {"by": "user"}, "你取消了这个委托"),
+        (
+            "FAILED",
+            {"by": "user stopped", "interaction": "x"},
+            "专家停下来问你，你选择了停止",
+        ),
+        ("FAILED", {"budget": "user declined top-up"}, "预算用完了，你没有追加"),
+        ("FAILED", {"error": "turn timed out"}, "专家那一头出错了，这一步没有做完"),
+        (
+            "FAILED",
+            {"code": "missing_input", "step": "note"},
+            "前面步骤的交回物缺了，做不下去",
+        ),
+        ("FAILED", {}, "没有做完"),
+        (
+            "REJECTED",
+            {
+                "code": "no_expert_pack",
+                "message": "这个问题不在专家范围，继续自己用 Codex 即可",
+            },
+            "这个问题不在专家的范围里，可以自己在对话里接着做",
+        ),
+        ("REJECTED", {}, "专家没有接这个委托"),
+    ],
+)
+def test_why_a_delegation_ended_in_words_for_the_user(state, reason, said):
+    assert reason_text(state, reason) == said
+    # 给用户看的话里没有内部的词
+    for word in ("Codex", "user", "stopped", "pack", "turn"):
+        assert word not in said

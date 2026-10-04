@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import httpx
 from cryptography.fernet import Fernet
+from sqlalchemy import text
 from test_workbench_ledger_db import db as db  # noqa: F401
 from test_workbench_routes import A  # noqa: F401
 from test_workbench_routes import make_client as make_client
@@ -159,15 +160,21 @@ async def test_provision_flow(make_client, db):  # noqa: F811
     )
     assert spec["relay_token"] != body["relay"]["agent_token"]
 
-    # 沙箱登记到了该用户名下，token_ref 是能力令牌
-    listed = (await http.get("/api/workbench/sandboxes")).json()["sandboxes"]
+    # 沙箱登记到了该用户名下。能力令牌存在账里，不给浏览器
+    answered = await http.get("/api/workbench/sandboxes")
+    listed = answered.json()["sandboxes"]
     mine = [s for s in listed if s["provisioned"]]
-    assert (
-        len(mine) == 1
-        and mine[0]["app_server_url"] == body["app_server_url"]
-        and mine[0]["token_ref"] == "inline:" + fake_api.token
-    )
+    assert len(mine) == 1 and mine[0]["app_server_url"] == body["app_server_url"]
     assert mine[0]["relay_user"] == relay_user
+    assert "token_ref" not in mine[0]
+    assert fake_api.token not in answered.text and fake_api.token not in r.text
+    async with db() as s:
+        stored = (
+            await s.execute(
+                text("select token_ref from workbench_sandboxes where provisioned")
+            )
+        ).scalar_one()
+    assert stored == "inline:" + fake_api.token
 
     # 再拉一次：不再回代理令牌；沙箱行复用；会合点再次登记同一对令牌
     r2 = await http.post("/api/workbench/sandboxes/provision")

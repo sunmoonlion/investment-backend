@@ -122,6 +122,7 @@ async def test_the_five_parts_of_a_review(db):
         (returned,) = home["returned"]
         assert returned["state_word"] == "失败"
         assert returned["reason"]["by"] == "user stopped"
+        assert returned["reason_text"] == "专家停下来问你，你选择了停止"
         assert returned["budget"]["used"] == "0.03"
         assert returned["position"]["step"] == 3
     finally:
@@ -140,11 +141,9 @@ async def test_a_step_that_used_up_its_tries(db):
         assert waiting["failed"] == [
             {"label": "指标表不是空的", "message": "指标表为空"}
         ]
-        (running,) = home["running"]
-        assert running["task_id"] == task_id
-        assert running["state"] == "WAITING" and running["waiting_reason"] == "INPUT"
-        assert running["position"] == {"step": 5, "of": 7, "title": "算指标", "left": 3}
-        assert running["budget"]["used"] == "0.07"
+        assert waiting["where"]["task"]["id"] == task_id
+        # 等我决定的只列在「等我决定」里，不在「进行中」里再列一遍
+        assert home["running"] == []
         assert home["returned"] == []
     finally:
         await close(runner)

@@ -33,6 +33,31 @@ TERMINAL_WORDS = {
     TaskState.CANCELLED: "已取消",
 }
 
+
+def reason_text(state: str, reason: dict[str, Any] | None) -> str:
+    """委托为什么停在这个终态，给用户看的一句话。账里记的是内部的词。"""
+    reason = reason or {}
+    if state == TaskState.SUCCEEDED:
+        return ""
+    if reason.get("code") == "no_expert_pack":
+        return "这个问题不在专家的范围里，可以自己在对话里接着做"
+    if reason.get("code") == "no_thread":
+        return "这段对话还没有准备好"
+    if reason.get("code") == "missing_input":
+        return "前面步骤的交回物缺了，做不下去"
+    if state == TaskState.CANCELLED:
+        return "你取消了这个委托"
+    if reason.get("by") == "user stopped":
+        return "专家停下来问你，你选择了停止"
+    if reason.get("budget"):
+        return "预算用完了，你没有追加"
+    if reason.get("error"):
+        return "专家那一头出错了，这一步没有做完"
+    if state == TaskState.REJECTED:
+        return str(reason.get("message") or "专家没有接这个委托")
+    return "没有做完" if state == TaskState.FAILED else ""
+
+
 BRIEF_CHARS = 200
 RAW_CHARS = 20000
 
