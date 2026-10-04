@@ -107,12 +107,14 @@ def asked_about_a_company_without_data() -> dict[str, Any]:
                         "outputTokens": 96,
                         "totalTokens": 9196,
                     },
+                    # 累计 = 磁带里前两轮的累计 + 这一次。对不上的话，按累计的差算出来的
+                    # 这一次就和上面写的不一样
                     "total": {
-                        "inputTokens": 26010,
-                        "cachedInputTokens": 15872,
-                        "cacheWriteInputTokens": 9728,
-                        "outputTokens": 560,
-                        "totalTokens": 26570,
+                        "inputTokens": 19314,
+                        "cachedInputTokens": 18176,
+                        "cacheWriteInputTokens": 768,
+                        "outputTokens": 641,
+                        "totalTokens": 19955,
                     },
                 },
             ),
@@ -816,7 +818,16 @@ async def test_the_full_world(make_client, db, tmp_path):  # noqa: F811
     assert kinds.count("mcpToolCall") == 1
     missing = [e for e in said["events"] if e["type"] == "data.missing"]
     assert [e["payload"]["security_code"] for e in missing] == ["600436"]
-    assert answer(f"/api/workbench/sessions/{free['id']}/usage")["calls"] == 3
+    spent = answer(f"/api/workbench/sessions/{free['id']}/usage")
+    assert spent["calls"] == 3
+    # 拼出来的这一轮：按累计的差算出来的，正好是它自己写的「这一次」
+    assert spent["turns"][2]["tokens"] == {
+        "input": 140,
+        "cached_input": 8448,
+        "cache_write": 512,
+        "output": 96,
+        "total": 9196,
+    }
     assert len(answer("/api/workbench/projects")["projects"]) == 9
     assert (
         len(answer("/api/workbench/projects", "include_archived=true")["projects"])
