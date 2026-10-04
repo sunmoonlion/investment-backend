@@ -610,7 +610,7 @@ class SandboxLink:
                         or "Codex 请求执行超出沙箱的动作",
                         "options": [
                             {"id": "accept", "label": "允许一次"},
-                            {"id": "acceptForSession", "label": "本会话都允许"},
+                            {"id": "acceptForSession", "label": "这段对话里都允许"},
                             {"id": "decline", "label": "拒绝"},
                         ],
                         "subject": {"request_id": request_id, **summary},

@@ -130,6 +130,91 @@ def asked_about_a_company_without_data() -> dict[str, Any]:
     }
 
 
+def changed_files_with_a_patch() -> dict[str, Any]:
+    """工作里用补丁改文件的一轮。这一轮不是录的，是照 Codex 的协议（`ThreadItem::FileChange`）拼的。
+
+    录磁带用的模型（kimi-k3）改文件走的是命令行，磁带里没有这种事件；页面的「改动」要有样例可看。
+    """
+
+    def note(method: str, **params: Any) -> dict[str, Any]:
+        return {
+            "kind": "notification",
+            "method": method,
+            "params": {"threadId": WAS_THREAD, "turnId": WAS_TURN, **params},
+        }
+
+    root = "/home/demo/research/恒瑞医药"
+    patch = {
+        "type": "fileChange",
+        "id": "patch-1",
+        "changes": [
+            {
+                "path": f"{root}/README.md",
+                "kind": {"type": "update", "move_path": None},
+                "diff": "@@ -1,3 +1,4 @@\n-# 研究笔记\n+# 恒瑞医药研究笔记\n \n 样例项目，内容是编的。\n+指标的含义见 notes/指标说明.md。\n",
+            },
+            {
+                "path": f"{root}/notes/待办.md",
+                "kind": {"type": "add"},
+                "diff": "+# 待办\n+\n+- 核对 2025 年报的研发费用口径\n+- 补上现金流的同比\n",
+            },
+        ],
+    }
+    return {
+        "prompt": "把 README.md 的标题改成「恒瑞医药研究笔记」，加一行指到指标说明；再建一个 notes/待办.md，列两条待办。",
+        "messages": [
+            note("turn/started", turn={"id": WAS_TURN, "status": "inProgress"}),
+            note(
+                "item/completed",
+                item={
+                    "type": "agentMessage",
+                    "id": "msg-p1",
+                    "text": "我改一下 README.md，再新建待办文件。",
+                },
+            ),
+            note("item/started", item={**patch, "status": "inProgress"}),
+            note("item/completed", item={**patch, "status": "completed"}),
+            note(
+                "item/completed",
+                item={
+                    "type": "agentMessage",
+                    "id": "msg-p2",
+                    "text": "改好了：\n\n- `README.md`：标题改成「恒瑞医药研究笔记」，加了一行指到 `notes/指标说明.md`\n"
+                    "- 新建 `notes/待办.md`，列了两条待办",
+                },
+            ),
+            note(
+                "thread/tokenUsage/updated",
+                tokenUsage={
+                    "last": {
+                        "inputTokens": 7900,
+                        "cachedInputTokens": 7424,
+                        "cacheWriteInputTokens": 256,
+                        "outputTokens": 120,
+                        "totalTokens": 8020,
+                    },
+                    # 累计 = 磁带里「工作」第一轮之后的累计 + 这一次
+                    "total": {
+                        "inputTokens": 36117,
+                        "cachedInputTokens": 33792,
+                        "cacheWriteInputTokens": 1792,
+                        "outputTokens": 632,
+                        "totalTokens": 36749,
+                    },
+                },
+            ),
+            {
+                "kind": "notification",
+                "method": "turn/completed",
+                "params": {
+                    "threadId": WAS_THREAD,
+                    "turn": {"id": WAS_TURN, "status": "completed"},
+                },
+            },
+        ],
+    }
+
+
 class World:
     def __init__(self, http, runner, fake, recorder: Recorder) -> None:
         self.http, self.runner, self.fake, self.rec = http, runner, fake, recorder
@@ -246,9 +331,18 @@ class World:
         assert await self.turn_until(over), (name, prompt)
 
     async def talk(
-        self, name: str, taped: str, *, kind: str, project: str | None = None
+        self,
+        name: str,
+        taped: str,
+        *,
+        kind: str,
+        project: str | None = None,
+        also: dict[int, dict[str, Any]] | None = None,
     ):
+        """把一盘磁带放一遍。`also`：在第几轮之前插一轮拼出来的。"""
         turns = tape(taped)
+        for at, extra in sorted((also or {}).items(), reverse=True):
+            turns.insert(at, extra)
         await self.conversation(name, Plan(tape=turns), kind=kind, project=project)
         for n, turn in enumerate(turns):
             asks = any(m["kind"] == "request" for m in turn["messages"])
@@ -546,7 +640,13 @@ async def build_full(world: World) -> None:
     for turn in free:
         await world.say("chat", turn["prompt"])
     await world.talk("project-chat", "project_chat", kind="chat", project="恒瑞医药")
-    await world.talk("work", "work", kind="work", project="恒瑞医药")
+    await world.talk(
+        "work",
+        "work",
+        kind="work",
+        project="恒瑞医药",
+        also={1: changed_files_with_a_patch()},
+    )
 
     # 打回：在对话里请了一位不存在的专家
     await world.conversation("refused", Plan(), kind="work", project="中国平安")
@@ -828,6 +928,23 @@ async def test_the_full_world(make_client, db, tmp_path):  # noqa: F811
         "output": 96,
         "total": 9196,
     }
+    # 工作：三轮。第二轮是用补丁改文件（拼的），第三轮停在等批准
+    job = next(
+        s
+        for s in answer("/api/workbench/sessions")["sessions"]
+        if s["kind"] == "work" and s["title"] and s["title"].startswith("把毛利率")
+    )
+    did = answer(f"/api/workbench/sessions/{job['id']}/events", "limit=1000")["events"]
+    patches = [
+        e["payload"]["item"]
+        for e in did
+        if e["type"] == "item/completed"
+        and e["payload"]["item"].get("type") == "fileChange"
+    ]
+    assert [len(p["changes"]) for p in patches] == [2]
+    assert len([e for e in did if e["type"] == "turn/requested"]) == 3
+    paid = answer(f"/api/workbench/sessions/{job['id']}/usage")
+    assert paid["turns"][1]["tokens"]["total"] == 8020
     assert len(answer("/api/workbench/projects")["projects"]) == 9
     assert (
         len(answer("/api/workbench/projects", "include_archived=true")["projects"])
