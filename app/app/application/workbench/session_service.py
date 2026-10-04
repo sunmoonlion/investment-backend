@@ -13,6 +13,7 @@ from app.domain.workbench.errors import (
     ProjectRequired,
     WheelHeldByOther,
 )
+from app.domain.workbench.pricing import PriceList, conversation_usage
 from app.domain.workbench.projects import (
     ConversationKind,
     clean_title,
@@ -241,6 +242,16 @@ class SessionService:
                 event_type="turn/requested",
                 payload={"request_id": request_id, "text": text, "by": "user"},
             )
+
+    async def usage(
+        self, session_id: str, *, owner_actor_id: str, prices: PriceList
+    ) -> dict[str, Any]:
+        """这段对话到现在用了多少、花了多少（估算）。"""
+        await self.repo.get_session(session_id, owner_actor_id=owner_actor_id)
+        events = await self.repo.list_record_events(
+            session_id=session_id, types=("thread/tokenUsage/updated",)
+        )
+        return conversation_usage(events, prices)
 
     async def view(self, session_id: str, *, owner_actor_id: str) -> dict[str, Any]:
         s = await self.repo.get_session(session_id, owner_actor_id=owner_actor_id)

@@ -20,18 +20,22 @@ class Budget(Strict):
     """预算账的快照：币种、上限、已预留、已用。金额用字符串化的 Decimal 存 JSON。"""
 
     currency: str = "CNY"
-    limit: Decimal = Field(gt=0)
+    # 上限可以不给：不给就没有上限，花多少记多少，停不停由用户看着金额自己定
+    # （所有者 2026-10-04：页面上实时显示金额加一个随时能点的停止，不靠预算限额）
+    limit: Decimal | None = Field(default=None, gt=0)
     reserved: Decimal = Decimal("0")
     used: Decimal = Decimal("0")
 
     @property
     def available(self) -> Decimal:
+        if self.limit is None:
+            return Decimal("Infinity")
         return self.limit - self.reserved - self.used
 
-    def as_json(self) -> dict[str, str]:
+    def as_json(self) -> dict[str, str | None]:
         return {
             "currency": self.currency,
-            "limit": str(self.limit),
+            "limit": None if self.limit is None else str(self.limit),
             "reserved": str(self.reserved),
             "used": str(self.used),
         }
@@ -46,7 +50,7 @@ class HandoverRequest(Strict):
     profile_version: str | None = None
     original_input: dict[str, Any]
     attachments: list[str] = Field(default_factory=list)
-    budget_limit: Decimal = Field(gt=0)
+    budget_limit: Decimal | None = Field(default=None, gt=0)
     budget_currency: str = "CNY"
     requested_deadline: str | None = None
     client_context: dict[str, Any] = Field(default_factory=dict)

@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from test_workbench_ledger_db import OWNER  # noqa: F401
 from test_workbench_ledger_db import db as db
+from usage_support import MODEL, UsageMeter
 from websockets.asyncio.server import serve
 
 from app.application.workbench.acceptance import judge
@@ -32,11 +33,12 @@ ANSWER = json.dumps(
 
 
 class ScriptedAppServer:
-    """每个 turn/start 消费一条脚本回复；脚本用完就回显。tokenUsage 固定 1000 token（默认价 0.01/1k → 每 turn 0.01）。"""
+    """每个 turn/start 消费一条脚本回复；脚本用完就回显。用量每轮固定 1000 token（默认价 0.01/1k → 每 turn 0.01）。"""
 
     def __init__(self, replies: list[str] | None = None, tokens_per_turn: int = 1000):
         self.replies = list(replies or [])
         self.tokens = tokens_per_turn
+        self.meter = UsageMeter()
         self.turn_inputs: list[str] = []
         self.port = 0
         self.server = None
@@ -58,7 +60,7 @@ class ScriptedAppServer:
             await send({"id": rid, "result": {}})
         elif m == "thread/start":
             tid = f"thread-{uuid.uuid4().hex[:8]}"
-            await send({"id": rid, "result": {"thread": {"id": tid}}})
+            await send({"id": rid, "result": {"thread": {"id": tid}, "model": MODEL}})
         elif m == "turn/start":
             tid, turn_id = p["threadId"], f"turn-{uuid.uuid4().hex[:6]}"
             text = p["input"][0]["text"]
@@ -84,7 +86,7 @@ class ScriptedAppServer:
                     "params": {
                         "threadId": tid,
                         "turnId": turn_id,
-                        "tokenUsage": {"total": {"totalTokens": self.tokens}},
+                        "tokenUsage": self.meter.report(tid, self.tokens),
                     },
                 }
             )

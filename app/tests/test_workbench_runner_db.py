@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import text
 from test_workbench_ledger_db import OWNER  # noqa: F401  (fixture)
 from test_workbench_ledger_db import db as db
+from usage_support import MODEL, UsageMeter
 from websockets.asyncio.server import serve
 
 from app.application.workbench.ledger import Ledger
@@ -34,6 +35,7 @@ class FakeAppServer:
         self.disk: set[str] = set()
         self.live: set[str] = set()
         self.strict_threads = False
+        self.meter = UsageMeter()
         self.refuse_inject = False  # 打开后像不认这个请求的旧 app-server
         self.port = 0
         self.elicitations: list[dict] = []
@@ -75,7 +77,13 @@ class FakeAppServer:
             self.disk.add(tid)
             self.live.add(tid)
             await send(
-                {"id": rid, "result": {"thread": {"id": tid, "cwd": p.get("cwd")}}}
+                {
+                    "id": rid,
+                    "result": {
+                        "thread": {"id": tid, "cwd": p.get("cwd")},
+                        "model": MODEL,
+                    },
+                }
             )
             await send({"method": "thread/started", "params": {"thread": {"id": tid}}})
         elif m == "thread/resume":
@@ -252,7 +260,7 @@ class FakeAppServer:
                     "params": {
                         "threadId": tid,
                         "turnId": turn_id,
-                        "tokenUsage": {"total": {"totalTokens": 42}},
+                        "tokenUsage": self.meter.report(tid, 1000),
                     },
                 }
             )

@@ -30,9 +30,12 @@ log = logging.getLogger(__name__)
 class TurnResult:
     turn_id: str | None
     final_text: str | None
-    tokens: dict[str, Any]
+    tokens: dict[str, Any]  # 这一轮各次调用相加的用量（pricing.Usage.as_json）
     error: str | None = None
     environment_lost: bool = False
+    # 这一轮花了多少（估算）。不认识这个模型的单价时是 None：只有用量，没有金额
+    cost: Decimal | None = None
+    interrupted: bool = False
 
 
 class TurnDriver(Protocol):
@@ -47,41 +50,16 @@ class TurnDriver(Protocol):
     ) -> TurnResult: ...
 
 
-class Pricing:
-    """token → 费用。第一期一张粗表；厂商回报的费用字段出现后以它为准。"""
-
-    def __init__(
-        self,
-        per_1k: dict[str, Decimal] | None = None,
-        default_per_1k: Decimal = Decimal("0.01"),
-    ):
-        self.per_1k = per_1k or {}
-        self.default = default_per_1k
-
-    def cost(self, tokens: dict[str, Any], model: str | None = None) -> Decimal:
-        total = (
-            tokens.get("total", {}) if isinstance(tokens.get("total"), dict) else tokens
-        )
-        n = int(
-            total.get("totalTokens")
-            or (int(total.get("inputTokens", 0)) + int(total.get("outputTokens", 0)))
-        )
-        rate = self.per_1k.get(model or "", self.default)
-        return (Decimal(n) / Decimal(1000) * rate).quantize(Decimal("0.000001"))
-
-
 class Advisor:
     def __init__(
         self,
         stores: WorkbenchStores,
         driver: TurnDriver,
         *,
-        pricing: Pricing | None = None,
         records: bool = False,
     ):
         self.stores = stores  # 每次调用开一个工作单元
         self.driver = driver
-        self.pricing = pricing or Pricing()
         # 沙箱里配好了读项目记录的工具：每一步的说明里告诉模型有这组工具、委托编号是什么
         self.records = records
 
@@ -221,10 +199,27 @@ class Advisor:
                 attempt_id, AttemptState.RUNNING, turn_id=result.turn_id
             )
             task = await repo.get_task(task_id)
+            consumed = result.cost or Decimal("0")
+            if task["cancel_requested_at"] is not None:
+                # 用户点了停止：这一步被中断。已经花的照记，做完的部分交回
+                await led.attempt_transition(
+                    attempt_id,
+                    AttemptState.CANCELLED,
+                    consumed=consumed,
+                    tokens=result.tokens,
+                    failure_code="cancelled",
+                )
+                return (
+                    await led.transition(
+                        task_id, TaskState.CANCELLED, reason={"by": "user"}
+                    )
+                )["state"]
             if result.environment_lost or (result.error and not result.final_text):
                 await led.attempt_transition(
                     attempt_id,
                     AttemptState.FAILED,
+                    consumed=consumed,
+                    tokens=result.tokens,
                     failure_code="environment"
                     if result.environment_lost
                     else "turn_error",
@@ -245,10 +240,12 @@ class Advisor:
                         task_id, TaskState.FAILED, reason={"error": result.error}
                     )
                 )["state"]
-            consumed = self.pricing.cost(result.tokens, task.get("model"))
             budget = task["budget"]
-            available = Decimal(str(budget["limit"])) - Decimal(str(budget["used"]))
-            if consumed > available:
+            # 用户给了上限才有「超了」这回事。不给上限的，花多少记多少，停不停由用户看着定
+            limit = budget.get("limit")
+            if limit is not None and consumed > Decimal(str(limit)) - Decimal(
+                str(budget["used"])
+            ):
                 await led.attempt_transition(
                     attempt_id,
                     AttemptState.BUDGET_EXCEEDED,

@@ -100,7 +100,8 @@ class Handover(Strict):
     profile_version: str | None = None
     original_input: dict[str, Any]
     attachments: list[str] = Field(default_factory=list)
-    budget_limit: Decimal = Field(gt=0)
+    # 上限可以不给：不给就没有上限。页面上实时显示花了多少，用户随时可以停
+    budget_limit: Decimal | None = Field(default=None, gt=0)
     budget_currency: str = "CNY"
     requested_deadline: str | None = None
     client_context: dict[str, Any] = Field(default_factory=dict)
@@ -454,6 +455,24 @@ async def interrupt(
     return {"command_id": cid}
 
 
+@router.get("/sessions/{session_id}/usage")
+async def session_usage(
+    session_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """这段对话到现在用了多少、花了多少（估算）。实时的数在事件流里，这里是合计。"""
+    try:
+        usage = await SessionService(workbench_store(session)).usage(
+            session_id,
+            owner_actor_id=_actor(principal),
+            prices=get_settings().workbench_model_prices(),
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return {"contract_version": CONTRACT_VERSION, **usage}
+
+
 @router.get("/sessions/{session_id}/events")
 async def list_events(
     session_id: str,
@@ -627,12 +646,26 @@ async def cancel_task(
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    repo = workbench_store(session)
     try:
-        return await Ledger(workbench_store(session)).request_cancel(
+        result = await Ledger(repo).request_cancel(
             task_id, owner_actor_id=_actor(principal)
         )
+        if result.get("cancel_requested"):
+            # 专家正在做某一步：马上把这一步停下，不等它自己做完
+            task = await repo.get_task(task_id)
+            talk = await repo.get_session(str(task["session_id"]))
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=str(task["session_id"]),
+                    sandbox_id=str(talk["sandbox_id"]),
+                    kind="turn.interrupt",
+                    payload={"by": "user", "task_id": task_id},
+                )
     except WorkbenchError as exc:
         raise _http(exc) from exc
+    await _publish_commands_wakeup()
+    return result
 
 
 @router.get("/tasks/{task_id}/artifacts")

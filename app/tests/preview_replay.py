@@ -11,6 +11,7 @@ import re
 import uuid
 from typing import Any
 
+from usage_support import MODEL, UsageMeter
 from websockets.asyncio.server import serve
 
 HANG = object()  # 专家的这一步不交回：委托停在「正在做」
@@ -42,6 +43,11 @@ class ReplayAppServer:
         self.threads: dict[str, Plan] = {}
         self.pending: dict[str, asyncio.Future] = {}
         self.turn_inputs: list[str] = []
+        self.meter = UsageMeter()
+        self.open_turns: dict[str, Any] = {}  # 一直开着的轮次：等着被停下
+        self.interrupted: list[str | None] = []
+        self.last_usage: dict[str, dict[str, Any]] = {}  # 每条线最近报的一次用量
+        self.replayed = 0
         self.port = 0
         self.server: Any = None
 
@@ -77,7 +83,33 @@ class ReplayAppServer:
         if method == "thread/start":
             thread = f"thread-{uuid.uuid4().hex[:12]}"
             self.threads[thread] = self.plans.pop(0) if self.plans else Plan()
-            await send({"id": rid, "result": {"thread": {"id": thread}}})
+            await send(
+                {"id": rid, "result": {"thread": {"id": thread}, "model": MODEL}}
+            )
+            return
+        if method == "turn/interrupt":
+            self.interrupted.append(params.get("turnId"))
+            await send({"id": rid, "result": {}})
+            stopped = self.open_turns.pop(str(params.get("turnId")), None)
+            if stopped is not None:
+                reply, thread = stopped
+                await reply(
+                    {
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": thread,
+                            "turn": {"id": params["turnId"], "status": "interrupted"},
+                        },
+                    }
+                )
+            return
+        if method == "thread/resume":
+            await send({"id": rid, "result": {"model": MODEL}})
+            # 真的 Codex 在重新装载一条线时，把上一次的用量原样再报一遍
+            again = self.last_usage.get(str(params.get("threadId")))
+            if again is not None:
+                self.replayed += 1
+                await send({"method": "thread/tokenUsage/updated", "params": again})
             return
         if method != "turn/start":
             await send({"id": rid, "result": {}})
@@ -97,16 +129,24 @@ class ReplayAppServer:
 
     async def expert_turn(self, send, plan: Plan, thread: str, turn: str, step: str):
         def note(method: str, **params: Any) -> dict[str, Any]:
-            return {
-                "method": method,
-                "params": {"threadId": thread, "turnId": turn, **params},
-            }
+            body = {"threadId": thread, "turnId": turn, **params}
+            if method == "thread/tokenUsage/updated":
+                self.last_usage[thread] = body
+            return {"method": method, "params": body}
 
         await send(note("turn/started", turn={"id": turn, "status": "inProgress"}))
         reply = plan.expert.pop(0) if plan.expert else {"echo": step}
         for n, call in enumerate(plan.tools.get(step, [])):
             await send(note("item/completed", item={"id": f"call-{turn}-{n}", **call}))
         if reply is HANG:
+            # 模型调用了一次、动作还在做：报一次用量，然后这一轮就一直开着，直到被停下
+            await send(
+                note(
+                    "thread/tokenUsage/updated",
+                    tokenUsage=self.meter.report(thread, plan.tokens),
+                )
+            )
+            self.open_turns[turn] = (send, thread)
             return
         said = (
             reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
@@ -120,7 +160,7 @@ class ReplayAppServer:
         await send(
             note(
                 "thread/tokenUsage/updated",
-                tokenUsage={"total": {"totalTokens": plan.tokens}},
+                tokenUsage=self.meter.report(thread, plan.tokens),
             )
         )
         await send(
@@ -165,10 +205,14 @@ class ReplayAppServer:
                 answered: asyncio.Future = asyncio.get_running_loop().create_future()
                 self.pending[asked] = answered
                 await send({"id": asked, "method": message["method"], "params": params})
+                self.open_turns[turn] = (send, thread)
                 try:
                     await answered  # 用户没答之前，这一轮就停在这里
                 except asyncio.CancelledError:
                     return
+                self.open_turns.pop(turn, None)
                 continue
+            if message["method"] == "thread/tokenUsage/updated":
+                self.last_usage[thread] = params
             await send({"method": message["method"], "params": params})
             await asyncio.sleep(0.002)

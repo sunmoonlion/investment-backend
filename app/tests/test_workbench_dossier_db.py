@@ -185,7 +185,7 @@ async def test_the_export(db):
             )
         lines = text.splitlines()
         assert lines[0].startswith("# ")
-        assert "财报体检 v1 · 已完成 · 花了 0.07 / 10.00 CNY" in lines
+        assert "财报体检 v1 · 已完成 · 花了 0.07 / 10.00 CNY（估算）" in lines
         heads = [line for line in lines if line.startswith("## ")]
         assert heads == [
             "## 一、回答",

@@ -26,10 +26,12 @@ from app.application.workbench.session_service import SessionService  # noqa: E4
 from app.bootstrap.workbench import build_runner  # noqa: E402
 from app.domain.workbench.errors import WheelHeldByOther  # noqa: E402
 from app.domain.workbench.models import HandoverRequest  # noqa: E402
+from app.domain.workbench.step_view import amount as step_amount  # noqa: E402
 from app.infrastructure.workbench.publisher import RedisPublisher  # noqa: E402
 from app.infrastructure.workbench.repository import WorkbenchRepository  # noqa: E402
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+USAGE_EVENT = "thread/tokenUsage/updated"
 OWNER = str(uuid.uuid4())
 fails = 0
 
@@ -339,8 +341,7 @@ async def main() -> int:
                         original_input={
                             "text": "What files are in this project directory and what do they contain? Cite paths."
                         },
-                        budget_limit=Decimal("5"),
-                    ),
+                    ),  # 不给预算上限：花多少记多少，不自己停
                     owner_actor_id=OWNER,
                 )
             )["task_id"]
@@ -351,6 +352,7 @@ async def main() -> int:
                     kind="task.drive",
                     payload={"task_id": t_smoke},
                 )
+        before_smoke = (await events_of(factory, sid))[-1]["cursor"]
         await runner.run_once()
         await runner.wait_drivers(timeout=600)
         async with factory() as s:
@@ -390,6 +392,43 @@ async def main() -> int:
             task["budget"]["used"],
         )
         verdict("终态后方向盘交回用户", sess["wheel"] == "user")
+        verdict(
+            "没给上限：账上没有上限，专家做到底",
+            task["budget"].get("limit") is None and task["state"] == "SUCCEEDED",
+            str(task["budget"].get("limit")),
+        )
+        usage_events = [
+            e for e in await events_of(factory, sid) if e["type"] == USAGE_EVENT
+        ]
+        costs = [e["payload"].get("cost") or {} for e in usage_events]
+        verdict(
+            "每条用量事件都带金额（kimi-k3，人民币）",
+            bool(costs)
+            and all(
+                c.get("priced") and c.get("model") == "kimi-k3" and c.get("call")
+                for c in costs
+            ),
+            f"{len(costs)} 条",
+        )
+        smoke_calls = sum(
+            Decimal(e["payload"]["cost"]["call"])
+            for e in usage_events
+            if e["cursor"] > before_smoke
+            and (e["payload"].get("cost") or {}).get("call")
+        )
+        consumed = sum(
+            (step_amount(a.get("budget_consumed")) for a in attempts), Decimal("0")
+        )
+        print(
+            "  各步记的：",
+            [str(step_amount(a.get("budget_consumed"))) for a in attempts],
+        )
+        verdict(
+            "专家各步记的花费 = 这几步里每次调用相加",
+            abs(consumed - smoke_calls) < Decimal("0.0001")
+            and abs(Decimal(task["budget"]["used"]) - consumed) < Decimal("0.0001"),
+            f"各步 {consumed}，各次调用 {smoke_calls}，账上 {task['budget']['used']}",
+        )
 
         print("--- 5. 再次交出方向盘：用户 turn 被拒；取消后交回")
         async with factory() as s:
@@ -421,6 +460,175 @@ async def main() -> int:
                 r["state"] == "CANCELLED"
                 and (await repo.get_session(sid))["wheel"] == "user",
             )
+        print("--- 6. 随时能停：自己的一轮")
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            await SessionService(repo).record_user_turn_requested(
+                sid, owner_actor_id=OWNER, text="long", request_id="req-long"
+            )
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": "Without using any tools, write a detailed 3000-word essay"
+                        " on the history of double-entry bookkeeping.",
+                        "request_id": "req-long",
+                        "by": "user",
+                    },
+                )
+        mark = (await events_of(factory, sid))[-1]["cursor"]
+        started = None
+        deadline = time.time() + 60
+        while time.time() < deadline and started is None:
+            await runner.run_once()
+            started = next(
+                (
+                    e
+                    for e in await events_of(factory, sid, after=mark)
+                    if e["type"] == "turn/started"
+                ),
+                None,
+            )
+            await asyncio.sleep(0.3)
+        await pump(runner, 4)  # 让它写一会儿
+        pressed = time.time()
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.interrupt",
+                    payload={"by": "user"},  # 页面不给轮次的编号
+                )
+        ended = None
+        deadline = time.time() + 60
+        while time.time() < deadline and ended is None:
+            await runner.run_once()
+            ended = next(
+                (
+                    e
+                    for e in await events_of(factory, sid, after=mark)
+                    if e["type"] == "turn/completed"
+                ),
+                None,
+            )
+            await asyncio.sleep(0.3)
+        took = time.time() - pressed
+        after = await events_of(factory, sid, after=mark)
+        noted = next((e for e in after if e["type"] == "turn/stop_requested"), None)
+        status = ((ended or {}).get("payload") or {}).get("turn", {}).get("status")
+        verdict(
+            "不给轮次编号也停得下：这一轮以 interrupted 结束",
+            started is not None and status == "interrupted",
+            f"status={status}，按下到停下 {took:.1f} 秒",
+        )
+        verdict(
+            "停止被记了一笔，记下停的是哪一轮",
+            noted is not None
+            and noted["payload"].get("running") is True
+            and bool(noted["payload"].get("turn_id")),
+        )
+        cut = [e for e in after if e["type"] == USAGE_EVENT]
+        print(
+            "  被停下的这一轮报了几次用量：",
+            len(cut),
+            [e["payload"]["cost"].get("call") for e in cut],
+        )
+        every = [e for e in await events_of(factory, sid) if e["type"] == USAGE_EVENT]
+        seen = [str(e["payload"]["tokenUsage"].get("total")) for e in every]
+        verdict(
+            "重新接线时对面重报的用量没有再记一遍",
+            len(seen) == len(set(seen)),
+            f"{len(seen)} 条，{len(set(seen))} 种累计",
+        )
+
+        print("--- 7. 随时能停：专家做到一半")
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            led = Ledger(repo)
+            t_stop = (
+                await led.handover(
+                    HandoverRequest(
+                        idempotency_key=f"stop-{ts}",
+                        session_id=sid,
+                        profile_id="SMOKE",
+                        original_input={
+                            "text": "List every file in this project directory and"
+                            " describe each one in detail. Cite paths."
+                        },
+                    ),
+                    owner_actor_id=OWNER,
+                )
+            )["task_id"]
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="task.drive",
+                    payload={"task_id": t_stop},
+                )
+        mark = (await events_of(factory, sid))[-1]["cursor"]
+        running = None
+        deadline = time.time() + 90
+        while time.time() < deadline and running is None:
+            await runner.run_once()
+            running = next(
+                (
+                    e
+                    for e in await events_of(factory, sid, after=mark)
+                    if e["type"] == "turn/started"
+                ),
+                None,
+            )
+            await asyncio.sleep(0.3)
+        await pump(runner, 3)
+        pressed = time.time()
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            asked = await Ledger(repo).request_cancel(t_stop, owner_actor_id=OWNER)
+            # 和接口做的一样：记下「要停」，再让 runner 把正在跑的这一轮停下
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.interrupt",
+                    payload={"by": "user", "task_id": t_stop},
+                )
+        state = None
+        deadline = time.time() + 90
+        while time.time() < deadline and state != "CANCELLED":
+            await runner.run_once()
+            async with factory() as s:
+                state = (await WorkbenchRepository(s).get_task(t_stop))["state"]
+            await asyncio.sleep(0.3)
+        took = time.time() - pressed
+        await runner.wait_drivers(timeout=30)
+        async with factory() as s:
+            repo = WorkbenchRepository(s)
+            task = await repo.get_task(t_stop)
+            attempts = await repo.list_attempts(t_stop)
+            sess = await repo.get_session(sid)
+        print(
+            "  attempts:",
+            [
+                (a["step_id"], a["status"], str(step_amount(a.get("budget_consumed"))))
+                for a in attempts
+            ],
+            "budget:",
+            task["budget"],
+        )
+        verdict(
+            "专家正在做的那一步被停下（不是等它做完）",
+            running is not None
+            and asked.get("cancel_requested") is True
+            and task["state"] == "CANCELLED"
+            and attempts[-1]["status"] == "CANCELLED",
+            f"{task['state']}，按下到停下 {took:.1f} 秒",
+        )
+        verdict("停下后方向盘交回用户", sess["wheel"] == "user")
         try:
             os.unlink(target)  # noqa: ASYNC240
         except FileNotFoundError:

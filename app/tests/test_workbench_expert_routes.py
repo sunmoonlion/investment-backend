@@ -59,6 +59,9 @@ async def test_asking_an_expert_from_the_expert_entry(make_client, db):  # noqa:
             "used": "0.00",
             "reserved": "0.00",
             "left": "2.00",
+            "running": "0.00",
+            "spent": "0.00",
+            "estimated": True,
         }
         assert shown["position"] == {"step": 1, "of": 7, "title": "定范围", "left": 7}
         assert [s["status"] for s in shown["steps"]] == ["running"] + ["pending"] * 6

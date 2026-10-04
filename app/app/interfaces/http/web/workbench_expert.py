@@ -47,7 +47,8 @@ class Delegate(Strict):
     idempotency_key: str = Field(min_length=8, max_length=128)
     expert: str = Field(min_length=1, max_length=128)
     question: str = Field(min_length=1, max_length=4000)
-    budget_limit: Decimal = Field(gt=0, le=Decimal("100000"))
+    # 上限可以不给：不给就没有上限。页面上实时显示花了多少，用户随时可以停
+    budget_limit: Decimal | None = Field(default=None, gt=0, le=Decimal("100000"))
     budget_currency: str = Field(default="CNY", pattern=r"^CNY$")
 
 

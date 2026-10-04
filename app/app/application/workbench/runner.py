@@ -25,6 +25,14 @@ from app.application.ports.workbench import (
 from app.application.workbench.advisor import Advisor, TurnResult
 from app.domain.workbench import missing_data
 from app.domain.workbench.packs import find_pack
+from app.domain.workbench.pricing import (
+    DEFAULT_PRICES,
+    PriceList,
+    Usage,
+    cost_of,
+    cumulative_of,
+    fresh_usage,
+)
 from app.domain.workbench.projects import (
     THREAD_CONFIG,
     mode_note,
@@ -111,6 +119,14 @@ class SandboxLink:
         self.live_threads: set[str] = set()
         # 每条线上一次向模型说明的情形。进程重启后会再说一次，多说一次无妨
         self.announced: dict[str, str] = {}
+        # 每条线用的是哪个模型（起线、重新装载线时对面告诉我们的）：算钱要按它的单价
+        self.models: dict[str, str] = {}
+        # 每条线正在跑的那一轮：用户点停止时要知道停哪一轮
+        self.active_turns: dict[str, str] = {}
+        # 正在跑的各轮到现在的用量：每调用一次模型加一次
+        self.turn_usage: dict[str, Usage] = {}
+        # 每条线上一次报的累计。None：这条线还没报过
+        self.totals: dict[str, Usage | None] = {}
         self.pending_approvals: dict[
             str, asyncio.Future
         ] = {}  # request_id -> future(decision)
@@ -142,13 +158,105 @@ class SandboxLink:
         if thread_id in self.live_threads:
             return
         client = await self.ensure_connected()
-        await client.request(
+        resumed = await client.request(
             "thread/resume",
             {"threadId": thread_id, "config": dict(THREAD_CONFIG)},
             timeout=60,
         )
+        self.remember_model(thread_id, resumed)
         self.live_threads.add(thread_id)
         log.info("thread resumed sandbox=%s thread=%s", self.sandbox_id, thread_id)
+
+    def remember_model(self, thread_id: str, answer: Any) -> str | None:
+        """起线、重新装载线的答复里有这条线用的模型。"""
+        if isinstance(answer, dict):
+            model = answer.get("model") or (answer.get("thread") or {}).get("model")
+            if isinstance(model, str) and model:
+                self.models[thread_id] = model
+        return self.models.get(thread_id)
+
+    async def recall_model(
+        self, thread_id: str | None, session_id: str, repo: WorkbenchStore
+    ) -> None:
+        """进程重启过、对面又没再说的时候：从账里找这条线起的时候记下的模型。"""
+        if not thread_id or thread_id in self.models:
+            return
+        started = await repo.list_record_events(
+            session_id=session_id, types=("session/thread_started",)
+        )
+        for event in reversed(started):
+            if event["payload"].get("thread_id") == thread_id:
+                self.models[thread_id] = str(event["payload"].get("model") or "")
+                return
+        self.models[thread_id] = ""
+
+    async def recall_total(
+        self, thread_id: str | None, session_id: str, repo: WorkbenchStore
+    ) -> None:
+        """进程重启过的时候：从账里找这条线上一次报的累计。"""
+        if not thread_id or thread_id in self.totals:
+            return
+        self.totals[thread_id] = None
+        reported = await repo.list_record_events(
+            session_id=session_id, types=("thread/tokenUsage/updated",)
+        )
+        for event in reversed(reported):
+            if thread_id_of(event["payload"]) == thread_id:
+                self.totals[thread_id] = cumulative_of(
+                    event["payload"].get("tokenUsage")
+                )
+                return
+
+    def priced(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        """用量通知进账之前，带上按价目表算好的金额。页面照着显示，不自己算价。
+
+        `call` 是这一条通知带来的新花费，`turn` 是这一轮到现在花的。不认识这个模型的
+        单价时金额是空的，只有用量。返回 None：这一条是重复报的，没有新用量，不进账。
+        """
+        if not method.startswith("thread/tokenUsage"):
+            return params
+        reported = params.get("tokenUsage") or params.get("usage")
+        thread_id = thread_id_of(params)
+        usage = fresh_usage(reported, self.totals.get(thread_id or ""))
+        if thread_id and cumulative_of(reported) is not None:
+            self.totals[thread_id] = cumulative_of(reported)
+        if usage.total == 0:
+            return None
+        turn_id = params.get("turnId") or self.active_turns.get(thread_id or "")
+        so_far = usage
+        if turn_id:
+            so_far = self.turn_usage.get(turn_id, Usage()) + usage
+            self.turn_usage[turn_id] = so_far
+        prices = self.runner.prices
+        model = self.models.get(thread_id or "") or None
+        price = prices.of(model)
+        call, turn = cost_of(usage, price), cost_of(so_far, price)
+        return {
+            **params,
+            "cost": {
+                "currency": prices.currency,
+                "model": model,
+                "priced": price is not None,
+                "call": None if call is None else str(call),
+                "turn": None if turn is None else str(turn),
+                "call_tokens": usage.as_json(),
+                "turn_tokens": so_far.as_json(),
+                "estimated": True,
+            },
+        }
+
+    def track_turn(self, method: str, params: dict[str, Any]) -> None:
+        thread_id = thread_id_of(params)
+        turn_id = params.get("turnId") or (params.get("turn") or {}).get("id")
+        if not thread_id or not turn_id:
+            return
+        if method == "turn/started":
+            self.active_turns[thread_id] = turn_id
+        elif method == "turn/completed":
+            if self.active_turns.get(thread_id) == turn_id:
+                self.active_turns.pop(thread_id, None)
+            if turn_id not in self.turn_waiters:  # 专家的那一轮由 run_turn 自己收
+                self.turn_usage.pop(turn_id, None)
 
     async def announce(self, thread_id: str, plan: TurnPlan) -> None:
         """情形换了，就往线里插一段说明，再发这一轮。说明进账：模型看到过什么，账里要有。
@@ -222,11 +330,20 @@ class SandboxLink:
     async def on_notification(self, method: str, params: dict[str, Any]) -> None:
         if method.endswith(_SKIP_SUFFIXES):
             return
+        self.track_turn(method, params)
         async with self.runner.stores() as repo:
             session_id = await self.session_for_thread(thread_id_of(params), repo)
             if session_id is None:
                 log.debug("notification without session method=%s", method)
                 return
+            if method.startswith("thread/tokenUsage"):
+                await self.recall_model(thread_id_of(params), session_id, repo)
+                await self.recall_total(thread_id_of(params), session_id, repo)
+                priced = self.priced(method, params)
+                if priced is None:
+                    log.debug("usage reported again, not counted method=%s", method)
+                    return
+                params = priced
             async with repo.transaction():
                 event = await repo.append_event(
                     session_id=session_id,
@@ -280,11 +397,12 @@ class SandboxLink:
             if item.get("type") == "agentMessage" and item.get("text"):
                 w["text"] = item["text"]
         elif method.startswith("thread/tokenUsage"):
-            w["tokens"] = params.get("tokenUsage") or params.get("usage") or {}
+            w["reported"] = True
         elif method == "turn/completed":
             turn = params.get("turn") or {}
             if turn.get("status") not in (None, "completed") and not w.get("error"):
                 w["error"] = f"turn {turn.get('status')}"
+                w["interrupted"] = turn.get("status") == "interrupted"
             if not w["future"].done():
                 w["future"].set_result(True)
 
@@ -320,16 +438,18 @@ class SandboxLink:
         waiter: dict[str, Any] = {
             "future": asyncio.get_running_loop().create_future(),
             "text": None,
-            "tokens": {},
+            "reported": False,
             "error": None,
             "env_lost": False,
+            "interrupted": False,
         }
         self.turn_waiters[turn_id] = waiter
+        self.active_turns[thread_id] = turn_id
         try:
             await asyncio.wait_for(waiter["future"], timeout)
             # 真 app-server 的 thread/tokenUsage 可能晚于 turn/completed 到达：留一小段宽限期再撤 waiter
             for _ in range(20):
-                if waiter["tokens"]:
+                if waiter["reported"]:
                     break
                 await asyncio.sleep(0.1)
         except TimeoutError:
@@ -346,13 +466,35 @@ class SandboxLink:
             waiter["error"] = f"connection lost: {exc}"
         finally:
             self.turn_waiters.pop(turn_id, None)
+            if self.active_turns.get(thread_id) == turn_id:
+                self.active_turns.pop(thread_id, None)
+        # 这一轮花的 = 这一轮里每次调用相加。不拿这条线的累计来算
+        used = self.turn_usage.pop(turn_id, Usage())
         return TurnResult(
             turn_id=turn_id,
             final_text=waiter["text"],
-            tokens=waiter["tokens"],
+            tokens=used.as_json(),
             error=waiter["error"],
             environment_lost=waiter["env_lost"],
+            cost=cost_of(
+                used, self.runner.prices.of(self.models.get(thread_id) or None)
+            ),
+            interrupted=waiter["interrupted"],
         )
+
+    async def interrupt(
+        self, thread_id: str | None, turn_id: str | None = None
+    ) -> str | None:
+        """停下这条线正在跑的那一轮。没有在跑的就什么都不做。返回停的是哪一轮。"""
+        turn_id = turn_id or self.active_turns.get(thread_id or "")
+        if not thread_id or not turn_id:
+            return None
+        client = await self.ensure_connected()
+        await self.ensure_thread(thread_id)
+        await client.request(
+            "turn/interrupt", {"threadId": thread_id, "turnId": turn_id}, timeout=30
+        )
+        return turn_id
 
     # ---- MCP 询问（elicitation）：Codex 在调 MCP 工具前向客户端要一次确认（user verification）----
     async def _on_elicitation(self, rid: Any, params: dict[str, Any]) -> None:
@@ -534,8 +676,10 @@ class Runner:
         environment_key: str = "user-pc",
         poll_seconds: float = 1.0,
         records: bool = False,
+        prices: PriceList | None = None,
     ):
         self.records = records
+        self.prices = prices or DEFAULT_PRICES
         self.stores = stores
         self.connector = connector
         self.publisher = publisher
@@ -741,12 +885,23 @@ class Runner:
                 )
             return
         if kind == "turn.interrupt":
-            await link.ensure_thread(session["thread_id"])
-            await client.request(
-                "turn/interrupt",
-                {"threadId": session["thread_id"], "turnId": payload.get("turn_id")},
-                timeout=30,
-            )
+            # 用户点了停止。页面不用知道是哪一轮：停的是这条线正在跑的那一轮
+            stopped = await link.interrupt(session["thread_id"], payload.get("turn_id"))
+            async with self.stores() as repo:
+                async with repo.transaction():
+                    ev = await repo.append_event(
+                        session_id=session_id,
+                        kind="turn",
+                        event_type="turn/stop_requested",
+                        payload={
+                            "turn_id": stopped,
+                            "by": payload.get("by", "user"),
+                            "running": stopped is not None,
+                        },
+                    )
+                await self.publisher.publish(
+                    self.publisher.session_channel(session_id), ev
+                )
             return
         raise RuntimeError(f"unknown command kind {kind}")
 
@@ -890,6 +1045,7 @@ class Runner:
         payload: dict[str, Any] = {
             "thread_id": thread_id,
             "environment": env_key if session.get("project_root") else None,
+            "model": link.remember_model(thread_id, result),
         }
         if replaced:
             payload["replaced_thread_id"] = replaced

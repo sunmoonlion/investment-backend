@@ -10,6 +10,7 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.cross_app import Source, Target, parse_sources, parse_targets
+from app.domain.workbench.pricing import DEFAULT_PRICES_JSON, PriceList, parse_prices
 
 BrowserSurface = Literal["admin", "web"]
 
@@ -227,6 +228,22 @@ class Settings(BaseSettings):
 
     def cross_app_targets(self) -> dict[str, Target]:
         return parse_targets(self.cross_app_targets_json)
+
+    # 模型的价目表：每百万 token 多少钱（输入、命中缓存的输入、写进缓存的输入、输出）。
+    # 页面上实时显示的金额按它估算。不配就用 app/domain/workbench/pricing.py 里那一份
+    # （Kimi 开放平台 2026-10-04 的公开价）。模型调价、换模型，改这一项，不用改代码。
+    workbench_model_prices_json: str = Field(
+        default=DEFAULT_PRICES_JSON, validation_alias="WORKBENCH_MODEL_PRICES_JSON"
+    )
+
+    @field_validator("workbench_model_prices_json")
+    @classmethod
+    def _validate_model_prices(cls, value: str) -> str:
+        parse_prices(value)
+        return value
+
+    def workbench_model_prices(self) -> PriceList:
+        return parse_prices(self.workbench_model_prices_json)
 
     @field_validator("database_url", "migration_database_url", mode="before")
     @classmethod

@@ -36,7 +36,7 @@ class DelegationService:
         project_id: str,
         profile_id: str,
         question: str,
-        budget_limit: Decimal,
+        budget_limit: Decimal | None = None,
         budget_currency: str = "CNY",
         idempotency_key: str,
         tenant: str = "default",

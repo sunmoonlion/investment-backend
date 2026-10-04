@@ -92,7 +92,23 @@ def asked_about_a_company_without_data() -> dict[str, Any]:
                 },
             ),
             note(
-                "thread/tokenUsage/updated", tokenUsage={"total": {"totalTokens": 3200}}
+                "thread/tokenUsage/updated",
+                tokenUsage={
+                    "last": {
+                        "inputTokens": 9100,
+                        "cachedInputTokens": 8448,
+                        "cacheWriteInputTokens": 512,
+                        "outputTokens": 96,
+                        "totalTokens": 9196,
+                    },
+                    "total": {
+                        "inputTokens": 26010,
+                        "cachedInputTokens": 15872,
+                        "cacheWriteInputTokens": 9728,
+                        "outputTokens": 560,
+                        "totalTokens": 26570,
+                    },
+                },
             ),
             {
                 "kind": "notification",
@@ -237,7 +253,7 @@ class World:
         question: str,
         replies: list[Any],
         tools: dict[str, list[dict[str, Any]]],
-        budget: str = "2",
+        budget: str | None = None,  # 页面不填上限（所有者 2026-10-04）
         tokens: int = 5000,
         until: str,
     ) -> str:
@@ -251,7 +267,7 @@ class World:
                 "idempotency_key": f"preview-{name}-0001",
                 "expert": expert,
                 "question": question,
-                "budget_limit": budget,
+                **({"budget_limit": budget} if budget else {}),
             },
         )
         self.tasks[name] = made["task_id"]
@@ -340,6 +356,7 @@ async def record_everything(world: World) -> None:
     for session in sessions:
         sid = session["id"]
         await rec.get(http, f"/api/workbench/sessions/{sid}")
+        await rec.get(http, f"/api/workbench/sessions/{sid}/usage")
         await rec.get(http, "/api/workbench/tasks", session_id=sid)
         events = await rec.get(
             http, f"/api/workbench/sessions/{sid}/events", limit=1000
@@ -450,18 +467,31 @@ async def build_full(world: World) -> None:
         tools={"profile": fin_review_tools(PIENTZEHUANG)["profile"][:1]},
         until="WAITING",
     )
-    # 预算用完
+    # 做到一半被用户停下：第 4 步正在做，已经调用过一次模型
     await world.delegate(
-        "over-budget",
+        "stopped",
         project="上海机场",
         expert="FIN_REVIEW",
         question=AIRPORT.question(),
-        replies=fin_review(AIRPORT),
+        replies=[*fin_review(AIRPORT)[:3], HANG],
         tools=fin_review_tools(AIRPORT),
-        budget="1",
         tokens=30000,
-        until="WAITING",
+        until="RUNNING",
     )
+
+    async def fourth_step_spending() -> bool:
+        sheet = await http.get(f"/api/workbench/tasks/{world.tasks['stopped']}/steps")
+        budget = sheet.json()["task"]["budget"]
+        return (budget["used"], budget["running"]) == ("0.90", "0.30")
+
+    assert await world.turn_until(fourth_step_spending, 30)
+    await rec.call(
+        http,
+        "POST",
+        f"/api/workbench/tasks/{world.tasks['stopped']}/cancel",
+        expect=202,
+    )
+    await world.reach("stopped", "CANCELLED")
     # 失败：和官方对不上，用户选了停止
     await world.delegate(
         "failed",
@@ -518,7 +548,6 @@ async def build_full(world: World) -> None:
             "idempotency_key": "preview-refused-0001",
             "profile_id": "BOND_REVIEW",
             "original_input": {"text": "中国平安 2025 年的偿付能力怎么样？"},
-            "budget_limit": "2",
         },
     )
     world.tasks["refused"] = asked["task_id"]
@@ -534,7 +563,6 @@ async def build_full(world: World) -> None:
             "idempotency_key": "preview-busy-0001",
             "expert": "DATA_QUERY",
             "question": "五粮液近五年的净利率分别是多少？",
-            "budget_limit": "2",
         },
     )
 
@@ -561,7 +589,7 @@ async def build_full(world: World) -> None:
         ("专家处理中：问数做到第 3 步", "五粮液", "running"),
         ("专家停下来了：勾稽不平", "宁德时代", "waiting"),
         ("专家停下来了：没有数据", "片仔癀", "no-data"),
-        ("专家停下来了：预算用完", "上海机场", "over-budget"),
+        ("专家做到一半被我停下", "上海机场", "stopped"),
     ):
         rec.page(title, f"/zh-CN/workbench/projects/{p[project]}/c/{s[name]}")
     for title, project, name in (
@@ -647,7 +675,6 @@ async def build_offline(world: World, db) -> None:  # noqa: F811
             "idempotency_key": "preview-offline-0001",
             "expert": "FIN_REVIEW",
             "question": HENGRUI.question(),
-            "budget_limit": "2",
         },
     )
     await record_everything(world)
@@ -671,7 +698,7 @@ SCENARIOS = {
         USER,
         "什么都有",
         "一个用了一阵子的人：十个项目，各种状态的委托都有——进行中、等我决定、没有数据、"
-        "预算用完、已完成、失败、已取消、打回；三段对话，其中一段有命令等着批准。",
+        "做到一半被停下、已完成、失败、已取消、打回；三段对话，其中一段有命令等着批准。",
     ),
     "empty": (
         NEWCOMER,
@@ -753,7 +780,7 @@ async def test_the_full_world(make_client, db, tmp_path):  # noqa: F811
         return json.loads((directory / found["file"]).read_text())
 
     home = answer("/api/workbench/expert/overview")
-    assert len(home["waiting"]) == 3  # 勾稽不平、没有数据、预算用完
+    assert len(home["waiting"]) == 2  # 勾稽不平、没有数据
     assert [r["state"] for r in home["running"]] == ["RUNNING"]
     assert all(r["reason_text"] for r in home["returned"] if r["state"] != "SUCCEEDED")
     assert {r["state_word"] for r in home["returned"]} == {
@@ -764,12 +791,7 @@ async def test_the_full_world(make_client, db, tmp_path):  # noqa: F811
     }
     # 对话里等着批准的命令也在待办里，但不在专家首页
     todo = answer("/api/workbench/interactions")["interactions"]
-    assert sorted(w["kind"] for w in todo) == [
-        "input",
-        "input",
-        "resource",
-        "tool_approval",
-    ]
+    assert sorted(w["kind"] for w in todo) == ["input", "input", "tool_approval"]
     assert len(answer("/api/workbench/projects")["projects"]) == 9
     assert (
         len(answer("/api/workbench/projects", "include_archived=true")["projects"])

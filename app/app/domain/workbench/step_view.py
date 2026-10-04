@@ -82,15 +82,24 @@ def money(value: Any) -> str:
     return f"{whole}.{decimals.ljust(2, '0')}"
 
 
-def budget_view(budget: dict[str, Any]) -> dict[str, Any]:
-    limit, used = amount(budget.get("limit")), amount(budget.get("used"))
+def budget_view(budget: dict[str, Any], *, running: Any = None) -> dict[str, Any]:
+    """花了多少。`used` 是做完的各步记下的；`running` 是正在做的这一步到现在花的；
+    `spent` 是两样相加，页面上跳动的就是它。上限可以没有：没有就不显示上限与剩余。
+    """
+    used = amount(budget.get("used"))
     reserved = amount(budget.get("reserved"))
+    now = amount(running)
+    capped = budget.get("limit") is not None
+    limit = amount(budget.get("limit"))
     return {
         "currency": budget.get("currency") or "CNY",
-        "limit": money(limit),
+        "limit": money(limit) if capped else None,
         "used": money(used),
         "reserved": money(reserved),
-        "left": money(limit - used - reserved),
+        "left": money(limit - used - reserved) if capped else None,
+        "running": money(now),
+        "spent": money(used + now),
+        "estimated": True,
     }
 
 

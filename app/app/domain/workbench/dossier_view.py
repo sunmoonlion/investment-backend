@@ -320,7 +320,9 @@ def dossier_markdown(view: dict[str, Any]) -> str:
         "",
         f"{sheet['expert']['name']} v{sheet['expert']['version']} · "
         f"{sheet.get('state_word') or view['head']['text']} · "
-        f"花了 {budget['used']} / {budget['limit']} {budget['currency']}",
+        f"花了 {budget['spent']}"
+        + (f" / {budget['limit']}" if budget.get("limit") else "")
+        + f" {budget['currency']}（估算）",
         "",
     ]
     if view["head"]["kind"] != "done":

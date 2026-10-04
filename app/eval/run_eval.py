@@ -1,6 +1,6 @@
 """在线跑臂（专家包发布门的数据采集）：每案每臂一个新会话（新 thread），基线 = 用户一个 turn 直接用 MCP；pack = 交出方向盘由顾问按专家包驾驶。
 
-不在在线路径上（0007）。费用按 Pricing 粗表或 Task 预算账。评测账户与 key 应与用户分开（F-EVAL-06）：本脚本用 APP_SERVER_* 指到的沙箱。
+不在在线路径上（0007）。费用按价目表估算（app/domain/workbench/pricing.py）或 Task 预算账。评测账户与 key 应与用户分开（F-EVAL-06）：本脚本用 APP_SERVER_* 指到的沙箱。
 env：AGENT_TEST_DATABASE_URL、APP_SERVER_URL、APP_SERVER_TOKEN、ROOT、EVAL_DATASET（sqlite 路径）、ENV_KEY（默认 user-pc）
 用法（问数二十题，默认）：uv run python -m eval.run_eval --limit 2 --arms baseline,pack --out eval/reports
 用法（财报体检十三题）：uv run python -m eval.run_eval --cases fin_review_13 --profile FIN_REVIEW \
@@ -27,7 +27,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.application.workbench.advisor import Pricing  # noqa: E402
 from app.application.workbench.ledger import Ledger  # noqa: E402
 from app.application.workbench.runner import Runner  # noqa: E402
 from app.application.workbench.session_service import SessionService  # noqa: E402
@@ -193,7 +192,6 @@ class Bench:
         self.env_id = env_id
         self.sb_id = sb_id
         self.root = root
-        self.pricing = Pricing()
         self.profile = profile
         self.dataset_id = dataset_id
 
@@ -316,10 +314,8 @@ class Bench:
             "baseline",
             sqls=sqls,
             data_versions=cited,
-            cost=self.pricing.cost(res.tokens),
-            tokens=int(
-                (res.tokens.get("total") or res.tokens or {}).get("totalTokens") or 0
-            ),
+            cost=res.cost or Decimal("0"),
+            tokens=int(res.tokens.get("total") or 0),
             turns=1,
             state="COMPLETED" if not res.error else "FAILED",
             error=res.error,

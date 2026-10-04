@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
@@ -16,6 +17,7 @@ from app.domain.workbench.review_view import review_view
 from app.domain.workbench.states import TASK_TERMINAL, TaskState
 from app.domain.workbench.step_view import (
     TERMINAL_WORDS,
+    amount,
     budget_view,
     position,
     reason_text,
@@ -103,6 +105,24 @@ class ExpertDesk:
                 return dict(event["payload"].get("reason") or {}) or None
         return None
 
+    async def _running_cost(self, task: dict[str, Any]) -> str | None:
+        """正在做的这一步到现在花了多少。做完才记进 `used`，在那之前从用量事件里看。"""
+        active = task.get("active_attempt_id")
+        if task["state"] != TaskState.RUNNING or not active:
+            return None
+        events = await self.repo.list_record_events(
+            session_id=str(task["session_id"]),
+            types=("step/started", "thread/tokenUsage/updated"),
+        )
+        seen = None
+        for event in events:
+            if event["type"] == "step/started":
+                # 找到这一步开始的地方；它之前的用量都不算
+                seen = Decimal("0") if event.get("attempt_id") == str(active) else None
+            elif seen is not None:
+                seen = amount((event["payload"].get("cost") or {}).get("turn")) or seen
+        return None if seen is None else str(seen)
+
     async def _sheet(
         self,
         task: dict[str, Any],
@@ -131,7 +151,9 @@ class ExpertDesk:
             "cancel_requested": task.get("cancel_requested_at") is not None,
             "reason": (reason := await self._reason(task)),
             "reason_text": reason_text(state, reason) if state in TASK_TERMINAL else "",
-            "budget": budget_view(task["budget"]),
+            "budget": budget_view(
+                task["budget"], running=await self._running_cost(task)
+            ),
             "data": data,  # 第 2 步做完之前是 None：还不知道
             "started_at": started,
             "ended_at": ended,

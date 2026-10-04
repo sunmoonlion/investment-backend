@@ -16,6 +16,7 @@ from app.application.ports.workbench import (
     WorkbenchStores,
 )
 from app.application.workbench.runner import Runner
+from app.domain.workbench.pricing import PriceList
 from app.infrastructure.workbench.app_server_client import WsAppServerConnector
 from app.infrastructure.workbench.provisioner import HttpProvisioner, ProvisionerConfig
 from app.infrastructure.workbench.publisher import RedisPublisher
@@ -77,6 +78,7 @@ def build_runner(
     environment_key: str = "user-pc",
     poll_seconds: float = 1.0,
     records: bool = False,
+    prices: PriceList | None = None,
 ) -> Runner:
     return Runner(
         workbench_stores(session_factory),
@@ -86,4 +88,5 @@ def build_runner(
         environment_key=environment_key,
         poll_seconds=poll_seconds,
         records=records,
+        prices=prices,
     )

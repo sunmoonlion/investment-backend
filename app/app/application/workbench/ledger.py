@@ -45,7 +45,7 @@ def _budget(row: dict[str, Any]) -> Budget:
     b = row["budget"]
     return Budget(
         currency=b.get("currency", "CNY"),
-        limit=Decimal(str(b["limit"])),
+        limit=None if b.get("limit") is None else Decimal(str(b["limit"])),
         reserved=Decimal(str(b.get("reserved", "0"))),
         used=Decimal(str(b.get("used", "0"))),
     )
@@ -165,14 +165,15 @@ class Ledger:
                 payload={"from": "user", "to": "advisor", "task_id": task_id},
                 task_id=task_id,
             )
-            await self.repo.ledger_append(
-                task_id=task_id,
-                attempt_id=None,
-                entry="topup",
-                amount=req.budget_limit,
-                note="initial budget",
-                actor_id=owner_actor_id,
-            )
+            if req.budget_limit is not None:
+                await self.repo.ledger_append(
+                    task_id=task_id,
+                    attempt_id=None,
+                    entry="topup",
+                    amount=req.budget_limit,
+                    note="initial budget",
+                    actor_id=owner_actor_id,
+                )
             return {"task_id": task_id, "state": TaskState.RECEIVED, "created": True}
 
     # ---------------- 状态转换（唯一入口） ----------------
@@ -676,7 +677,9 @@ class Ledger:
                 if it["kind"] == "resource":
                     if response.get("decision") == "topup" and response.get("amount"):
                         budget = _budget(task)
-                        budget.limit += Decimal(str(response["amount"]))
+                        budget.limit = (budget.limit or Decimal("0")) + Decimal(
+                            str(response["amount"])
+                        )
                         await self.repo.cas_task(
                             str(task["id"]),
                             expected_version=int(task["state_version"]),

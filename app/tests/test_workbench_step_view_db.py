@@ -68,7 +68,7 @@ class ToolingAppServer(ScriptedAppServer):
             ),
             (
                 "thread/tokenUsage/updated",
-                {"tokenUsage": {"total": {"totalTokens": 1000}}},
+                {"tokenUsage": self.meter.report(tid, 1000)},
             ),
         ):
             await send(

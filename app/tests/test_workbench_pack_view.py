@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -177,7 +178,18 @@ def test_the_budget_as_shown():
         "used": "0.18",
         "reserved": "0.05",
         "left": "1.77",
+        "running": "0.00",
+        "spent": "0.18",
+        "estimated": True,
     }
+    # 正在做的这一步还没结账：页面上的「已花」把它加上
+    live = budget_view(
+        {"currency": "CNY", "limit": None, "used": "0.18", "reserved": "0"},
+        running=Decimal("0.0312"),
+    )
+    # 不抹零头：一次调用常常只有几厘
+    assert (live["running"], live["spent"]) == ("0.0312", "0.2112")
+    assert live["limit"] is None and live["left"] is None
 
 
 def test_data_that_changed_version_midway_is_not_hidden():
