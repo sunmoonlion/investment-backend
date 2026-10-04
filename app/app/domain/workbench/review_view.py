@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.workbench.packs import ExpertPack
-from app.domain.workbench.step_view import brief, budget_view, money
+from app.domain.workbench.step_view import brief, budget_view
 
 AFTER_EXPIRY = "过期不等于同意，也不等于拒绝：委托停在等待，要重新请专家或重新发起"
 
@@ -37,8 +37,8 @@ def consequence(
             "decline": "不执行。模型会被告知没有获准",
         }.get(option, "")
     if option == "rework":
-        cost = f"会再花这一步的预留 {money(reserve)} 元" if reserve else "会再花钱"
-        return f"专家重做这一步。{cost}"
+        # 不说「预留多少」：请专家已经不填预算上限了，花多少页面上实时看得到
+        return "专家重做这一步。重做要再花钱，花了多少顶部实时显示"
     if option == "stop":
         return f"专家停下，把{finished}交回给你。已花的不退"
     if option == "wait":

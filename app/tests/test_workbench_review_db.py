@@ -69,7 +69,7 @@ async def test_the_five_parts_of_a_review(db):
         )
         assert full["status"] == "pending"
         assert [(o["id"], o["consequence"]) for o in full["pending"]["options"]] == [
-            ("rework", "专家重做这一步。会再花这一步的预留 0.05 元"),
+            ("rework", "专家重做这一步。重做要再花钱，花了多少顶部实时显示"),
             ("stop", "专家停下，把做完的 2 步交回给你。已花的不退"),
         ]
         assert full["pending"]["unknowns"] == [
