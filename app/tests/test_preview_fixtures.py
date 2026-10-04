@@ -64,6 +64,12 @@ def tape(name: str) -> list[dict[str, Any]]:
     return json.loads(json.dumps(TAPES[name]["turns"]))
 
 
+# 回放时会把磁带里的线号、轮次号整串换成新的。拼出来的这一轮也要用不会撞上别的字的编号：
+# 用过 "T" 和 "U"，结果把 mcpToolCall、inputTokens 里的字母也换掉了，这一轮就录坏了。
+WAS_THREAD = "thread-as-recorded-0000"
+WAS_TURN = "turn-as-recorded-0000"
+
+
 def asked_about_a_company_without_data() -> dict[str, Any]:
     """聊天里问到一家没有数据的公司。这一轮不是录的，是照磁带的样子拼的。"""
 
@@ -71,13 +77,13 @@ def asked_about_a_company_without_data() -> dict[str, Any]:
         return {
             "kind": "notification",
             "method": method,
-            "params": {"threadId": "T", "turnId": "U", **params},
+            "params": {"threadId": WAS_THREAD, "turnId": WAS_TURN, **params},
         }
 
     return {
         "prompt": "片仔癀 2025 年的毛利率是多少？",
         "messages": [
-            note("turn/started", turn={"id": "U", "status": "inProgress"}),
+            note("turn/started", turn={"id": WAS_TURN, "status": "inProgress"}),
             note(
                 "item/completed",
                 item={"id": "call-1", **missing_dataset_call("600436")},
@@ -113,7 +119,10 @@ def asked_about_a_company_without_data() -> dict[str, Any]:
             {
                 "kind": "notification",
                 "method": "turn/completed",
-                "params": {"threadId": "T", "turn": {"id": "U", "status": "completed"}},
+                "params": {
+                    "threadId": WAS_THREAD,
+                    "turn": {"id": WAS_TURN, "status": "completed"},
+                },
             },
         ],
     }
@@ -792,6 +801,22 @@ async def test_the_full_world(make_client, db, tmp_path):  # noqa: F811
     # 对话里等着批准的命令也在待办里，但不在专家首页
     todo = answer("/api/workbench/interactions")["interactions"]
     assert sorted(w["kind"] for w in todo) == ["input", "input", "tool_approval"]
+    # 聊天里问到没有数据的公司：工具调用认得出来，记了一条「没有数据」，这一轮也有花费
+    free = next(
+        s
+        for s in answer("/api/workbench/sessions")["sessions"]
+        if s["kind"] == "chat" and s["project_id"] is None
+    )
+    said = answer(f"/api/workbench/sessions/{free['id']}/events", "limit=1000")
+    kinds = [
+        (e["payload"].get("item") or {}).get("type")
+        for e in said["events"]
+        if e["type"] == "item/completed"
+    ]
+    assert kinds.count("mcpToolCall") == 1
+    missing = [e for e in said["events"] if e["type"] == "data.missing"]
+    assert [e["payload"]["security_code"] for e in missing] == ["600436"]
+    assert answer(f"/api/workbench/sessions/{free['id']}/usage")["calls"] == 3
     assert len(answer("/api/workbench/projects")["projects"]) == 9
     assert (
         len(answer("/api/workbench/projects", "include_archived=true")["projects"])
