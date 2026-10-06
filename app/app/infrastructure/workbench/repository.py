@@ -137,6 +137,71 @@ class WorkbenchRepository:
             {"s": status, "id": environment_id},
         )
 
+    async def report_environment(
+        self,
+        *,
+        owner_actor_id: str,
+        name: str,
+        agent_version: str | None,
+        codex_version: str | None,
+        roots: list[str],
+        ceiling: dict,
+    ) -> str:
+        r = await self.session.execute(
+            text(
+                """select id from workbench_environments where owner_actor_id = :o and name = :n
+                   order by created_at limit 1 for update"""
+            ),
+            {"o": owner_actor_id, "n": name},
+        )
+        row = r.first()
+        if row is None:
+            return await self.register_environment(
+                owner_actor_id=owner_actor_id,
+                name=name,
+                agent_version=agent_version,
+                codex_version=codex_version,
+                roots=roots,
+                ceiling=ceiling,
+            )
+        await self.session.execute(
+            text(
+                """update workbench_environments set agent_version = :av, codex_version = :cv,
+                     roots = cast(:roots as jsonb), ceiling = cast(:ceiling as jsonb),
+                     status = 'online', last_seen_at = now(), updated_at = now() where id = :id"""
+            ),
+            {
+                "id": row[0],
+                "av": agent_version,
+                "cv": codex_version,
+                "roots": _j(roots),
+                "ceiling": _j(ceiling),
+            },
+        )
+        return str(row[0])
+
+    async def set_environments_offline(
+        self, owner_actor_id: str, *, except_id: str | None = None
+    ) -> int:
+        # last_seen_at 不动：它记的是最后一次在线的时刻
+        r = await self.session.execute(
+            text(
+                """update workbench_environments set status = 'offline', updated_at = now()
+                   where owner_actor_id = :o and status = 'online'
+                     and (cast(:x as uuid) is null or id <> cast(:x as uuid))"""
+            ),
+            {"o": owner_actor_id, "x": except_id},
+        )
+        return r.rowcount or 0
+
+    async def list_relay_identities(self) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                "select owner_actor_id, relay_user from workbench_relay_identities order by created_at"
+            )
+        )
+        return [dict(m) for m in r.mappings().all()]
+
     async def register_sandbox(
         self,
         *,

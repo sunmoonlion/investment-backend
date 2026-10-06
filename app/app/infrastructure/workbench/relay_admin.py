@@ -16,7 +16,9 @@ class WsRelayAdmin:
         self.url = url.rstrip("/") + "/admin"
         self.token = token
 
-    async def _send(self, message: dict[str, Any]) -> dict[str, Any]:
+    async def _send(
+        self, message: dict[str, Any], *, expect: str = "ok"
+    ) -> dict[str, Any]:
         from websockets.asyncio.client import connect
 
         try:
@@ -35,7 +37,7 @@ class WsRelayAdmin:
             if isinstance(exc, WorkbenchError):
                 raise
             raise RelayAdminFailed("relay admin channel failed") from exc
-        if reply.get("type") != "ok":
+        if reply.get("type") != expect:
             raise RelayAdminFailed(f"relay refused: {reply.get('reason', 'unknown')}")
         return reply
 
@@ -53,3 +55,14 @@ class WsRelayAdmin:
 
     async def revoke_jti(self, jtis: list[str]) -> None:
         await self._send({"type": "revoke_jti", "jtis": jtis})
+
+    async def agents(self) -> dict[str, dict[str, Any]]:
+        reply = await self._send({"type": "agents"}, expect="agents")
+        agents = reply.get("agents")
+        if not isinstance(agents, dict):
+            raise RelayAdminFailed("relay refused: malformed agents reply")
+        return {
+            str(user): dict(info)
+            for user, info in agents.items()
+            if isinstance(info, dict)
+        }

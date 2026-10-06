@@ -74,6 +74,13 @@ class RelayAdmin(Protocol):
 
     async def revoke_jti(self, jtis: list[str]) -> None: ...
 
+    async def agents(self) -> dict[str, dict[str, Any]]:
+        """现在连着会合点的本地代理：会合点用户名 → {codex, software, since, machine}。
+
+        machine 是代理自己报的 {name, roots, ceiling}；老代理不报，是空字典。
+        """
+        ...
+
 
 class SandboxModel(Protocol):
     """新建沙箱时默认用哪个模型。"""
@@ -153,6 +160,29 @@ class WorkbenchStore(Protocol):
     async def set_environment_status(
         self, environment_id: str, status: str
     ) -> None: ...
+
+    async def report_environment(
+        self,
+        *,
+        owner_actor_id: str,
+        name: str,
+        agent_version: str | None,
+        codex_version: str | None,
+        roots: list[str],
+        ceiling: dict,
+    ) -> str:
+        """本地代理报到：这个人名下同名的机器有就更新、没有就建，置为在线。返回机器的 id。"""
+        ...
+
+    async def set_environments_offline(
+        self, owner_actor_id: str, *, except_id: str | None = None
+    ) -> int:
+        """把这个人名下还标着在线的机器置为离线（`except_id` 那台除外）。返回改了几台。"""
+        ...
+
+    async def list_relay_identities(self) -> list[dict[str, Any]]:
+        """所有签发过会合点身份的人：`owner_actor_id` 与 `relay_user`。不含令牌。"""
+        ...
 
     async def register_sandbox(
         self,

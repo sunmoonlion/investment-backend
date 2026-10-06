@@ -174,6 +174,10 @@ class Settings(BaseSettings):
     workbench_relay_admin_token: str | None = Field(
         default=None, validation_alias="WORKBENCH_RELAY_ADMIN_TOKEN"
     )
+    # 我的机器：runner 每隔这么多秒问一次会合点谁在线，登记机器、置在线离线；0 = 不同步（没配会合点管理通道时也不同步）
+    workbench_machine_sync_seconds: float = Field(
+        default=10.0, ge=0, le=300, validation_alias="WORKBENCH_MACHINE_SYNC_SECONDS"
+    )
     # D10：签发代理/沙箱/知识令牌的 ES256 私钥（PEM）；未配置时退回不透明随机令牌（会合点静态表/管理通道）
     workbench_token_signing_key: str | None = Field(
         default=None, validation_alias="WORKBENCH_TOKEN_SIGNING_KEY"

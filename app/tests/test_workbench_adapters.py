@@ -60,6 +60,35 @@ async def test_relay_admin_says_hello_then_sends_exactly_one_command():
     ]
 
 
+async def test_relay_admin_asks_who_is_online():
+    online = {"u-1": {"codex": "0.155.1", "machine": {"name": "pc"}}, "u-2": "junk"}
+
+    async def handle(ws) -> None:
+        await ws.recv()
+        await ws.send(json.dumps({"type": "welcome"}))
+        assert json.loads(await ws.recv()) == {"type": "agents"}
+        await ws.send(json.dumps({"type": "agents", "agents": online}))
+
+    async with serve(handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        admin = WsRelayAdmin(f"ws://127.0.0.1:{port}", "admin-token")
+        assert await admin.agents() == {"u-1": online["u-1"]}
+
+    async def old_relay(ws) -> None:
+        await ws.recv()
+        await ws.send(json.dumps({"type": "welcome"}))
+        await ws.recv()
+        await ws.send(
+            json.dumps({"type": "error", "reason": "unknown admin message agents"})
+        )
+
+    async with serve(old_relay, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        admin = WsRelayAdmin(f"ws://127.0.0.1:{port}", "admin-token")
+        with pytest.raises(RelayAdminFailed, match="unknown admin message"):
+            await admin.agents()
+
+
 async def test_relay_admin_failures_are_reported_without_the_token():
     relay = Relay(token="the-right-one")
     async with serve(relay.handle, "127.0.0.1", 0) as server:

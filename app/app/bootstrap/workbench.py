@@ -15,6 +15,7 @@ from app.application.ports.workbench import (
     WorkbenchStore,
     WorkbenchStores,
 )
+from app.application.workbench.machines import MachineSync
 from app.application.workbench.runner import Runner
 from app.domain.workbench.pricing import PriceList
 from app.infrastructure.workbench.app_server_client import WsAppServerConnector
@@ -89,4 +90,21 @@ def build_runner(
         poll_seconds=poll_seconds,
         records=records,
         prices=prices,
+    )
+
+
+def build_machine_sync(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    relay_admin_url: str | None,
+    relay_admin_token: str | None,
+    interval_seconds: float,
+) -> MachineSync | None:
+    """没配会合点管理通道，或间隔是 0，就不同步（返回 None）。"""
+    if not (relay_admin_url and relay_admin_token) or interval_seconds <= 0:
+        return None
+    return MachineSync(
+        workbench_stores(session_factory),
+        build_relay_admin(relay_admin_url, relay_admin_token),
+        interval_seconds=interval_seconds,
     )

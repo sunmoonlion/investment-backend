@@ -10,7 +10,7 @@ import asyncio
 import logging
 import signal
 
-from app.bootstrap.workbench import build_runner, event_publisher
+from app.bootstrap.workbench import build_machine_sync, build_runner, event_publisher
 from app.infrastructure.logging.logging import setup_logging
 from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.redis import get_redis
@@ -38,13 +38,32 @@ async def main() -> None:
         records=settings.workbench_records_mcp_enabled,
         prices=settings.workbench_model_prices(),
     )
+    # 我的机器：同一个进程里另起一条线，隔一会儿和会合点对一遍谁在线（没配管理通道就没有这条线）
+    machines = build_machine_sync(
+        get_postgres().session_factory,
+        relay_admin_url=settings.workbench_relay_admin_url,
+        relay_admin_token=settings.workbench_relay_admin_token,
+        interval_seconds=settings.workbench_machine_sync_seconds,
+    )
+    stopping = asyncio.Event()
+
+    def stop() -> None:
+        runner.stop()
+        stopping.set()
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, runner.stop)
+        loop.add_signal_handler(sig, stop)
     logger.info("service_starting service=%s role=runner", settings.service_name)
+    syncing = asyncio.create_task(machines.run_forever(stopping)) if machines else None
+    if syncing is None:
+        logger.warning("machine sync is off: relay admin channel not configured")
     try:
         await runner.run_forever()
     finally:
+        stopping.set()
+        if syncing is not None:
+            await syncing
         await get_postgres().shutdown()
         await get_redis().shutdown()
 
