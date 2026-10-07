@@ -511,6 +511,15 @@ async def record_everything(world: World) -> None:
     every = await http.get("/api/workbench/interactions", params={"status": "all"})
     for waiting in every.json()["interactions"]:
         await rec.get(http, f"/api/workbench/interactions/{waiting['interaction_id']}")
+    # 知识库（SDD 0011）：清单、每份资料、每份的最新一版
+    library = await rec.get(http, "/api/workbench/library")
+    await rec.get(http, "/api/workbench/library", kind="dossier")
+    for item in library["items"]:
+        detail = await rec.get(http, f"/api/workbench/library/{item['id']}")
+        await rec.get(
+            http,
+            f"/api/workbench/library/{item['id']}/versions/{detail['item']['versions']}/content",
+        )
 
 
 async def build_full(world: World) -> None:
@@ -757,6 +766,12 @@ async def build_full(world: World) -> None:
         )
     rec.page("我的机器", "/zh-CN/workbench/machines")
     rec.page("设置", "/zh-CN/workbench/settings")
+    rec.page("知识库", "/zh-CN/workbench/library")
+    filed = (await http.get("/api/workbench/library")).json()["items"]
+    for kind, title in (("dossier", "知识库：一份底稿"), ("deliverable", "知识库：一份交回物")):
+        first = next((i for i in filed if i["kind"] == kind), None)
+        if first:
+            rec.page(title, f"/zh-CN/workbench/library/{first['id']}")
 
 
 async def build_empty(world: World) -> None:
