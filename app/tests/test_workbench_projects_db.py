@@ -455,6 +455,10 @@ def test_sessions_from_before_the_migration_are_kept_as_work_in_projects():
     schema = "wb_mig_" + uuid.uuid4().hex
     engine = create_engine(url.replace("postgresql://", "postgresql+psycopg://"))
     paths = sorted((ROOT / "alembic/versions").glob("20*.py"))
+    # 这一版是 0012；后面再加的迁移（0013 知识库…）不参与这个测试
+    paths = paths[
+        : [p.name for p in paths].index("20260929_0012_workbench_projects.py") + 1
+    ]
     assert paths[-1].name == "20260929_0012_workbench_projects.py"
 
     def run(connection, path):

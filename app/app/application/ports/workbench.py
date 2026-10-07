@@ -580,6 +580,30 @@ class WorkbenchStore(Protocol):
         self, *, session_id: str, request_id: str
     ) -> dict[str, Any] | None: ...
 
+    # ---------- 知识库（SDD 0011）----------
+    async def list_owner_step_artifacts(
+        self, *, owner_actor_id: str
+    ) -> list[dict[str, Any]]:
+        """这个人全部委托里的交回物（不带内容）：每个版本一条，带所属委托的 project_id、session_id。"""
+        ...
+
+    async def library_overlay(
+        self, *, owner_actor_id: str
+    ) -> dict[str, dict[str, Any]]:
+        """用户对自己资料动过的那几条：资料标识 → {title, deleted_at}。"""
+        ...
+
+    async def put_library_overlay(
+        self,
+        *,
+        owner_actor_id: str,
+        item_id: str,
+        title: str | None = None,
+        deleted: bool | None = None,
+    ) -> None:
+        """改名（title 给非 None）或拿掉 / 放回（deleted 给非 None）。"""
+        ...
+
 
 class WorkbenchStores(Protocol):
     def __call__(self) -> AbstractAsyncContextManager[WorkbenchStore]:

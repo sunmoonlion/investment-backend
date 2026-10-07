@@ -20,6 +20,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.workbench.library import Library
 from app.application.workbench.records import ProjectRecords
 from app.application.workbench.tokens import TokenIssuer
 from app.bootstrap.workbench import workbench_store
@@ -101,6 +102,49 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    # 知识库（SDD 0011）：用户在我们这里的资料，跨项目。不需要 task；给了就把这次读记在那个委托的账上
+    "list_library": {
+        "description": (
+            "List the user's library: working papers the experts handed back and the "
+            "deliverables of each step, across all projects. Each item has an id, kind "
+            "(dossier or deliverable), title, project, number of versions and the "
+            "question it came from. Optional filters: kind, q (title contains)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    **_TASK,
+                    "description": "Optional. The task id if you are working on one.",
+                },
+                "kind": {"type": "string", "enum": ["dossier", "deliverable"]},
+                "q": {"type": "string", "maxLength": 200},
+            },
+            "additionalProperties": False,
+        },
+    },
+    "read_library_item": {
+        "description": (
+            "Read one library item as text (a dossier as Markdown; a deliverable as its "
+            "content). Paged; ask for the next page when `pages` is greater than `page`. "
+            "The reply carries a citation {library_item_id, version, sha256}: quote it "
+            "when you use the content."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    **_TASK,
+                    "description": "Optional. The task id if you are working on one.",
+                },
+                "item": {"type": "string", "description": "Id from list_library."},
+                "version": {"type": "integer", "minimum": 1},
+                "page": {"type": "integer", "minimum": 1, "default": 1},
+            },
+            "required": ["item"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -143,7 +187,26 @@ def _tool_error(mid: Any, message: str) -> dict[str, Any]:
     return _ok(mid, {"content": [{"type": "text", "text": message}], "isError": True})
 
 
+async def _library_call(
+    records: ProjectRecords, name: str, args: dict[str, Any]
+) -> Any:
+    library = Library(records.repo, owner_actor_id=records.owner)
+    # 在委托里读的，记到那个委托的账上（F-LIB-06）；聊天里读的没有委托，不记
+    working = await records._working(args["task"]) if args.get("task") else None
+    if name == "list_library":
+        result = await library.tool_list(kind=args.get("kind"), q=args.get("q"))
+    else:
+        result = await library.tool_read(
+            args.get("item"), version=args.get("version"), page=args.get("page", 1)
+        )
+    if working is not None:
+        await records._noted(working, name, item=args.get("item"))
+    return result
+
+
 async def call(records: ProjectRecords, name: str, args: dict[str, Any]) -> Any:
+    if name in ("list_library", "read_library_item"):
+        return await _library_call(records, name, args)
     if name == "list_project_conversations":
         return await records.list_conversations(args.get("task"))
     if name == "read_project_conversation":
@@ -171,8 +234,9 @@ async def handle(
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
                 "instructions": (
-                    "Read-only records of the user's project. Every tool needs the "
-                    "task id from the step instructions."
+                    "Read-only records of the user's project and the user's library. "
+                    "Project tools need the task id from the step instructions; the "
+                    "library tools work without it."
                 ),
             },
         )

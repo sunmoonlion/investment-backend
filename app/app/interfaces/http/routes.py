@@ -12,6 +12,9 @@ from app.interfaces.http.web.interactions import router as web_interactions_rout
 from app.interfaces.http.web.workbench_expert import (
     router as workbench_expert_router,
 )
+from app.interfaces.http.web.workbench_library import (
+    router as workbench_library_router,
+)
 from app.interfaces.http.web.workbench_projects import (
     router as workbench_projects_router,
 )
@@ -27,4 +30,5 @@ router.include_router(web_cross_app_router)
 router.include_router(workbench_router)
 router.include_router(workbench_projects_router)
 router.include_router(workbench_expert_router)
+router.include_router(workbench_library_router)
 router.include_router(workbench_mcp_router)

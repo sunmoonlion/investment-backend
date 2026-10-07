@@ -87,11 +87,16 @@ async def test_the_handshake_and_the_list_of_tools(served):
             "read_project_conversation",
             "list_project_dossiers",
             "read_project_dossier",
+            "list_library",
+            "read_library_item",
         ]
-        # 只读：没有任何写的工具；每个工具都要带委托编号
+        # 只读：没有任何写的工具；项目的工具都要带委托编号，知识库的两个不用（聊天里也能读）
         for spec in listed["result"]["tools"]:
             assert spec["name"].startswith(("list_", "read_"))
-            assert "task" in spec["inputSchema"]["required"]
+            if "project" in spec["name"]:
+                assert "task" in spec["inputSchema"]["required"]
+            else:
+                assert "task" not in spec["inputSchema"].get("required", [])
         assert (await http.get(URL, headers=bearer())).status_code == 405
         unknown = await http.post(URL, json=rpc("resources/list"), headers=bearer())
         assert unknown.json()["error"]["code"] == -32601
