@@ -237,7 +237,6 @@ class SandboxProvisioning:
             "model_key": model_key,
             "relay_token": sandbox_token,
             "relay_user": identity["relay_user"],
-            **self.identity_metadata(identity),
         }
         if self.issuer is not None:
             spec["knowledge_mcp_token"] = self.issuer.knowledge_token(

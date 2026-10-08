@@ -156,6 +156,8 @@ async def test_provision_flow(make_client, db):  # noqa: F811
     assert body["app_server_url"].startswith("ws://sandbox-" + relay_user)
     assert "app_server_token" not in body and "sk-live" not in r.text
     spec = fake_api.specs[0]
+    assert "agent_token_expires_at" not in spec
+    assert "identity_revision" not in spec
     assert (
         spec["model_key"] == "sk-live-key-1234567890"
         and spec["relay_user"] == relay_user
