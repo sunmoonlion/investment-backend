@@ -260,6 +260,50 @@ class Ledger:
                 )
             return {"task_id": task_id, "state": target, "state_version": new_version}
 
+    async def resume_environment(
+        self, task_id: str, *, session_id: str, environment_id: str
+    ) -> bool:
+        """runner 已核对执行环境 ready。恢复与排队同一事务，重复/取消竞争只生效一次。"""
+        async with self.repo.transaction():
+            task = await self.repo.get_task(task_id, for_update=True)
+            if (
+                str(task["session_id"]) != session_id
+                or task["state"] != TaskState.WAITING
+                or task.get("waiting_reason") != WaitingReason.ENVIRONMENT
+                or task.get("cancel_requested_at") is not None
+                or task.get("active_attempt_id") is not None
+                or task.get("active_interaction_id") is not None
+            ):
+                return False
+            session = await self.repo.get_session(session_id)
+            if (
+                str(session.get("environment_id")) != environment_id
+                or str(session.get("active_task_id")) != task_id
+                or session["wheel"] != Wheel.advisor
+            ):
+                return False
+            environment = await self.repo.get_environment(
+                environment_id, owner_actor_id=str(session["owner_actor_id"])
+            )
+            if environment.get("status") != "online":
+                return False
+            await self.transition(
+                task_id,
+                TaskState.QUEUED,
+                expected_version=int(task["state_version"]),
+                reason={
+                    "environment_id": environment_id,
+                    "execution_environment": "ready",
+                },
+            )
+            await self.repo.enqueue_command(
+                session_id=session_id,
+                sandbox_id=str(session["sandbox_id"]),
+                kind="task.drive",
+                payload={"task_id": task_id, "resumed": True},
+            )
+            return True
+
     async def request_cancel(
         self, task_id: str, *, owner_actor_id: str
     ) -> dict[str, Any]:

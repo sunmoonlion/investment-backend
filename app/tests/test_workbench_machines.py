@@ -68,6 +68,10 @@ class Store:
                 changed += 1
         return changed
 
+    async def queue_environment_recovery(self, environment_id, *, owner_actor_id):
+        self.calls.append(("recovery_probe", owner_actor_id, environment_id))
+        return 0
+
 
 class Stores:
     def __init__(self, store):

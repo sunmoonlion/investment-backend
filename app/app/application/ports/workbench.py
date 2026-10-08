@@ -382,6 +382,12 @@ class WorkbenchStore(Protocol):
 
     async def list_nonterminal_tasks(self) -> list[dict[str, Any]]: ...
 
+    async def queue_environment_recovery(
+        self, environment_id: str, *, owner_actor_id: str
+    ) -> int:
+        """为这个人的这台机器上的环境等待任务排探测命令；已有待执行探测时不重复。"""
+        ...
+
     async def cas_task(
         self, task_id: str, *, expected_version: int, **fields: Any
     ) -> int:

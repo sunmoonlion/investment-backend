@@ -186,6 +186,8 @@ class Library:
         found = await self.item(item_id)
         kind, task_id, name = parse_item_id(item_id)  # type: ignore[misc]
         if kind == KIND_DELIVERABLE:
+            if name is None:
+                raise NotFound("library item version not found")
             art = await self.repo.get_artifact(
                 task_id=task_id, name=name, version=version
             )

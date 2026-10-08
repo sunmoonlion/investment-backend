@@ -44,10 +44,10 @@ def machine_report(agent: dict[str, Any]) -> dict[str, Any] | None:
     name = str(machine.get("name") or "").strip()[:128]
     if not name:
         return None
-    roots = machine.get("roots") if isinstance(machine.get("roots"), list) else []
-    reported = (
-        machine.get("ceiling") if isinstance(machine.get("ceiling"), dict) else {}
-    )
+    roots_value = machine.get("roots")
+    roots = roots_value if isinstance(roots_value, list) else []
+    ceiling_value = machine.get("ceiling")
+    reported = ceiling_value if isinstance(ceiling_value, dict) else {}
     ceiling: dict[str, Any] = {}
     if reported.get("sandbox") in SANDBOX_MODES:
         ceiling["sandbox"] = reported["sandbox"]
@@ -101,6 +101,9 @@ class MachineSync:
                     counts["offline"] += await repo.set_environments_offline(
                         owner, except_id=env_id
                     )
+                    # 在线心跳只排执行环境探测，不直接把 Task 改成可运行。
+                    # runner 核对 app-server 的环境已 ready 后才经账房恢复。
+                    await repo.queue_environment_recovery(env_id, owner_actor_id=owner)
         return counts
 
     async def run_forever(self, stop: asyncio.Event) -> None:

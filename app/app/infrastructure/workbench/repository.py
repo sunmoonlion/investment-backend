@@ -188,11 +188,11 @@ class WorkbenchRepository:
             text(
                 """update workbench_environments set status = 'offline', updated_at = now()
                    where owner_actor_id = :o and status = 'online'
-                     and (cast(:x as uuid) is null or id <> cast(:x as uuid))"""
+                     and (cast(:x as uuid) is null or id <> cast(:x as uuid)) returning id"""
             ),
             {"o": owner_actor_id, "x": except_id},
         )
-        return r.rowcount or 0
+        return len(r.all())
 
     async def list_relay_identities(self) -> list[dict[str, Any]]:
         r = await self.session.execute(
@@ -805,6 +805,44 @@ class WorkbenchRepository:
         )
         row = r.mappings().first()
         return dict(row) if row else None
+
+    async def queue_environment_recovery(
+        self, environment_id: str, *, owner_actor_id: str
+    ) -> int:
+        rows = await self.session.execute(
+            text(
+                """select t.id, t.session_id, s.sandbox_id
+                   from workbench_tasks t join workbench_sessions s on s.id = t.session_id
+                   where s.environment_id = :env and s.owner_actor_id = :owner
+                     and t.owner_actor_id = :owner and s.active_task_id = t.id
+                     and s.wheel = 'advisor' and t.state = 'WAITING'
+                     and t.waiting_reason = 'ENVIRONMENT' and t.cancel_requested_at is null
+                     and t.active_attempt_id is null and t.active_interaction_id is null
+                   order by t.id for update of t"""
+            ),
+            {"env": environment_id, "owner": owner_actor_id},
+        )
+        queued = 0
+        for row in rows.mappings().all():
+            # task 锁串行化同一任务的两个对账者；第二条语句会看到先提交的命令。
+            present = await self.session.execute(
+                text(
+                    """select 1 from workbench_commands where session_id = :session
+                       and kind = 'task.reconnect' and status in ('pending', 'claimed')
+                       and payload->>'task_id' = :task limit 1"""
+                ),
+                {"session": row["session_id"], "task": str(row["id"])},
+            )
+            if present.scalar_one_or_none() is not None:
+                continue
+            await self.enqueue_command(
+                session_id=str(row["session_id"]),
+                sandbox_id=str(row["sandbox_id"]),
+                kind="task.reconnect",
+                payload={"task_id": str(row["id"]), "environment_id": environment_id},
+            )
+            queued += 1
+        return queued
 
     async def list_nonterminal_tasks(self) -> list[dict[str, Any]]:
         r = await self.session.execute(

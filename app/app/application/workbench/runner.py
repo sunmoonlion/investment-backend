@@ -23,6 +23,7 @@ from app.application.ports.workbench import (
     WorkbenchStores,
 )
 from app.application.workbench.advisor import Advisor, TurnResult
+from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.packs import find_pack
 from app.domain.workbench.pricing import (
@@ -41,7 +42,7 @@ from app.domain.workbench.projects import (
     thread_settings,
     turn_settings,
 )
-from app.domain.workbench.states import Wheel
+from app.domain.workbench.states import TaskState, WaitingReason, Wheel
 
 log = logging.getLogger(__name__)
 
@@ -381,10 +382,24 @@ class SandboxLink:
 
     def _feed_turn_waiters(self, method: str, params: dict[str, Any]) -> None:
         turn_id = params.get("turnId") or (params.get("turn") or {}).get("id")
-        if method.startswith("thread/environment/disconnected"):
+        if method in (
+            "thread/environment/disconnected",
+            "thread/environment/connected",
+        ):
+            thread_id = thread_id_of(params)
+            if thread_id is None:
+                return
             for w in self.turn_waiters.values():
-                w["env_lost"] = True
-                w["error"] = "execution environment disconnected"
+                if w.get("thread_id") != thread_id:
+                    continue
+                if method == "thread/environment/disconnected":
+                    w["env_lost"] = True
+                    w["error"] = "execution environment disconnected"
+                elif w["env_lost"]:
+                    # 短断在当前 turn 结束前恢复：让它继续，不把成功的 turn 误判为丢失。
+                    w["env_lost"] = False
+                    if w["error"] == "execution environment disconnected":
+                        w["error"] = None
             return
         if method == "error":
             for w in self.turn_waiters.values():
@@ -437,6 +452,7 @@ class SandboxLink:
                 error=f"turn/start returned no turn id: {result}",
             )
         waiter: dict[str, Any] = {
+            "thread_id": thread_id,
             "future": asyncio.get_running_loop().create_future(),
             "text": None,
             "reported": False,
@@ -825,6 +841,9 @@ class Runner:
         async with self.stores() as repo:
             session = await repo.get_session(session_id)
             link = await self.link_for(str(session["sandbox_id"]), repo)
+        if kind == "task.reconnect":
+            await self._reconnect_task(payload, session, link)
+            return
         if kind == "task.drive":
             task_id = payload["task_id"]
             running = self.driving.get(task_id)
@@ -949,6 +968,53 @@ class Runner:
             directory=directory,
             session_id=str(session["id"]),
         )
+
+    async def _reconnect_task(
+        self, payload: dict[str, Any], session: dict[str, Any], link: SandboxLink
+    ) -> None:
+        """在线心跳不等于执行环境就绪；实际问固定 app-server，再让账房恢复。"""
+        task_id = payload["task_id"]
+        environment_id = str(session.get("environment_id"))
+        if payload.get("environment_id") != environment_id:
+            return
+        async with self.stores() as repo:
+            task = await repo.get_task(
+                task_id, owner_actor_id=str(session["owner_actor_id"])
+            )
+            environment = await repo.get_environment(environment_id)
+            if (
+                str(task["session_id"]) != str(session["id"])
+                or task["state"] != TaskState.WAITING
+                or task.get("waiting_reason") != WaitingReason.ENVIRONMENT
+                or task.get("cancel_requested_at") is not None
+                or task.get("active_attempt_id") is not None
+                or task.get("active_interaction_id") is not None
+                or environment.get("status") != "online"
+            ):
+                return
+        env_key = (session.get("thread_settings") or {}).get(
+            "environmentId", self.environment_key
+        )
+        try:
+            client = await link.ensure_connected()
+            # environment/info 会按 Codex 的恢复机制连接，不执行用户命令、不调模型。
+            await client.request(
+                "environment/info", {"environmentId": env_key}, timeout=10
+            )
+            status = await client.request(
+                "environment/status", {"environmentId": env_key}, timeout=5
+            )
+        except (AppServerError, ConnectionError, TimeoutError):
+            # 下次机器对账再探测；Task 保持 WAITING，避免制造失败的模型重试。
+            return
+        if not isinstance(status, dict) or status.get("status") != "ready":
+            return
+        async with self.stores() as repo:
+            resumed = await Ledger(repo).resume_environment(
+                task_id, session_id=str(session["id"]), environment_id=environment_id
+            )
+        if resumed:
+            log.info("execution environment recovered task=%s", task_id)
 
     async def _thread_for_task(
         self, task_id: str, session: dict[str, Any], link: SandboxLink
