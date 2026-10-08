@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import logging
 import re
 import secrets
+from datetime import UTC, datetime
 from typing import Any
 
 from app.application.ports.workbench import (
@@ -18,7 +22,7 @@ from app.application.ports.workbench import (
     WorkbenchStore,
 )
 from app.application.workbench.tokens import TokenIssuer, jti_of
-from app.domain.workbench.errors import WorkbenchError
+from app.domain.workbench.errors import RelayIdentityChanged, WorkbenchError
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +83,26 @@ class SandboxProvisioning:
         self.issuer = issuer  # D10：有签名密钥时发 JWT；否则不透明随机令牌
         self.global_limit = global_limit  # F-SBX-08；0 = 不设上限
 
+    def identity_metadata(self, row: dict[str, Any]) -> dict[str, Any]:
+        # Metadata only from our stored credential, never a browser-provided JWT.
+        token = self.cipher.decrypt(row["agent_token_ciphertext"].encode()).decode()
+        expires = None
+        try:
+            part = token.split(".")[1]
+            exp = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))[
+                "exp"
+            ]
+            if isinstance(exp, int) and not isinstance(exp, bool):
+                expires = datetime.fromtimestamp(exp, UTC).isoformat()
+        except (IndexError, KeyError, ValueError, TypeError, OverflowError):
+            pass  # legacy opaque tokens have no declared expiry
+        return {
+            "agent_token_expires_at": expires,
+            "identity_revision": hashlib.sha256(
+                row["agent_token_ciphertext"].encode()
+            ).hexdigest(),
+        }
+
     async def ensure_relay_identity(
         self, owner: str
     ) -> tuple[dict[str, Any], str | None]:
@@ -132,12 +156,24 @@ class SandboxProvisioning:
             await self.relay_admin.set_public_key(self.issuer.public_pem())
         await self.relay_admin.set_tokens(relay_user, agent_token, sandbox_token)
 
-    async def rotate_relay_identity(self, owner: str) -> dict[str, Any]:
+    async def rotate_relay_identity(
+        self, owner: str, expected_revision: str
+    ) -> dict[str, Any]:
+        async with self.repo.relay_identity_operation(owner):
+            return await self._rotate_relay_identity(owner, expected_revision)
+
+    async def _rotate_relay_identity(
+        self, owner: str, expected_revision: str
+    ) -> dict[str, Any]:
         """撤换：旧令牌按 jti 吊销（推到会合点，F-RELAY-06），签新的一对，沙箱在线就用新沙箱令牌滚动。
         新代理令牌只在这次响应里出现一次。"""
         old = await self.repo.get_relay_identity(owner)
         if old is None:
             raise NoCredential("no relay identity to rotate; provision a sandbox first")
+        if self.identity_metadata(old)["identity_revision"] != expected_revision:
+            raise RelayIdentityChanged(
+                "Identity changed; refresh before explicitly rotating again"
+            )
         old_tokens = [
             self.cipher.decrypt(old[k].encode()).decode()
             for k in ("agent_token_ciphertext", "sandbox_token_ciphertext")
@@ -164,6 +200,7 @@ class SandboxProvisioning:
                 "url": self.relay_public_url,
                 "user": row["relay_user"],
                 "agent_token": row["_agent_token"],
+                **self.identity_metadata(row),
             },
             "revoked": len(jtis) or 2,
             "sandbox_rolled": live.get("status") not in (None, "absent", "deleted"),
@@ -200,6 +237,7 @@ class SandboxProvisioning:
             "model_key": model_key,
             "relay_token": sandbox_token,
             "relay_user": identity["relay_user"],
+            **self.identity_metadata(identity),
         }
         if self.issuer is not None:
             spec["knowledge_mcp_token"] = self.issuer.knowledge_token(
@@ -227,6 +265,10 @@ class SandboxProvisioning:
         return sb_id, result
 
     async def provision(self, owner: str) -> dict[str, Any]:
+        async with self.repo.relay_identity_operation(owner):
+            return await self._provision(owner)
+
+    async def _provision(self, owner: str) -> dict[str, Any]:
         credential = await self.repo.active_credential(owner)
         if credential is None:
             raise NoCredential("register a model key in settings first")
@@ -244,6 +286,7 @@ class SandboxProvisioning:
                 "url": self.relay_public_url,
                 "user": identity["relay_user"],
                 "agent_token": fresh_agent_token,
+                **self.identity_metadata(identity),
             },
             "credential_hint": credential["hint"],
         }
@@ -278,9 +321,14 @@ class SandboxProvisioning:
             **result,
             "sandbox_id": str(sandboxes[0]["id"]) if sandboxes else None,
             "relay_user": identity["relay_user"],
+            **self.identity_metadata(identity),
         }
 
     async def deprovision(self, owner: str, purge: bool = False) -> dict[str, Any]:
+        async with self.repo.relay_identity_operation(owner):
+            return await self._deprovision(owner, purge)
+
+    async def _deprovision(self, owner: str, purge: bool = False) -> dict[str, Any]:
         identity = await self.repo.get_relay_identity(owner)
         if identity is None:
             return {"status": "absent"}

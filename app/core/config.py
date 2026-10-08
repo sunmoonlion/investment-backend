@@ -6,11 +6,49 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.cross_app import Source, Target, parse_sources, parse_targets
 from app.domain.workbench.pricing import DEFAULT_PRICES_JSON, PriceList, parse_prices
+
+
+class AgentDownload(BaseModel):
+    """Single operator-owned release descriptor; never supplied by the browser."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    url: str = Field(min_length=1, max_length=2048)
+    version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
+    zip_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    codex_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    size_bytes: int = Field(gt=0)
+
+    @field_validator("url")
+    @classmethod
+    def public_https(cls, value: str) -> str:
+        u = urlsplit(value)
+        if (
+            u.scheme != "https"
+            or not u.hostname
+            or u.username
+            or u.password
+            or u.query
+            or u.fragment
+            or any(c.isspace() or ord(c) < 32 for c in value)
+            or "\\" in value
+        ):
+            raise ValueError("agent download must be a credential-free HTTPS URL")
+        _ = u.port
+        return value
+
 
 BrowserSurface = Literal["admin", "web"]
 
@@ -181,6 +219,10 @@ class Settings(BaseSettings):
     # D10：签发代理/沙箱/知识令牌的 ES256 私钥（PEM）；未配置时退回不透明随机令牌（会合点静态表/管理通道）
     workbench_token_signing_key: str | None = Field(
         default=None, validation_alias="WORKBENCH_TOKEN_SIGNING_KEY"
+    )
+    # Unset means unavailable. Hosting is chosen by the remote operator, not the client.
+    workbench_agent_download: AgentDownload | None = Field(
+        default=None, validation_alias="WORKBENCH_AGENT_DOWNLOAD"
     )
     workbench_token_issuer: str = Field(
         default="sunmoon-workbench", validation_alias="WORKBENCH_TOKEN_ISSUER"

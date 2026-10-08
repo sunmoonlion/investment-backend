@@ -483,6 +483,12 @@ class WorkbenchStore(Protocol):
         self, credential_id: str, *, owner_actor_id: str
     ) -> bool: ...
 
+    def relay_identity_operation(
+        self, owner_actor_id: str
+    ) -> AbstractAsyncContextManager[None]:
+        """Reject concurrent identity mutations; hold through external registration and commits."""
+        ...
+
     async def get_relay_identity(
         self, owner_actor_id: str
     ) -> dict[str, Any] | None: ...

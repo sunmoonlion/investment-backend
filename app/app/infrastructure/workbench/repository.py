@@ -19,13 +19,14 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.application.dto.outbox import OutboxEvent
 from app.domain.workbench.errors import (
     NotFound,
     ProjectBusy,
     ProjectExists,
+    RelayIdentityBusy,
     StaleStateVersion,
 )
 from app.domain.workbench.tokens import token_hash
@@ -1283,6 +1284,25 @@ class WorkbenchRepository:
         return int(getattr(r, "rowcount", 0)) == 1
 
     # ---------- relay identity (0004 动态登记) ----------
+    @asynccontextmanager
+    async def relay_identity_operation(self, owner_actor_id: str):
+        # Separate connection: identity records must commit before external side effects,
+        # while the operation lock survives those commits. Transaction end releases the
+        # advisory lock even on cancellation; no session lock can leak into the pool.
+        engine = self.session.bind
+        if not isinstance(engine, AsyncEngine):
+            raise RuntimeError("identity operation requires an engine-bound session")
+        async with engine.begin() as guard:
+            acquired = await guard.scalar(
+                text("select pg_try_advisory_xact_lock(hashtextextended(:owner, 43))"),
+                {"owner": owner_actor_id},
+            )
+            if not acquired:
+                raise RelayIdentityBusy(
+                    "An identity operation is in progress; refresh status"
+                )
+            yield
+
     async def get_relay_identity(self, owner_actor_id: str) -> dict[str, Any] | None:
         r = await self.session.execute(
             text("select * from workbench_relay_identities where owner_actor_id = :o"),

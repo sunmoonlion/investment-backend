@@ -21,6 +21,7 @@ from joserfc.jwk import ECKey
 
 ALG = "ES256"
 RECORDS_AUDIENCE = "workbench-records"
+AGENT_TTL_SECONDS = 30 * 24 * 3600  # 所有者 2026-10-09 定：仅代理 30 天
 DEFAULT_TTL_SECONDS = 90 * 24 * 3600  # 长期：这些令牌随沙箱/代理重签，不是浏览器会话
 
 
@@ -65,7 +66,7 @@ class TokenIssuer:
         return Issued(token=token, jti=jti, expires_at=payload["exp"])
 
     def agent_token(
-        self, relay_user: str, *, ttl_seconds: int = DEFAULT_TTL_SECONDS
+        self, relay_user: str, *, ttl_seconds: int = AGENT_TTL_SECONDS
     ) -> Issued:
         return self._issue(
             {"aud": "relay", "sub": relay_user, "role": "agent"}, ttl_seconds

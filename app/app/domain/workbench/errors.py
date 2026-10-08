@@ -132,3 +132,13 @@ class RecordsRefused(WorkbenchError):
 
     code = "records_refused"
     http_status = 403
+
+
+class RelayIdentityBusy(WorkbenchError):
+    code = "relay_identity_busy"
+    http_status = 409
+
+
+class RelayIdentityChanged(WorkbenchError):
+    code = "relay_identity_changed"
+    http_status = 409

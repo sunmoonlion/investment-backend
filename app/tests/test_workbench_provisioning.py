@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 from cryptography.fernet import Fernet
 from sqlalchemy import text
@@ -139,8 +141,13 @@ async def test_provision_flow(make_client, db):  # noqa: F811
             json={"provider": "kimi", "api_key": "sk-live-key-1234567890"},
         )
     ).status_code == 201
-    r = await http.post("/api/workbench/sandboxes/provision")
-    assert r.status_code == 200, r.text
+    concurrent = await asyncio.gather(
+        http.post("/api/workbench/sandboxes/provision"),
+        http.post("/api/workbench/sandboxes/provision"),
+    )
+    assert sorted(r.status_code for r in concurrent) == [200, 409]
+    r = next(r for r in concurrent if r.status_code == 200)
+    assert r.headers["cache-control"] == "no-store"
     body = r.json()
     relay_user = body["relay"]["user"]
     assert relay_user == relay_user_for(A)
@@ -241,7 +248,10 @@ async def test_jwt_identity_and_rotation(make_client, db):  # noqa: F811
 
     # 没身份时撤换 → 409
     assert (
-        await http.post("/api/workbench/sandboxes/relay-identity/rotate")
+        await http.post(
+            "/api/workbench/sandboxes/relay-identity/rotate",
+            json={"expected_revision": "0" * 64},
+        )
     ).status_code == 409
 
     await http.post(
@@ -268,9 +278,33 @@ async def test_jwt_identity_and_rotation(make_client, db):  # noqa: F811
     old_jtis = {jti_of(body["relay"]["agent_token"]), jti_of(spec["relay_token"])}
 
     # 撤换：旧 jti 吊销，新代理令牌回一次，沙箱（在线）用新沙箱令牌滚动
-    r = await http.post("/api/workbench/sandboxes/relay-identity/rotate")
+    r = await http.post(
+        "/api/workbench/sandboxes/relay-identity/rotate",
+        json={"expected_revision": body["relay"]["identity_revision"]},
+    )
     assert r.status_code == 200, r.text
     rotated = r.json()
+    assert r.headers["cache-control"] == "no-store"
+    assert agent_claims["exp"] - agent_claims["iat"] == 30 * 24 * 3600
+    assert (
+        verify(spec["relay_token"], pub, audience="relay")["exp"]
+        - verify(spec["relay_token"], pub, audience="relay")["iat"]
+        == 90 * 24 * 3600
+    )
+    assert body["relay"]["agent_token_expires_at"]
+    # Replayed request cannot mint/revoke a second identity.
+    again = await http.post(
+        "/api/workbench/sandboxes/relay-identity/rotate",
+        json={"expected_revision": body["relay"]["identity_revision"]},
+    )
+    assert again.status_code == 409 and again.json()["code"] == "relay_identity_changed"
+    assert again.headers["cache-control"] == "no-store"
+    status = (await http.get("/api/workbench/sandboxes/provisioned")).json()
+    assert (
+        "agent_token" not in status
+        and status["identity_revision"] == rotated["relay"]["identity_revision"]
+    )
+
     assert (
         set(relay.revoked_jtis) == old_jtis
         and rotated["revoked"] == 2
@@ -406,3 +440,26 @@ async def test_the_records_tools_are_given_to_the_sandbox_only_when_configured(
             continue
         raise AssertionError(audience)
     assert issuer.owner_of_records_token(spec["knowledge_mcp_token"]) is None
+
+
+async def test_identity_operation_rejects_concurrency_and_releases_after_error(db):
+    import pytest
+
+    from app.domain.workbench.errors import RelayIdentityBusy
+    from app.infrastructure.workbench.repository import WorkbenchRepository
+
+    async with db() as first, db() as second:
+        a, b = WorkbenchRepository(first), WorkbenchRepository(second)
+        with pytest.raises(ValueError, match="fixture"):
+            async with a.relay_identity_operation(A):
+                await (
+                    a.commit()
+                )  # commits during an operation must not release its lock
+                with pytest.raises(RelayIdentityBusy):
+                    async with b.relay_identity_operation(A):
+                        raise AssertionError("concurrent identity operation entered")
+                async with b.relay_identity_operation("other-owner"):
+                    pass
+                raise ValueError("fixture")
+        async with b.relay_identity_operation(A):
+            pass

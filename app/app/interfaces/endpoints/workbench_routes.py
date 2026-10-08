@@ -57,6 +57,10 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class RotateRelayIdentity(Strict):
+    expected_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class RegisterEnvironment(Strict):
     name: str = Field(min_length=1, max_length=128)
     agent_version: str | None = None
@@ -747,6 +751,15 @@ async def token_keys(issuer: TokenIssuer | None = Depends(token_issuer)):
     return issuer.public_jwks()
 
 
+@router.get("/agent/download")
+async def agent_download(principal: Principal = Depends(get_web_current_user)):
+    descriptor = get_settings().workbench_agent_download
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "download": descriptor.model_dump() if descriptor else None,
+    }
+
+
 @router.post("/sandboxes/provision")
 async def provision_sandbox(
     principal: Principal = Depends(get_web_current_user),
@@ -769,6 +782,7 @@ async def provision_sandbox(
 
 @router.post("/sandboxes/relay-identity/rotate")
 async def rotate_relay_identity(
+    body: RotateRelayIdentity,
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
     cipher=Depends(credential_cipher),
@@ -779,7 +793,7 @@ async def rotate_relay_identity(
     try:
         result = await _provisioning(
             session, principal, cipher, backends, issuer
-        ).rotate_relay_identity(_actor(principal))
+        ).rotate_relay_identity(_actor(principal), body.expected_revision)
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return result
