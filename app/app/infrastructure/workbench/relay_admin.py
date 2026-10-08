@@ -66,3 +66,6 @@ class WsRelayAdmin:
             for user, info in agents.items()
             if isinstance(info, dict)
         }
+
+    async def permission_receipts(self, receipts: list[dict[str, str]]) -> None:
+        await self._send({"type": "permission_receipts", "receipts": receipts})

@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 from app.application.ports.workbench import RelayAdmin, WorkbenchStores
+from app.application.workbench.agent_reports import record_agent_reports
 from app.domain.workbench.errors import WorkbenchError
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class MachineSync:
     async def sync_once(self) -> dict[str, int]:
         agents = await self.relay_admin.agents()
         counts = {"online": 0, "offline": 0, "untouched": 0}
+        receipts: list[dict[str, str]] = []
         async with self.stores() as repo:
             async with repo.transaction():
                 for identity in await repo.list_relay_identities():
@@ -104,6 +106,18 @@ class MachineSync:
                     # 在线心跳只排执行环境探测，不直接把 Task 改成可运行。
                     # runner 核对 app-server 的环境已 ready 后才经账房恢复。
                     await repo.queue_environment_recovery(env_id, owner_actor_id=owner)
+                    receipts.extend(
+                        await record_agent_reports(
+                            repo,
+                            owner=owner,
+                            environment_id=str(env_id),
+                            reports=agent.get("permission_reports", []),
+                        )
+                    )
+        # A rollback or failed commit must never acknowledge permission reports.
+        # Lost replies are retried from the relay queue and de-duplicated in DB.
+        if receipts:
+            await self.relay_admin.permission_receipts(receipts)
         return counts
 
     async def run_forever(self, stop: asyncio.Event) -> None:

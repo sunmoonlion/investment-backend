@@ -74,6 +74,10 @@ class RelayAdmin(Protocol):
 
     async def revoke_jti(self, jtis: list[str]) -> None: ...
 
+    async def permission_receipts(self, receipts: list[dict[str, str]]) -> None:
+        """仅在本机权限报告记账事务提交后确认；不是向代理授予权限。"""
+        ...
+
     async def agents(self) -> dict[str, dict[str, Any]]:
         """现在连着会合点的本地代理：会合点用户名 → {codex, software, since, machine}。
 
