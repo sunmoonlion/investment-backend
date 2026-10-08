@@ -209,6 +209,24 @@ def mode_note(mode: Mode | str, *, directory: str | None) -> str:
     )
 
 
+def orchestrator_cwd(directory: str | None) -> str | None:
+    """顶层 `cwd` 只在执行端也是 POSIX 路径时才发。
+
+    app-server 在沙箱（Linux）里把顶层 `cwd` 当成它自己的本地路径解析：Windows 机器上的
+    `C:\\Users\\…` 不是 POSIX 绝对路径，会被拼成 `/data/C:\\Users\\…`，权限里随之多出一条
+    解析不了的路径，Windows 代理把命令全拒了（2026-10-07 luna 联调查出）。执行端的目录由
+    `environments[].cwd` 带过去，那一项按「POSIX 或 Windows 绝对路径」各自解析，不靠顶层。
+    """
+    if directory is None or not directory.startswith("/"):
+        return None
+    return directory
+
+
+def _top_cwd(directory: str | None) -> dict[str, str]:
+    cwd = orchestrator_cwd(directory)
+    return {"cwd": cwd} if cwd else {}
+
+
 def turn_settings(
     kind: ConversationKind | str,
     *,
@@ -233,7 +251,7 @@ def turn_settings(
     if mode in (Mode.WORK, Mode.EXPERT):
         return {
             "environments": [{"environmentId": environment_key, "cwd": directory}],
-            "cwd": directory,
+            **_top_cwd(directory),
             "sandboxPolicy": {
                 "type": "workspaceWrite",
                 "writableRoots": [],
@@ -251,7 +269,7 @@ def turn_settings(
         settings["environments"] = [
             {"environmentId": environment_key, "cwd": directory}
         ]
-        settings["cwd"] = directory
+        settings.update(_top_cwd(directory))
     return settings
 
 
@@ -279,7 +297,7 @@ def thread_settings(
     }
     settings["config"] = dict(THREAD_CONFIG)
     if in_project:
-        settings["cwd"] = directory
+        settings.update(_top_cwd(directory))
     if model:
         settings["model"] = model
     return settings

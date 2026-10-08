@@ -15,6 +15,7 @@ from app.domain.workbench.projects import (
     is_windows_root,
     mode_note,
     mode_of,
+    orchestrator_cwd,
     project_dir,
     split_under_roots,
     thread_settings,
@@ -317,3 +318,40 @@ def test_the_note_says_what_the_model_has_in_hand():
         assert "read-only" not in writing
     # 说明是给模型看的，开头有固定的标记，页面据此不把它当成用户的话
     assert all(n.startswith("[workbench] ") for n in (chat, reading))
+
+
+WINDOWS_DIR = "C:\\Users\\u\\research\\hengrui"
+
+
+@pytest.mark.parametrize("kind", ["chat", "work"])
+def test_a_windows_directory_goes_only_in_the_environment(kind):
+    """Windows 机器：目录只放在 environments[].cwd，不放顶层 cwd（2026-10-07 联调：
+    沙箱里的 app-server 会把顶层的 Windows 路径拼成 /data/C:\\…）。"""
+    turn = turn_settings(
+        kind,
+        directory=WINDOWS_DIR,
+        environment_key="pc",
+        environment_online=True,
+        approval="on-request",
+    )
+    assert turn["environments"] == [{"environmentId": "pc", "cwd": WINDOWS_DIR}]
+    assert "cwd" not in turn
+    thread = thread_settings(
+        kind, directory=WINDOWS_DIR, environment_key="pc", approval="on-request"
+    )
+    assert thread["environments"] == [{"environmentId": "pc", "cwd": WINDOWS_DIR}]
+    assert "cwd" not in thread
+
+
+def test_a_posix_directory_still_goes_in_both_places():
+    turn = turn_settings(
+        "work",
+        directory="/home/u/research/hengrui",
+        environment_key="pc",
+        environment_online=True,
+        approval="on-request",
+    )
+    assert turn["cwd"] == "/home/u/research/hengrui"
+    assert orchestrator_cwd("/home/u") == "/home/u"
+    assert orchestrator_cwd(WINDOWS_DIR) is None
+    assert orchestrator_cwd(None) is None

@@ -37,6 +37,7 @@ from app.domain.workbench.projects import (
     THREAD_CONFIG,
     mode_note,
     mode_of,
+    orchestrator_cwd,
     thread_settings,
     turn_settings,
 )
@@ -1015,8 +1016,9 @@ class Runner:
         settings = dict(session.get("thread_settings") or {})
         env_key = settings.pop("environmentId", self.environment_key)
         if settings:  # 旧入口建的会话：沿用它记下的设置
+            top = orchestrator_cwd(session["project_root"])
             params = {
-                "cwd": session["project_root"],
+                **({"cwd": top} if top else {}),
                 "environments": [
                     {"environmentId": env_key, "cwd": session["project_root"]}
                 ],
