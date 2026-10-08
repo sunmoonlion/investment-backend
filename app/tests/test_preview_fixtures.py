@@ -16,9 +16,11 @@ import os
 import uuid
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 from cryptography.fernet import Fernet
+from preview_agent_download import preview_download
 from preview_recorder import Recorder
 from preview_replay import HANG, Plan, ReplayAppServer
 from preview_samples import (
@@ -47,6 +49,7 @@ from app.interfaces.endpoints.workbench_routes import (
     credential_cipher,
     provisioning_backends,
 )
+from core.config import get_settings
 
 WORKSPACE = "/home/demo/research"
 TAPES = json.loads(
@@ -768,7 +771,10 @@ async def build_full(world: World) -> None:
     rec.page("设置", "/zh-CN/workbench/settings")
     rec.page("知识库", "/zh-CN/workbench/library")
     filed = (await http.get("/api/workbench/library")).json()["items"]
-    for kind, title in (("dossier", "知识库：一份底稿"), ("deliverable", "知识库：一份交回物")):
+    for kind, title in (
+        ("dossier", "知识库：一份底稿"),
+        ("deliverable", "知识库：一份交回物"),
+    ):
         first = next((i for i in filed if i["kind"] == kind), None)
         if first:
             rec.page(title, f"/zh-CN/workbench/library/{first['id']}")
@@ -888,6 +894,14 @@ async def run(
     recorder = Recorder(scenario, title=title, description=description)
     try:
         async with make_client(actor) as http:
+            # Both hosting states come from the real descriptor endpoint.
+            with patch(
+                "app.interfaces.endpoints.workbench_routes.get_settings",
+                return_value=get_settings().model_copy(
+                    update={"workbench_agent_download": preview_download(scenario)}
+                ),
+            ):
+                await recorder.get(http, "/api/workbench/agent/download")
             world = World(http, runner, fake, recorder)
             if scenario == "full":
                 await build_full(world)
