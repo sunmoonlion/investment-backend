@@ -19,8 +19,20 @@ from app.application.workbench.agent_onboarding import (
 from app.bootstrap.api import create_app
 from app.domain.workbench.errors import AgentPairingRejected, AgentPairingSlowDown
 from app.infrastructure.logging.logging import _AccessPathRedactor
+from app.interfaces.endpoints.agent_onboarding_routes import pairing_verify_url
 from app.interfaces.http.client_ip import source_ip
 from core.config import Settings
+
+
+def test_pairing_verify_url_points_at_the_settings_computer_anchor():
+    assert (
+        pairing_verify_url("https://investment.example/")
+        == "https://investment.example/zh-CN/workbench/settings#computer"
+    )
+    assert (
+        pairing_verify_url("https://investment.example")
+        == "https://investment.example/zh-CN/workbench/settings#computer"
+    )
 
 
 class Cipher:

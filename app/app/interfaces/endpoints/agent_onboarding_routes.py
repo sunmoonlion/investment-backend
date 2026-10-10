@@ -57,6 +57,11 @@ from core.config import AgentDownload, get_settings
 public_router = APIRouter(tags=["Agent onboarding"])
 owner_router = APIRouter(tags=["Agent onboarding"])
 logger = logging.getLogger(__name__)
+VERIFY_PATH = "/zh-CN/workbench/settings#computer"
+
+
+def pairing_verify_url(web_frontend_base_url: str) -> str:
+    return web_frontend_base_url.rstrip("/") + VERIFY_PATH
 
 
 class StrictBody(BaseModel):
@@ -160,7 +165,7 @@ async def create_pairing_request(
             raise AgentPairingSlowDown("too many pairing requests")
         repo = workbench_store(session)
         service = _onboarding(repo, cipher)
-        verify_url = settings.web_frontend_base_url.rstrip("/") + "/settings#computer"
+        verify_url = pairing_verify_url(settings.web_frontend_base_url)
         async with repo.transaction():
             result = await service.create_request(
                 machine_name=body.machine_name,
