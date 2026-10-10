@@ -104,6 +104,7 @@ def configure_celery(*, require_broker: bool = False) -> bool:
 if os.environ.get("CELERY_BROKER_URL"):
     configure_celery()
 
+import app.tasks.agent_onboarding  # noqa: E402, F401 — expired pairing/install cleanup
 import app.tasks.durable_delivery  # noqa: E402, F401 — shared durable transport
 import app.tasks.ping  # noqa: E402, F401 — register tasks
 
@@ -112,5 +113,9 @@ celery_app.conf.beat_schedule = {
     "durable-delivery-reconcile": {
         "task": "app.tasks.durable_delivery.pump",
         "schedule": 5.0,
+    },
+    "agent-onboarding-cleanup": {
+        "task": "app.tasks.agent_onboarding.cleanup",
+        "schedule": 600.0,
     },
 }

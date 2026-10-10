@@ -1303,6 +1303,137 @@ class WorkbenchRepository:
                 )
             yield
 
+    async def create_agent_pairing(
+        self, row: dict[str, Any], *, pending_limit: int = 500
+    ) -> bool:
+        """Reserve global pending capacity and insert without exposing code collisions."""
+        await self.session.execute(
+            text("select pg_advisory_xact_lock(hashtextextended('agent-pairing-pending-cap', 0))")
+        )
+        await self.session.execute(
+            text("""update workbench_agent_pairings set status='expired', token_ciphertext=null
+                   where status in ('pending','approved') and expires_at <= now()""")
+        )
+        pending = int(
+            await self.session.scalar(
+                text("select count(*) from workbench_agent_pairings where status='pending'")
+            )
+        )
+        if pending >= pending_limit:
+            return False
+        result = await self.session.execute(
+            text("""insert into workbench_agent_pairings
+                 (id,code_hash,device_secret_hash,machine_name,os,agent_version,codex_version,source_ip,status,expires_at)
+                 values (cast(:id as uuid),:code_hash,:device_secret_hash,:machine_name,:os,:agent_version,:codex_version,:source_ip,'pending',:expires_at)
+                 on conflict (code_hash) do nothing returning id"""),
+            row,
+        )
+        return result.first() is not None
+
+    async def get_agent_pairing(
+        self, pairing_id: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                "select * from workbench_agent_pairings where id=cast(:id as uuid)"
+                + (" for update" if for_update else "")
+            ),
+            {"id": pairing_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def get_pending_agent_pairing_by_code(
+        self, code_hash: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                "select * from workbench_agent_pairings where code_hash=:hash and status='pending' and expires_at>now()"
+                + (" for update" if for_update else "")
+            ),
+            {"hash": code_hash},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def update_agent_pairing(
+        self, pairing_id: str, *, expected_status: str, **fields: Any
+    ) -> bool:
+        allowed = {
+            "status", "owner_actor_id", "relay_user", "relay_url",
+            "agent_token_expires_at", "token_ciphertext", "decided_at",
+            "delivered_at", "attempts", "last_polled_at",
+        }
+        if not fields or set(fields) - allowed:
+            raise ValueError("invalid agent pairing update fields")
+        assignments = ",".join(f"{name}=:{name}" for name in fields)
+        values = dict(fields) | {"id": pairing_id, "expected_status": expected_status}
+        result = await self.session.execute(
+            text(f"update workbench_agent_pairings set {assignments} where id=cast(:id as uuid) and status=:expected_status"),
+            values,
+        )
+        return int(getattr(result, "rowcount", 0)) == 1
+
+    async def mark_agent_pairing_delivered(self, pairing_id: str) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text("""update workbench_agent_pairings set status='delivered', token_ciphertext=null, delivered_at=now()
+                   where id=cast(:id as uuid) and status='approved' and token_ciphertext is not null
+                   returning relay_user, relay_url, agent_token_expires_at, token_ciphertext, owner_actor_id"""),
+            {"id": pairing_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def current_online_environment(self, owner_actor_id: str) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text("""select id,name,last_seen_at from workbench_environments where owner_actor_id=cast(:owner as uuid)
+                   and status='online' order by last_seen_at desc nulls last,updated_at desc limit 1"""),
+            {"owner": owner_actor_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def append_agent_audit_event(
+        self, *, owner_actor_id: str, event_type: str, pairing_id: str, metadata: dict[str, Any]
+    ) -> None:
+        await self.session.execute(
+            text("""insert into workbench_agent_audit_events (id,owner_actor_id,event_type,pairing_id,metadata)
+                   values (cast(:id as uuid),cast(:owner as uuid),:event_type,cast(:pairing as uuid),cast(:metadata as jsonb))"""),
+            {"id": str(uuid.uuid4()), "owner": owner_actor_id, "event_type": event_type,
+             "pairing": pairing_id, "metadata": _j(metadata)},
+        )
+
+    async def create_agent_install_credential(
+        self, *, owner_actor_id: str, token_hash: str, expires_at
+    ) -> None:
+        await self.session.execute(
+            text("""insert into workbench_agent_install_credentials (id,owner_actor_id,token_hash,expires_at)
+                   values (cast(:id as uuid),cast(:owner as uuid),:hash,:expires_at)"""),
+            {"id": str(uuid.uuid4()), "owner": owner_actor_id, "hash": token_hash, "expires_at": expires_at},
+        )
+
+    async def consume_agent_install_credential(self, token_hash: str, *, now) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text("""update workbench_agent_install_credentials set use_count=use_count+1
+                   where token_hash=:hash and expires_at>:now and use_count<5
+                   returning owner_actor_id,expires_at,use_count"""),
+            {"hash": token_hash, "now": now},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def cleanup_agent_onboarding(self, *, now) -> dict[str, int]:
+        expired = await self.session.execute(
+            text("""update workbench_agent_pairings set status='expired',token_ciphertext=null
+                   where status in ('pending','approved') and expires_at<=:now returning id"""),
+            {"now": now},
+        )
+        credentials = await self.session.execute(
+            text("delete from workbench_agent_install_credentials where expires_at<=:now returning id"),
+            {"now": now},
+        )
+        return {"pairings": len(expired.all()), "install_credentials": len(credentials.all())}
+
     async def get_relay_identity(self, owner_actor_id: str) -> dict[str, Any] | None:
         r = await self.session.execute(
             text("select * from workbench_relay_identities where owner_actor_id = :o"),

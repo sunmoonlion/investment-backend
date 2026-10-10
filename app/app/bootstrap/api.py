@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 
@@ -15,6 +16,10 @@ from app.application.audit_context import (
     get_context,
     reset_context,
     set_context,
+)
+from app.application.sensitive_paths import (
+    is_agent_onboarding_path,
+    redact_sensitive_path,
 )
 from app.infrastructure.logging.logging import setup_logging
 from app.infrastructure.messaging.celery_producer import get_celery_producer
@@ -80,26 +85,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         context = from_headers(request.headers)
         token = set_context(context)
         request.state.audit_context = context
+        if is_agent_onboarding_path(request.url.path):
+            request.state.agent_onboarding_log_id = str(uuid.uuid4())
         status_code = 500
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception:
+                if not is_agent_onboarding_path(request.url.path):
+                    raise
+                # Do not let the server log an exception string/traceback that
+                # could contain capability-bearing request details.
+                response = JSONResponse(
+                    status_code=500,
+                    content={
+                        "code": "internal_error",
+                        "message": "The service could not complete the request",
+                        "operation_id": context.operation_id or context.correlation_id,
+                    },
+                )
             status_code = response.status_code
         finally:
             active_context = get_context() or context
             if request.method not in _SAFE_METHODS and request.url.path.startswith(
                 "/api/"
             ):
-                logger.info(
-                    "audit_mutation method=%s path=%s status=%s actor_id=%s "
-                    "correlation_id=%s operation_id=%s reason_present=%s",
-                    request.method,
-                    request.url.path,
-                    status_code,
-                    active_context.actor_id or "-",
-                    active_context.correlation_id,
-                    active_context.operation_id or "-",
-                    bool(active_context.reason),
-                )
+                if is_agent_onboarding_path(request.url.path):
+                    logger.info(
+                        "agent_onboarding_result request_id=%s status=%s",
+                        request.state.agent_onboarding_log_id,
+                        status_code,
+                    )
+                else:
+                    logger.info(
+                        "audit_mutation method=%s path=%s status=%s actor_id=%s "
+                        "correlation_id=%s operation_id=%s reason_present=%s",
+                        request.method,
+                        redact_sensitive_path(request.url.path),
+                        status_code,
+                        active_context.actor_id or "-",
+                        active_context.correlation_id,
+                        active_context.operation_id or "-",
+                        bool(active_context.reason),
+                    )
             reset_context(token)
 
         response.headers["X-Correlation-ID"] = context.correlation_id
@@ -113,7 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "camera=(), microphone=(), geolocation=()"
         )
         if request.url.path.startswith(
-            ("/api/auth/", "/api/workbench/")
+            ("/api/auth/", "/api/workbench/", "/api/agent-pairing/", "/api/agent-install/")
         ) or request.url.path == ("/api/internal/v1/delivery/metrics"):
             response.headers["Cache-Control"] = "no-store"
         return response

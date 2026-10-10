@@ -275,6 +275,18 @@ class Settings(BaseSettings):
     workbench_agent_release_storage: AgentReleaseStorage | None = Field(
         default=None, validation_alias="WORKBENCH_AGENT_RELEASE_STORAGE", repr=False
     )
+    workbench_agent_pairing_hmac_key: SecretStr | None = Field(
+        default=None, validation_alias="WORKBENCH_AGENT_PAIRING_HMAC_KEY", repr=False
+    )
+    workbench_agent_install_script_template: str | None = Field(
+        default=None,
+        validation_alias="WORKBENCH_AGENT_INSTALL_SCRIPT_TEMPLATE",
+        repr=False,
+    )
+    # Only these ingress peer CIDRs may supply the rightmost X-Forwarded-For address.
+    workbench_trusted_proxy_cidrs: str = Field(
+        default="", validation_alias="WORKBENCH_TRUSTED_PROXY_CIDRS", repr=False
+    )
     workbench_token_issuer: str = Field(
         default="sunmoon-workbench", validation_alias="WORKBENCH_TOKEN_ISSUER"
     )
@@ -366,6 +378,16 @@ class Settings(BaseSettings):
                 parts.fragment,
             )
         )
+
+    @field_validator("workbench_trusted_proxy_cidrs")
+    @classmethod
+    def trusted_proxy_networks_are_valid(cls, value: str) -> str:
+        import ipaddress
+
+        for item in value.split(","):
+            if item.strip():
+                ipaddress.ip_network(item.strip(), strict=False)
+        return value
 
     @model_validator(mode="after")
     def validate_base_security(self) -> Settings:

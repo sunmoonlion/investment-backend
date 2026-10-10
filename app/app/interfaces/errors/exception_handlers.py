@@ -7,6 +7,10 @@ from starlette.exceptions import HTTPException
 
 from app.application.audit_context import get_context
 from app.application.errors.exceptions import AppException
+from app.application.sensitive_paths import (
+    is_agent_onboarding_path,
+    redact_sensitive_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,10 @@ def _operation_id(request: Request) -> str:
     if context is not None and context.operation_id:
         return context.operation_id
     return "operation-unavailable"
+
+
+def _is_agent_onboarding(request: Request) -> bool:
+    return is_agent_onboarding_path(request.url.path)
 
 
 def _body(
@@ -33,7 +41,7 @@ def _body(
         "title": normalized_message,
         "status": status,
         "detail": normalized_message,
-        "instance": request.url.path,
+        "instance": redact_sensitive_path(request.url.path),
         "code": normalized_code,
         "operation_id": operation_id,
         # Compatibility extension for the published browser error contract.
@@ -60,12 +68,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def app_exception_handler(
         request: Request, error: AppException
     ) -> JSONResponse:
-        logger.warning(
-            "application_error status=%s code=%s path=%s",
-            error.status_code,
-            error.code,
-            request.url.path,
-        )
+        if not _is_agent_onboarding(request):
+            logger.warning(
+                "application_error status=%s code=%s path=%s",
+                error.status_code,
+                error.code,
+                redact_sensitive_path(request.url.path),
+            )
         return _response(
             request,
             status=error.status_code,
@@ -77,11 +86,12 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def request_validation_handler(
         request: Request, error: RequestValidationError
     ) -> JSONResponse:
-        logger.warning(
-            "request_validation_error path=%s count=%s",
-            request.url.path,
-            len(error.errors()),
-        )
+        if not _is_agent_onboarding(request):
+            logger.warning(
+                "request_validation_error path=%s count=%s",
+                redact_sensitive_path(request.url.path),
+                len(error.errors()),
+            )
         return _response(
             request,
             status=422,
@@ -93,9 +103,12 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def http_exception_handler(
         request: Request, error: HTTPException
     ) -> JSONResponse:
-        logger.warning(
-            "http_error status=%s path=%s", error.status_code, request.url.path
-        )
+        if not _is_agent_onboarding(request):
+            logger.warning(
+                "http_error status=%s path=%s",
+                error.status_code,
+                redact_sensitive_path(request.url.path),
+            )
         return _response(
             request,
             status=error.status_code,
@@ -107,11 +120,12 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, error: Exception) -> JSONResponse:
-        logger.exception(
-            "unhandled_exception path=%s type=%s",
-            request.url.path,
-            type(error).__name__,
-        )
+        if not _is_agent_onboarding(request):
+            logger.exception(
+                "unhandled_exception path=%s type=%s",
+                redact_sensitive_path(request.url.path),
+                type(error).__name__,
+            )
         return _response(
             request,
             status=500,

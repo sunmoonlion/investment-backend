@@ -206,6 +206,17 @@ class SandboxProvisioning:
             "sandbox_rolled": live.get("status") not in (None, "absent", "deleted"),
         }
 
+    async def rotate_relay_identity_in_operation(
+        self, owner: str, expected_revision: str
+    ) -> dict[str, Any]:
+        """Rotate while the caller already holds `relay_identity_operation`.
+
+        Pairing approval must serialize the pairing decision and identity rotation
+        under the same owner-level advisory lock; this method deliberately does not
+        acquire a nested lock.
+        """
+        return await self._rotate_relay_identity(owner, expected_revision)
+
     async def _check_capacity(self, owner: str) -> None:
         """F-SBX-08：只挡"新增一个沙箱"；已有沙箱（在跑或启动中）的用户更新不受限。"""
         if not self.global_limit or await self.repo.has_live_provisioned_sandbox(owner):
