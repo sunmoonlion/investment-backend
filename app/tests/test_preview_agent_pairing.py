@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from test_workbench_routes import A, principal
 
 from app.application.workbench import agent_onboarding as onboarding
@@ -28,7 +29,6 @@ from app.interfaces.endpoints.workbench_routes import (
 )
 from app.interfaces.http.middleware.auth import get_web_current_user
 from core.config import AgentDownload, AgentReleaseStorage, Settings
-from pydantic import SecretStr
 
 PAIRING_ID = "11111111-1111-4111-8111-111111111111"
 CODE = "K3NP-Q7R2"
@@ -151,7 +151,9 @@ def _write(scenario: str, name: str, method: str, path: str, body: dict) -> None
     directory = Path(root) / scenario
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["responses"] = [item for item in manifest["responses"] if item["path"] != path]
+    manifest["responses"] = [
+        item for item in manifest["responses"] if item["path"] != path
+    ]
     manifest["responses"].append(
         {
             "method": method,
@@ -228,8 +230,20 @@ async def test_record_pairing_samples(monkeypatch, scenario, replaces):
     assert found["replaces_machine"] == replaces
     assert decision == {"status": "approved", "machine_name": "家里的电脑"}
     assert TOKEN not in json.dumps(decision)
-    _write(scenario, "agent-install-command.json", "POST", "/api/workbench/agent/install-command", command)
-    _write(scenario, "agent-pairing-lookup.json", "POST", "/api/workbench/agent-pairing/lookup", found)
+    _write(
+        scenario,
+        "agent-install-command.json",
+        "POST",
+        "/api/workbench/agent/install-command",
+        command,
+    )
+    _write(
+        scenario,
+        "agent-pairing-lookup.json",
+        "POST",
+        "/api/workbench/agent-pairing/lookup",
+        found,
+    )
     _write(
         scenario,
         "agent-pairing-approve.json",
