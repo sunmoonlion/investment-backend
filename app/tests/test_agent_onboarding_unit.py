@@ -137,6 +137,32 @@ async def test_poll_delivers_token_once_and_clears_ciphertext():
 
 
 @pytest.mark.asyncio
+async def test_poll_treats_empty_delivery_ciphertext_as_already_delivered():
+    device_secret = "s" * 43
+    store = PairingStore(
+        {
+            "id": "request-id",
+            "status": "approved",
+            "device_secret_hash": secret_digest(device_secret),
+            "expires_at": datetime.now(UTC) + timedelta(minutes=4),
+            "token_ciphertext": None,
+            "relay_url": "wss://relay.example.test",
+            "relay_user": "relay-user",
+            "agent_token_expires_at": datetime.now(UTC) + timedelta(days=30),
+        }
+    )
+    service = AgentOnboarding(
+        store,
+        cipher=Cipher(),
+        pairing_hmac_key=b"k" * 32,
+        provisioning=UnusedProvisioning(),
+    )
+    assert await service.poll(pairing_id="request-id", device_secret=device_secret) == {
+        "status": "delivered"
+    }
+
+
+@pytest.mark.asyncio
 async def test_wrong_device_secret_is_not_found():
     store = PairingStore(
         {
@@ -226,6 +252,45 @@ def test_forwarded_address_is_ignored_without_explicit_trust():
         == "203.0.113.5"
     )
     assert source_ip(None, "198.51.100.44", "") == "unknown"
+
+
+def test_forwarded_chain_skips_trusted_hops_from_right():
+    assert (
+        source_ip(
+            "10.20.0.8",
+            "198.51.100.44, 127.0.0.1, 10.20.0.9",
+            "127.0.0.1/32,10.20.0.0/24",
+        )
+        == "198.51.100.44"
+    )
+
+
+def test_forwarded_chain_does_not_trust_a_forged_leftmost_address():
+    assert (
+        source_ip(
+            "10.20.0.8",
+            "203.0.113.200, 198.51.100.44, 127.0.0.1, 10.20.0.9",
+            "127.0.0.1/32,10.20.0.0/24",
+        )
+        == "198.51.100.44"
+    )
+
+
+def test_forwarded_chain_accepts_multiple_header_fields_in_wire_order():
+    assert (
+        source_ip(
+            "10.20.0.8",
+            ["198.51.100.44, 127.0.0.1", "10.20.0.9"],
+            "127.0.0.1/32,10.20.0.0/24",
+        )
+        == "198.51.100.44"
+    )
+
+
+def test_fully_trusted_chain_uses_leftmost_and_invalid_chain_is_unknown():
+    trusted = "127.0.0.1/32,10.20.0.0/24"
+    assert source_ip("10.20.0.8", "10.20.0.2, 127.0.0.1", trusted) == "10.20.0.2"
+    assert source_ip("10.20.0.8", "198.51.100.44, invalid, 10.20.0.9", trusted) == "unknown"
 
 
 def test_onboarding_routes_are_registered_and_config_defaults_to_no_proxy_trust():

@@ -252,7 +252,7 @@ class AgentOnboarding:
                 )
             if row["status"] == "approved":
                 delivered = await self.repo.mark_agent_pairing_delivered(pairing_id)
-                if delivered is None:
+                if delivered is None or not delivered.get("token_ciphertext"):
                     return {"status": "delivered"}
                 token = self.cipher.decrypt(
                     delivered["token_ciphertext"].encode()

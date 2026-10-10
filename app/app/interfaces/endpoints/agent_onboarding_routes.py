@@ -152,7 +152,7 @@ async def create_pairing_request(
     peer = _peer(request)
     ip = source_ip(
         peer,
-        request.headers.get("x-forwarded-for"),
+        request.headers.getlist("x-forwarded-for"),
         settings.workbench_trusted_proxy_cidrs,
     )
     try:

@@ -1376,9 +1376,23 @@ class WorkbenchRepository:
 
     async def mark_agent_pairing_delivered(self, pairing_id: str) -> dict[str, Any] | None:
         r = await self.session.execute(
-            text("""update workbench_agent_pairings set status='delivered', token_ciphertext=null, delivered_at=now()
-                   where id=cast(:id as uuid) and status='approved' and token_ciphertext is not null
-                   returning relay_user, relay_url, agent_token_expires_at, token_ciphertext, owner_actor_id"""),
+            text("""with approved as (
+                     select id, relay_user, relay_url, agent_token_expires_at,
+                            token_ciphertext, owner_actor_id
+                     from workbench_agent_pairings
+                     where id=cast(:id as uuid) and status='approved'
+                       and token_ciphertext is not null
+                     for update
+                   ), delivered as (
+                     update workbench_agent_pairings as pairing
+                     set status='delivered', token_ciphertext=null, delivered_at=now()
+                     from approved
+                     where pairing.id=approved.id and pairing.status='approved'
+                     returning approved.relay_user, approved.relay_url,
+                               approved.agent_token_expires_at,
+                               approved.token_ciphertext, approved.owner_actor_id
+                   )
+                   select * from delivered"""),
             {"id": pairing_id},
         )
         row = r.mappings().first()

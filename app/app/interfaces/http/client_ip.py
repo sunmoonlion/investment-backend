@@ -1,9 +1,14 @@
 """Resolve a client address without trusting caller-supplied forwarding headers."""
 
 import ipaddress
+from collections.abc import Sequence
 
 
-def source_ip(peer: str | None, forwarded_for: str | None, trusted_cidrs: str) -> str:
+def source_ip(
+    peer: str | None,
+    forwarded_for: str | Sequence[str] | None,
+    trusted_cidrs: str,
+) -> str:
     try:
         direct = ipaddress.ip_address(peer or "")
     except ValueError:
@@ -22,10 +27,20 @@ def source_ip(peer: str | None, forwarded_for: str | None, trusted_cidrs: str) -
         return str(direct)
     if not forwarded_for:
         return "unknown"
-    # The final address is the one appended by the directly connected trusted
-    # ingress. Earlier values may have been supplied by the caller.
-    candidate = forwarded_for.split(",")[-1].strip()
-    try:
-        return str(ipaddress.ip_address(candidate))
-    except ValueError:
+    headers = [forwarded_for] if isinstance(forwarded_for, str) else forwarded_for
+    chain: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for header in headers:
+        for item in header.split(","):
+            try:
+                chain.append(ipaddress.ip_address(item.strip()))
+            except ValueError:
+                return "unknown"
+    if not chain:
         return "unknown"
+    # Walk from the backend outward, discarding only hops explicitly trusted
+    # by the operator. The first untrusted address is the client. If every hop
+    # is trusted, retain the leftmost address as the best available source.
+    for candidate in reversed(chain):
+        if not any(candidate in network for network in networks):
+            return str(candidate)
+    return str(chain[0])
