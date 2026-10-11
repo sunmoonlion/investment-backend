@@ -800,7 +800,23 @@ class WorkbenchRepository:
         r = await self.session.execute(
             text(
                 """select * from workbench_tasks where project_id = :p
-                   and state not in ('SUCCEEDED','REJECTED','FAILED','CANCELLED') limit 1"""
+                   and state not in ('SUCCEEDED','REJECTED','FAILED','CANCELLED')
+                   and not (state = 'RECEIVED'
+                            and coalesce(original_input->'client_context'->>'queued_behind', '') <> '')
+                   order by created_at limit 1"""
+            ),
+            {"p": project_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def next_queued_task(self, project_id: str) -> dict[str, Any] | None:
+        """这个项目里排在后面还没开始的专家委托，最早的那一件（0017：同一项目一次一位）。"""
+        r = await self.session.execute(
+            text(
+                """select * from workbench_tasks where project_id = :p and state = 'RECEIVED'
+                   and coalesce(original_input->'client_context'->>'queued_behind', '') <> ''
+                   order by created_at limit 1 for update skip locked"""
             ),
             {"p": project_id},
         )
@@ -857,7 +873,13 @@ class WorkbenchRepository:
         self, task_id: str, *, expected_version: int, **fields: Any
     ) -> int:
         """比较交换更新 Task 的若干列；返回新 state_version。"""
-        json_cols = {"budget", "acceptance_contract", "execution_policy", "rejection"}
+        json_cols = {
+            "budget",
+            "acceptance_contract",
+            "execution_policy",
+            "rejection",
+            "original_input",
+        }
         sets = ", ".join(
             f"{k} = cast(:{k} as jsonb)" if k in json_cols else f"{k} = :{k}"
             for k in fields

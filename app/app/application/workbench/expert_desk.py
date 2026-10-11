@@ -350,6 +350,10 @@ class ExpertDesk:
                 "state": task["state"],
                 "state_word": TERMINAL_WORDS.get(task["state"]),
                 "waiting_reason": task.get("waiting_reason"),
+                # 排在同项目前一位专家后面、还没开始的（0017 专家团：一次一位）
+                "queued_behind": (
+                    (task.get("original_input") or {}).get("client_context") or {}
+                ).get("queued_behind"),
                 "position": position(pack, task) if pack else None,
                 "budget": budget_view(task["budget"]),
                 "started_at": task.get("created_at"),

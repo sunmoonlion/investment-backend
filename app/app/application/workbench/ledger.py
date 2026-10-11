@@ -18,7 +18,6 @@ from app.domain.workbench.errors import (
     EnvironmentOffline,
     IdempotencyConflict,
     InteractionRejected,
-    ProjectBusy,
     ProjectRequired,
     StaleStateVersion,
     WheelHeldByOther,
@@ -106,17 +105,15 @@ class Ledger:
                     "the machine of this project is offline; the expert works on it",
                     environment_id=str(session["environment_id"]),
                 )
-            # 先锁住项目：同一个项目的两次求助排队进行，后到的看得见先到的
+            # 先锁住项目：同一个项目同一时刻只跑一位专家，后到的排队（0017，所有者 2026-10-11）
             await self.repo.get_project(str(session["project_id"]), for_update=True)
             busy = await self.repo.active_task_of_project(str(session["project_id"]))
-            if busy is not None:
-                raise ProjectBusy(
-                    "the expert is already working on something in this project",
-                    project_id=str(session["project_id"]),
-                    active_task_id=str(busy["id"]),
-                )
+            queued_behind = str(busy["id"]) if busy is not None else None
             task_id = str(uuid.uuid4())
             budget = Budget(currency=req.budget_currency, limit=req.budget_limit)
+            client_context = dict(req.client_context)
+            if queued_behind:
+                client_context["queued_behind"] = queued_behind
             await self.repo.insert_task(
                 {
                     "id": task_id,
@@ -131,7 +128,7 @@ class Ledger:
                     "original_input": {
                         "input": req.original_input,
                         "attachments": req.attachments,
-                        "client_context": req.client_context,
+                        "client_context": client_context,
                     },
                     "thread_id": session["thread_id"],
                     "environment_id": str(session["environment_id"]),
@@ -141,12 +138,10 @@ class Ledger:
                     "budget": budget.as_json(),
                 }
             )
-            await self.repo.cas_session_wheel(
-                req.session_id,
-                expected_version=int(session["state_version"]),
-                wheel=Wheel.advisor,
-                active_task_id=task_id,
-            )
+            # 交给专家 = 这段对话从此是专家对话（原地转，同一条线）
+            from app.application.workbench.session_service import SessionService
+
+            await SessionService(self.repo).mark_expert(session)
             await self.repo.append_event(
                 session_id=req.session_id,
                 kind="task",
@@ -155,16 +150,20 @@ class Ledger:
                     "task_id": task_id,
                     "profile_id": req.profile_id,
                     "budget": budget.as_json(),
+                    "queued_behind": queued_behind,
                 },
                 task_id=task_id,
             )
-            await self.repo.append_event(
-                session_id=req.session_id,
-                kind="wheel",
-                event_type="wheel/handover",
-                payload={"from": "user", "to": "advisor", "task_id": task_id},
-                task_id=task_id,
-            )
+            if queued_behind is None:
+                await self._give_wheel(session, task_id)
+            else:
+                await self.repo.append_event(
+                    session_id=req.session_id,
+                    kind="task",
+                    event_type="task/queued",
+                    payload={"task_id": task_id, "behind": queued_behind},
+                    task_id=task_id,
+                )
             if req.budget_limit is not None:
                 await self.repo.ledger_append(
                     task_id=task_id,
@@ -174,7 +173,63 @@ class Ledger:
                     note="initial budget",
                     actor_id=owner_actor_id,
                 )
-            return {"task_id": task_id, "state": TaskState.RECEIVED, "created": True}
+            return {
+                "task_id": task_id,
+                "state": TaskState.RECEIVED,
+                "created": True,
+                "queued_behind": queued_behind,
+            }
+
+    async def _give_wheel(self, session: dict[str, Any], task_id: str) -> None:
+        """方向盘交给顾问：对话记下在跑的 Task，事件留痕。调用方持有事务与行锁。"""
+        await self.repo.cas_session_wheel(
+            str(session["id"]),
+            expected_version=int(session["state_version"]),
+            wheel=Wheel.advisor,
+            active_task_id=task_id,
+        )
+        await self.repo.append_event(
+            session_id=str(session["id"]),
+            kind="wheel",
+            event_type="wheel/handover",
+            payload={"from": "user", "to": "advisor", "task_id": task_id},
+            task_id=task_id,
+        )
+
+    async def _start_next_queued(self, project_id: str) -> str | None:
+        """前一位专家到终态：排在后面的下一位开始（0017 专家团：一次一位）。调用方持有事务。"""
+        nxt = await self.repo.next_queued_task(project_id)
+        if nxt is None:
+            return None
+        session = await self.repo.get_session(str(nxt["session_id"]), for_update=True)
+        if session["wheel"] != Wheel.user or session["active_task_id"] is not None:
+            return None  # 这段对话正忙着别的：等下一次终态再看
+        task_id = str(nxt["id"])
+        original = dict(nxt["original_input"])
+        context = dict(original.get("client_context") or {})
+        context.pop("queued_behind", None)
+        original["client_context"] = context
+        await self.repo.cas_task(
+            task_id,
+            expected_version=int(nxt["state_version"]),
+            original_input=original,
+            thread_id=session.get("thread_id"),
+        )
+        await self._give_wheel(session, task_id)
+        await self.repo.append_event(
+            session_id=str(session["id"]),
+            kind="task",
+            event_type="task/dequeued",
+            payload={"task_id": task_id},
+            task_id=task_id,
+        )
+        await self.repo.enqueue_command(
+            session_id=str(session["id"]),
+            sandbox_id=str(session["sandbox_id"]),
+            kind="task.drive",
+            payload={"task_id": task_id},
+        )
+        return task_id
 
     # ---------------- 状态转换（唯一入口） ----------------
     async def transition(
@@ -258,6 +313,8 @@ class Ledger:
                 await self.repo.cancel_pending_interactions(
                     task_id=task_id, reason=f"task {target}"
                 )
+            if target in TASK_TERMINAL and task.get("project_id"):
+                await self._start_next_queued(str(task["project_id"]))
             return {"task_id": task_id, "state": target, "state_version": new_version}
 
     async def resume_environment(

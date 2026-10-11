@@ -256,7 +256,9 @@ async def test_the_two_rules_over_http(make_client, db):  # noqa: F811
             f"/api/workbench/sessions/{working}/handover",
             json={**body, "idempotency_key": "k-0000-0002"},
         )
-        assert second.status_code == 409 and second.json()["code"] == "project_busy"
+        # 同一项目第二位专家排队，不再拒绝（0017：一次一位，其余排队）
+        assert second.status_code == 201
+        assert second.json()["queued_behind"] == first.json()["task_id"]
 
         async def say(sid):
             return await http.post(
@@ -281,7 +283,14 @@ async def test_the_two_rules_over_http(make_client, db):  # noqa: F811
             f"/api/workbench/tasks/{first.json()['task_id']}/cancel"
         )
         assert cancelled.status_code in (200, 202)
-        assert (await say(working)).status_code == 202
+        # 排队的第二位自动开始：它那段对话的方向盘到了专家手里；聊天照常
+        taken = await say(working)
+        assert (
+            taken.status_code == 409 and taken.json()["code"] == "wheel_held_by_other"
+        )
+        assert (await say(chatting)).status_code == 202
+        seen = (await http.get(f"/api/workbench/projects/{made['id']}")).json()
+        assert seen["active_task_id"] == second.json()["task_id"]
 
 
 async def test_nobody_reaches_somebody_elses_projects_or_conversations(

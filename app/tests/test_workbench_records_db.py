@@ -158,7 +158,7 @@ async def test_the_expert_reads_the_project_it_works_in(db):
         assert [(c["kind"], c["turns"], c["current"]) for c in listed] == [
             ("chat", 2, False),
             ("work", 1, False),
-            ("work", 3, True),
+            ("expert", 3, True),
         ]
         assert listed[0]["first_message"] == "毛利率是什么"
         assert listed[0]["title"] is None or isinstance(listed[0]["title"], str)

@@ -89,7 +89,7 @@ class RegisterSandbox(Strict):
 class CreateSession(Strict):
     """两种写法。新的：`kind`（聊天可不给 `project_id`）。旧的：机器、沙箱、完整目录。"""
 
-    kind: str | None = Field(default=None, pattern=r"^(chat|work)$")
+    kind: str | None = Field(default=None, pattern=r"^(chat|work|expert)$")
     project_id: str | None = Field(default=None, max_length=64)
     title: str | None = Field(default=None, max_length=400)
     environment_id: str | None = None
@@ -606,7 +606,7 @@ async def handover(
     req = HandoverRequest(session_id=session_id, **body.model_dump())
     try:
         result = await Ledger(repo).handover(req, owner_actor_id=_actor(principal))
-        if result["created"]:
+        if result["created"] and not result.get("queued_behind"):
             s = await repo.get_session(session_id)
             async with repo.transaction():
                 await repo.enqueue_command(

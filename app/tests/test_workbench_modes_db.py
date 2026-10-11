@@ -313,7 +313,7 @@ async def test_the_expert_works_writable_on_a_conversation_that_is_a_chat(db):
         assert len({t["threadId"] for t in turns}) == 1
         async with db() as s:
             session = await WorkbenchRepository(s).get_session(sid)
-        assert session["kind"] == "chat"  # 种类没有因为专家来过而改变
+        assert session["kind"] == "expert"  # 交给专家 = 这段对话从此是专家对话（0017）
         await closing(runner)
     finally:
         await fake.close()

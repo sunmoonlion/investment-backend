@@ -320,10 +320,21 @@ async def test_one_expert_per_project_at_a_time(db):
         task = await led.handover(
             ask(first["session_id"], "k-0000-0001"), owner_actor_id=OWNER
         )
-        with pytest.raises(ProjectBusy):
-            await led.handover(
-                ask(second["session_id"], "k-0000-0002"), owner_actor_id=OWNER
-            )
+        # 同一项目的第二位专家排队：建单、不交方向盘、不开车（0017，所有者 2026-10-11「一次一位」）
+        queued = await led.handover(
+            ask(second["session_id"], "k-0000-0002"), owner_actor_id=OWNER
+        )
+        assert queued["created"] and queued["queued_behind"] == task["task_id"]
+        repo = WorkbenchRepository(s)
+        waiting_session = await repo.get_session(second["session_id"])
+        assert (
+            waiting_session["wheel"] == "user"
+            and waiting_session["active_task_id"] is None
+        )
+        assert waiting_session["kind"] == "expert"  # 交给专家 = 这段对话从此是专家对话
+        assert (await repo.active_task_of_project(made["id"]))["id"] == __import__(
+            "uuid"
+        ).UUID(task["task_id"])
         # 别的项目不受影响
         await led.handover(
             ask(elsewhere["session_id"], "k-0000-0003"), owner_actor_id=OWNER
@@ -334,11 +345,16 @@ async def test_one_expert_per_project_at_a_time(db):
             await ProjectService(WorkbenchRepository(s)).archive(
                 made["id"], owner_actor_id=OWNER, archived=True
             )
-        # 专家交回之后就可以再请
+        # 前一位到终态：排队的那一位自动开始，不用再请
         await led.request_cancel(task["task_id"], owner_actor_id=OWNER)
-        await led.handover(
-            ask(second["session_id"], "k-0000-0004"), owner_actor_id=OWNER
+        started = await repo.get_session(second["session_id"])
+        assert started["wheel"] == "advisor"
+        assert str(started["active_task_id"]) == queued["task_id"]
+        third = await start(db, "chat", made["id"])
+        again = await led.handover(
+            ask(third["session_id"], "k-0000-0004"), owner_actor_id=OWNER
         )
+        assert again["queued_behind"] == queued["task_id"]
 
 
 async def test_the_database_itself_refuses_a_second_running_delegation(db):
@@ -372,17 +388,15 @@ async def test_two_requests_for_the_same_project_at_once(db):
 
     async def one(index):
         async with db() as s:
-            try:
-                await Ledger(WorkbenchRepository(s)).handover(
-                    ask(sessions[index]["session_id"], f"k-0000-100{index}"),
-                    owner_actor_id=OWNER,
-                )
-                return "taken"
-            except ProjectBusy:
-                return "busy"
+            made_one = await Ledger(WorkbenchRepository(s)).handover(
+                ask(sessions[index]["session_id"], f"k-0000-100{index}"),
+                owner_actor_id=OWNER,
+            )
+            return "queued" if made_one["queued_behind"] else "taken"
 
+    # 同时来三位：项目行锁让它们排成一列，一位在跑、两位排队（0017：一次一位）
     results = await asyncio.gather(*(one(i) for i in range(3)))
-    assert sorted(results) == ["busy", "busy", "taken"]
+    assert sorted(results) == ["queued", "queued", "taken"]
 
 
 async def test_while_the_expert_works_others_may_chat_but_not_work(db):
@@ -554,3 +568,46 @@ def test_sessions_from_before_the_migration_are_kept_as_work_in_projects():
         with engine.begin() as c:
             c.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         engine.dispose()
+
+
+async def test_the_next_expert_starts_when_the_first_one_ends(db):
+    """0017 专家团：同一项目一次一位，前一位到终态后一位自动开始。"""
+    from app.domain.workbench.states import TaskState
+
+    env, _ = await machine(db)
+    made = await project(db, env, "q")
+    first = await start(db, "work", made["id"])
+    second = await start(db, "chat", made["id"])
+    async with db() as s:
+        repo = WorkbenchRepository(s)
+        led = Ledger(repo)
+        a = await led.handover(
+            ask(first["session_id"], "k-0000-0011"), owner_actor_id=OWNER
+        )
+        b = await led.handover(
+            ask(second["session_id"], "k-0000-0012"), owner_actor_id=OWNER
+        )
+        assert b["queued_behind"] == a["task_id"]
+        await led.transition(a["task_id"], TaskState.CANCELLED, reason={"by": "test"})
+        started = await repo.get_task(b["task_id"])
+        assert started["original_input"]["client_context"].get("queued_behind") is None
+        session = await repo.get_session(second["session_id"])
+        assert (
+            session["wheel"] == "advisor"
+            and str(session["active_task_id"]) == b["task_id"]
+        )
+        types = [
+            e["type"] for e in await repo.list_events(session_id=second["session_id"])
+        ]
+        assert (
+            "task/queued" in types
+            and "task/dequeued" in types
+            and "wheel/handover" in types
+        )
+        r = await s.execute(
+            text(
+                "select payload from workbench_commands where kind = 'task.drive' and session_id = :s"
+            ),
+            {"s": second["session_id"]},
+        )
+        assert [row[0]["task_id"] for row in r.all()] == [b["task_id"]]

@@ -15,6 +15,7 @@ from app.domain.workbench.errors import (
 )
 from app.domain.workbench.pricing import PriceList, conversation_usage
 from app.domain.workbench.projects import (
+    HANDS_ON,
     ConversationKind,
     clean_title,
     default_title,
@@ -87,8 +88,8 @@ class SessionService:
                 project = await ProjectService(self.repo).usable(
                     project_id, owner_actor_id=owner_actor_id
                 )
-            elif chosen is ConversationKind.WORK:
-                raise ProjectRequired("work needs a project")
+            elif chosen in HANDS_ON:
+                raise ProjectRequired("work and expert need a project")
             sid = await self.repo.create_session(
                 owner_actor_id=owner_actor_id,
                 environment_id=str(project["environment_id"]) if project else None,
@@ -157,7 +158,7 @@ class SessionService:
             session = await self.repo.get_session(
                 session_id, owner_actor_id=owner_actor_id, for_update=True
             )
-            if session["kind"] == ConversationKind.WORK:
+            if session["kind"] in HANDS_ON:
                 return session
             if session["project_id"] is None:
                 raise ProjectRequired("put this chat into a project first")
@@ -176,6 +177,20 @@ class SessionService:
             )
             return await self.repo.get_session(session_id)
 
+    async def mark_expert(self, session: dict[str, Any]) -> None:
+        """交给专家 = 这段对话从此是专家对话（原地转，同一条线；0017「转建」）。调用方持有事务与行锁。"""
+        if session["kind"] == ConversationKind.EXPERT:
+            return
+        await self.repo.set_session_kind(
+            str(session["id"]), ConversationKind.EXPERT.value
+        )
+        await self.repo.append_event(
+            session_id=str(session["id"]),
+            kind="session",
+            event_type="session/kind_changed",
+            payload={"from": str(session["kind"]), "to": ConversationKind.EXPERT.value},
+        )
+
     async def rename(
         self, session_id: str, *, owner_actor_id: str, title: str | None
     ) -> dict[str, Any]:
@@ -192,7 +207,7 @@ class SessionService:
         """专家在这个项目里干活期间，别的对话可以聊天，不可以工作（所有者 2026-09-29 定）。"""
         if session["project_id"] is None:
             return
-        if session["kind"] != ConversationKind.WORK and not becoming_work:
+        if session["kind"] not in HANDS_ON and not becoming_work:
             return
         active = await self.repo.active_task_of_project(str(session["project_id"]))
         if active is not None and str(active["session_id"]) != str(session["id"]):

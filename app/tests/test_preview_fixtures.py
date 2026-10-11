@@ -707,12 +707,12 @@ async def build_full(world: World) -> None:
     world.tasks["refused"] = asked["task_id"]
     await world.reach("refused", "REJECTED")
 
-    # 这个项目里专家还在做：再请一次交不出去
+    # 这个项目里专家还在做：再请一位就排队（0017 专家团：一次一位）
     await rec.call(
         http,
         "POST",
         f"/api/workbench/projects/{world.projects['五粮液']}/delegations",
-        expect=409,
+        expect=201,
         json_body={
             "idempotency_key": "preview-busy-0001",
             "expert": "DATA_QUERY",
@@ -953,7 +953,9 @@ async def test_the_full_world(make_client, db, tmp_path):  # noqa: F811
 
     home = answer("/api/workbench/expert/overview")
     assert len(home["waiting"]) == 2  # 勾稽不平、没有数据
-    assert [r["state"] for r in home["running"]] == ["RUNNING"]
+    # 五粮液那位在跑；排在它后面的第二位也算进行中，显示为排队（0017）
+    assert [r["state"] for r in home["running"]] == ["RECEIVED", "RUNNING"]
+    assert [bool(r["queued_behind"]) for r in home["running"]] == [True, False]
     assert all(r["reason_text"] for r in home["returned"] if r["state"] != "SUCCEEDED")
     assert {r["state_word"] for r in home["returned"]} == {
         "已完成",

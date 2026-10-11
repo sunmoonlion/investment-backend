@@ -36,6 +36,15 @@ def approval_policy(chosen: str | None) -> str:
 class ConversationKind(StrEnum):
     CHAT = "chat"  # 一问一答。不改文件，不跑命令
     WORK = "work"  # 代理在项目里动手做。必须属于一个项目
+    # 专家：服务端先编排（选专家包、拆步、起 Task）再进入对话。必须属于一个项目。
+    # 一个项目里三种对话混放，可有多位专家，同一时刻只跑一位（0017，所有者 2026-10-11）
+    EXPERT = "expert"
+
+
+# 碰文件系统的两种：工作、专家
+HANDS_ON: frozenset[ConversationKind] = frozenset(
+    {ConversationKind.WORK, ConversationKind.EXPERT}
+)
 
 
 def is_windows_root(root: str) -> bool:
@@ -175,10 +184,10 @@ def mode_of(
 ) -> Mode:
     kind = ConversationKind(kind)
     in_project = directory is not None and environment_key is not None
-    if kind is ConversationKind.WORK or expert:
+    if kind in HANDS_ON or expert:
         if not in_project:
             raise ValueError("work and expert turns need a project")
-        return Mode.EXPERT if expert else Mode.WORK
+        return Mode.EXPERT if (expert or kind is ConversationKind.EXPERT) else Mode.WORK
     if in_project and environment_online:
         return Mode.CHAT_IN_PROJECT
     return Mode.CHAT
@@ -295,16 +304,14 @@ def thread_settings(
     """起一条线时的设置。之后每一轮还会各自带全，这里只是让线一开始就是对的。"""
     kind = ConversationKind(kind)
     in_project = directory is not None and environment_key is not None
-    if kind is ConversationKind.WORK and not in_project:
-        raise ValueError("work needs a project")
+    if kind in HANDS_ON and not in_project:
+        raise ValueError("work and expert need a project")
     settings: dict[str, Any] = {
         "environments": (
             [{"environmentId": environment_key, "cwd": directory}] if in_project else []
         ),
-        "sandbox": "workspace-write" if kind is ConversationKind.WORK else "read-only",
-        "approvalPolicy": (
-            approval_policy(approval) if kind is ConversationKind.WORK else "never"
-        ),
+        "sandbox": "workspace-write" if kind in HANDS_ON else "read-only",
+        "approvalPolicy": (approval_policy(approval) if kind in HANDS_ON else "never"),
     }
     settings["config"] = dict(THREAD_CONFIG)
     if in_project:

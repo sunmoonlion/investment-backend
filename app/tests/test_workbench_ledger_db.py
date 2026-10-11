@@ -128,7 +128,13 @@ async def test_handover_creates_task_and_moves_wheel_atomically(db):
             sess["wheel"] == "advisor" and str(sess["active_task_id"]) == r["task_id"]
         )
         types = [e["type"] for e in await repo.list_events(session_id=sid)]
-        assert types == ["session/created", "task/received", "wheel/handover"]
+        # 交给专家 = 这段对话从此是专家对话（0017），所以多一条 kind_changed
+        assert types == [
+            "session/created",
+            "session/kind_changed",
+            "task/received",
+            "wheel/handover",
+        ]
         # 用户在 advisor 期间不能发 turn（AT-06）
         with pytest.raises(WheelHeldByOther):
             await SessionService(repo).assert_user_may_drive(sid, owner_actor_id=OWNER)

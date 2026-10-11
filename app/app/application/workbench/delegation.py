@@ -71,16 +71,20 @@ class DelegationService:
                         "same idempotency key with a different request",
                         task_id=str(prior["id"]),
                     )
+                context = (prior.get("original_input") or {}).get(
+                    "client_context"
+                ) or {}
                 return {
                     "task_id": str(prior["id"]),
                     "session_id": str(prior["session_id"]),
                     "project_id": project_id,
                     "state": prior["state"],
                     "created": False,
+                    "queued_behind": context.get("queued_behind"),
                 }
             started = await SessionService(self.repo).start(
                 owner_actor_id=owner_actor_id,
-                kind="work",
+                kind="expert",
                 project_id=project_id,
                 title=default_title(question),
             )
@@ -89,17 +93,19 @@ class DelegationService:
                 request(session_id), owner_actor_id=owner_actor_id, tenant=tenant
             )
             session = await self.repo.get_session(session_id)
-            # 这段对话还没有线：驾驶的命令会先把线起好（runner），所以只排这一条
-            await self.repo.enqueue_command(
-                session_id=session_id,
-                sandbox_id=str(session["sandbox_id"]),
-                kind="task.drive",
-                payload={"task_id": made["task_id"]},
-            )
+            if not made.get("queued_behind"):
+                # 这段对话还没有线：驾驶的命令会先把线起好（runner），所以只排这一条
+                await self.repo.enqueue_command(
+                    session_id=session_id,
+                    sandbox_id=str(session["sandbox_id"]),
+                    kind="task.drive",
+                    payload={"task_id": made["task_id"]},
+                )
             return {
                 "task_id": made["task_id"],
                 "session_id": session_id,
                 "project_id": project_id,
                 "state": made["state"],
                 "created": True,
+                "queued_behind": made.get("queued_behind"),
             }

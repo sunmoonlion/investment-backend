@@ -45,7 +45,9 @@ async def test_asking_an_expert_from_the_expert_entry(make_client, db):  # noqa:
         talk = (await http.get(f"/api/workbench/sessions/{made['session_id']}")).json()[
             "session"
         ]
-        assert talk["kind"] == "work" and talk["project_id"] == pid
+        assert (
+            talk["kind"] == "expert" and talk["project_id"] == pid
+        )  # 专家入口建的就是专家对话（0017）
         assert talk["wheel"] == "advisor"
         assert talk["active_task_id"] == made["task_id"]
         assert talk["title"] == "恒瑞医药 2023 到 2025 年的盈利能力怎么样？"
@@ -99,25 +101,28 @@ async def test_the_same_request_sent_twice_makes_one_conversation(make_client, d
     assert await count(db, "workbench_commands") == 1
 
 
-async def test_nothing_is_left_behind_when_the_handover_fails(make_client, db):  # noqa: F811
-    """AT-INV-08：这个项目里专家已经在做一件事，第二次请专家交不出去，也不留下空的对话。"""
+async def test_a_second_expert_in_the_same_project_queues_without_driving(
+    make_client, db
+):  # noqa: F811
+    """0017 专家团：同一项目一次一位。第二位建单、建对话，但不交方向盘、不排驾驶命令，等前一位到终态。"""
     async with make_client(A) as http:
         _, pid = await ready(http)
         first = await http.post(
             f"/api/workbench/projects/{pid}/delegations", json=ask()
         )
         assert first.status_code == 201
-        before = await count(db, "workbench_sessions")
-        events = await count(db, "workbench_session_events")
         second = await http.post(
-            f"/api/workbench/projects/{pid}/delegations", json=ask()
+            f"/api/workbench/projects/{pid}/delegations", json=ask("k-second-0001")
         )
-        assert second.status_code == 409
-        assert second.json()["code"] == "project_busy"
-    assert await count(db, "workbench_sessions") == before == 1
-    assert await count(db, "workbench_session_events") == events
-    assert await count(db, "workbench_tasks") == 1
-    assert await count(db, "workbench_commands") == 1
+        assert second.status_code == 201
+        assert second.json()["queued_behind"] == first.json()["task_id"]
+        talk = (
+            await http.get(f"/api/workbench/sessions/{second.json()['session_id']}")
+        ).json()["session"]
+        assert talk["kind"] == "expert" and talk["wheel"] == "user"
+    assert await count(db, "workbench_sessions") == 2
+    assert await count(db, "workbench_tasks") == 2
+    assert await count(db, "workbench_commands") == 1  # 只有第一位在开车
 
 
 async def test_a_machine_that_is_offline(make_client, db):  # noqa: F811

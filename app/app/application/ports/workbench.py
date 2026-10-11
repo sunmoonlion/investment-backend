@@ -278,6 +278,7 @@ class WorkbenchStore(Protocol):
         """这个项目里专家还在做的那件事；没有就是 None。"""
         ...
 
+    async def next_queued_task(self, project_id: str) -> dict[str, Any] | None: ...
     async def get_session(
         self,
         session_id: str,
