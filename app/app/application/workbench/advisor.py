@@ -18,6 +18,7 @@ from app.application.workbench.acceptance import judge
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.errors import BudgetExhausted
+from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
 from app.domain.workbench.projects import NO_DETOUR
@@ -243,6 +244,11 @@ class Advisor:
                 records_task=task_id if self.records else None,
                 ask_before_answers=answered["ask_before"],
                 change_request=answered["change_request"],
+                user_facts=memory_note(
+                    await repo.list_memories(
+                        str(task["owner_actor_id"]), enabled_only=True
+                    )
+                ),
             )
 
         result = await self.driver.run_turn(thread_id, text)
@@ -674,6 +680,7 @@ class Advisor:
         records_task: str | None = None,
         ask_before_answers: dict[str, Any] | None = None,
         change_request: str | None = None,
+        user_facts: str | None = None,
     ) -> str:
         parts = [
             f"# Advisor step: {step.title} ({step.step_id}, v{step.step_version})",
@@ -690,6 +697,8 @@ class Advisor:
             "If you need information you cannot obtain, ask the user with the request_user_input tool "
             "when it is available; if you get no answer, state your assumption explicitly and continue.",
         ]
+        if user_facts:
+            parts += ["", "## About the user", user_facts]
         if ask_before_answers:
             parts += ["", "## Answers the user gave before this step"]
             for q in step.ask_before:

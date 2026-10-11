@@ -464,6 +464,28 @@ class WorkbenchStore(Protocol):
 
     async def get_prefs(self, owner_actor_id: str) -> dict[str, Any]: ...
 
+    # ---- 长期记忆（0019 §四）----
+    async def list_memories(
+        self, owner_actor_id: str, *, enabled_only: bool = False
+    ) -> list[dict[str, Any]]: ...
+
+    async def insert_memory(
+        self, *, owner_actor_id: str, kind: str, text: str, source: dict | None
+    ) -> dict[str, Any]: ...
+
+    async def update_memory(
+        self,
+        memory_id: str,
+        *,
+        owner_actor_id: str,
+        text: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any] | None: ...
+
+    async def delete_memory(self, memory_id: str, *, owner_actor_id: str) -> bool: ...
+
+    async def clear_memories(self, owner_actor_id: str) -> int: ...
+
     async def put_prefs(
         self, owner_actor_id: str, *, model: str | None, approval_policy: str
     ) -> dict[str, Any]: ...

@@ -18,6 +18,7 @@ from functools import wraps
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -1236,6 +1237,79 @@ class WorkbenchRepository:
         if row is None:
             return {"model": None, "approval_policy": "on-request", "updated_at": None}
         return dict(row)
+
+    # ---- 长期记忆（0019 §四）----
+    async def list_memories(
+        self, owner_actor_id: str, *, enabled_only: bool = False
+    ) -> list[dict[str, Any]]:
+        sql = (
+            "select id, kind, text, source, enabled, created_at, updated_at from workbench_memories "
+            "where owner_actor_id = :o"
+            + (" and enabled" if enabled_only else "")
+            + " order by created_at, id"
+        )
+        r = await self.session.execute(text(sql), {"o": owner_actor_id})
+        return [{**dict(m), "id": str(m["id"])} for m in r.mappings().all()]
+
+    async def insert_memory(
+        self, *, owner_actor_id: str, kind: str, text: str, source: dict | None
+    ) -> dict[str, Any]:
+        r = await self.session.execute(
+            sa_text(
+                """insert into workbench_memories (owner_actor_id, kind, text, source)
+                   values (:o, :k, :t, cast(:s as jsonb))
+                   returning id, kind, text, source, enabled, created_at, updated_at"""
+            ),
+            {
+                "o": owner_actor_id,
+                "k": kind,
+                "t": text,
+                "s": _j(source) if source is not None else None,
+            },
+        )
+        m = r.mappings().one()
+        return {**dict(m), "id": str(m["id"])}
+
+    async def update_memory(
+        self,
+        memory_id: str,
+        *,
+        owner_actor_id: str,
+        text: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any] | None:
+        sets, params = ["updated_at = now()"], {"i": memory_id, "o": owner_actor_id}
+        if text is not None:
+            sets.append("text = :t")
+            params["t"] = text
+        if enabled is not None:
+            sets.append("enabled = :e")
+            params["e"] = enabled
+        r = await self.session.execute(
+            sa_text(
+                f"update workbench_memories set {', '.join(sets)} where id = :i and owner_actor_id = :o "
+                "returning id, kind, text, source, enabled, created_at, updated_at"
+            ),
+            params,
+        )
+        m = r.mappings().first()
+        return {**dict(m), "id": str(m["id"])} if m else None
+
+    async def delete_memory(self, memory_id: str, *, owner_actor_id: str) -> bool:
+        r = await self.session.execute(
+            sa_text(
+                "delete from workbench_memories where id = :i and owner_actor_id = :o"
+            ),
+            {"i": memory_id, "o": owner_actor_id},
+        )
+        return (r.rowcount or 0) > 0
+
+    async def clear_memories(self, owner_actor_id: str) -> int:
+        r = await self.session.execute(
+            sa_text("delete from workbench_memories where owner_actor_id = :o"),
+            {"o": owner_actor_id},
+        )
+        return int(r.rowcount or 0)
 
     async def put_prefs(
         self, owner_actor_id: str, *, model: str | None, approval_policy: str

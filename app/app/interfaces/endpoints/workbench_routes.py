@@ -945,6 +945,89 @@ async def put_prefs(
     return {"contract_version": CONTRACT_VERSION, **_plain(prefs)}
 
 
+class MemoryIn(Strict):
+    text: str = Field(min_length=1, max_length=400)
+    kind: str = Field(default="fact", pattern=r"^(fact|judgement)$")
+    source: dict[str, Any] | None = None
+
+
+class MemoryPatch(Strict):
+    text: str | None = Field(default=None, min_length=1, max_length=400)
+    enabled: bool | None = None
+
+
+# ---- 长期记忆：关于这位用户的几条事实，每段对话开头带上（0019 §四，账 85）----
+@router.get("/memories")
+async def list_memories(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    rows = await workbench_store(session).list_memories(_actor(principal))
+    return {"contract_version": CONTRACT_VERSION, "memories": [_plain(r) for r in rows]}
+
+
+@router.post("/memories", status_code=201)
+async def add_memory(
+    body: MemoryIn,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    repo = workbench_store(session)
+    async with repo.transaction():
+        made = await repo.insert_memory(
+            owner_actor_id=_actor(principal),
+            kind=body.kind,
+            text=body.text.strip(),
+            source=body.source,
+        )
+    return {"contract_version": CONTRACT_VERSION, "memory": _plain(made)}
+
+
+@router.patch("/memories/{memory_id}")
+async def change_memory(
+    memory_id: str,
+    body: MemoryPatch,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    repo = workbench_store(session)
+    async with repo.transaction():
+        changed = await repo.update_memory(
+            memory_id,
+            owner_actor_id=_actor(principal),
+            text=body.text.strip() if body.text is not None else None,
+            enabled=body.enabled,
+        )
+    if changed is None:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return {"contract_version": CONTRACT_VERSION, "memory": _plain(changed)}
+
+
+@router.delete("/memories/{memory_id}", status_code=204)
+async def remove_memory(
+    memory_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    repo = workbench_store(session)
+    async with repo.transaction():
+        gone = await repo.delete_memory(memory_id, owner_actor_id=_actor(principal))
+    if not gone:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return Response(status_code=204)
+
+
+@router.delete("/memories", status_code=200)
+async def clear_memories(
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    repo = workbench_store(session)
+    async with repo.transaction():
+        n = await repo.clear_memories(_actor(principal))
+    return {"contract_version": CONTRACT_VERSION, "removed": n}
+
+
 @router.get("/credentials")
 async def list_credentials(
     principal: Principal = Depends(get_web_current_user),

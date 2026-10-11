@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
@@ -25,6 +26,7 @@ from app.application.ports.workbench import (
 from app.application.workbench.advisor import Advisor, TurnResult
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
+from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import find_pack
 from app.domain.workbench.pricing import (
@@ -113,10 +115,15 @@ class TurnPlan:
     mode: str | None = None
     directory: str | None = None
     session_id: str | None = None
+    # 关于这位用户的几条事实（长期记忆，0019 §四）：和情形说明一起插进线里，变了就再插一次
+    facts: str | None = None
 
     @property
     def signature(self) -> str | None:
-        return None if self.mode is None else f"{self.mode}|{self.directory or ''}"
+        if self.mode is None:
+            return None
+        digest = hashlib.sha256((self.facts or "").encode()).hexdigest()[:12]
+        return f"{self.mode}|{self.directory or ''}|{digest}"
 
 
 class SandboxLink:
@@ -285,6 +292,8 @@ class SandboxLink:
             return
         assert plan.mode is not None
         note = mode_note(plan.mode, directory=plan.directory)
+        if plan.facts:
+            note = f"{note}\n\n{plan.facts}"
         client = await self.ensure_connected()
         injected = True
         try:
@@ -1395,6 +1404,12 @@ class Runner:
             "expert": expert,
         }
         kind = session.get("kind") or "work"
+        async with self.stores() as repo:
+            remembered = memory_note(
+                await repo.list_memories(
+                    str(session["owner_actor_id"]), enabled_only=True
+                )
+            )
         return TurnPlan(
             settings=turn_settings(
                 kind,
@@ -1404,6 +1419,7 @@ class Runner:
             mode=str(mode_of(kind, **facts)),
             directory=directory,
             session_id=str(session["id"]),
+            facts=remembered,
         )
 
     async def _reconnect_task(
