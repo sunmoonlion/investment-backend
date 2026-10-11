@@ -5,12 +5,6 @@ import time
 
 from redis.asyncio import Redis
 
-_INCREMENT = """
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return count
-"""
-
 
 def _key(identity: str, seconds: int, now: int) -> str:
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -22,8 +16,12 @@ async def consume_window(
     redis: Redis, identity: str, *, seconds: int, limit: int
 ) -> bool:
     now = int(time.time())
-    count = int(await redis.eval(_INCREMENT, 1, _key(identity, seconds, now), seconds))
-    return count <= limit
+    key = _key(identity, seconds, now)
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.incr(key)
+        pipe.expire(key, seconds, nx=True)
+        count, _ = await pipe.execute()
+    return int(count) <= limit
 
 
 async def allow_pairing_ip(redis: Redis, source_ip: str) -> bool:
