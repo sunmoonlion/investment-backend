@@ -15,9 +15,11 @@ from app.application.ports.workbench import (
     WorkbenchStore,
     WorkbenchStores,
 )
+from app.application.workbench.agent_download import ReleaseStore
 from app.application.workbench.machines import MachineSync
 from app.application.workbench.runner import Runner
 from app.domain.workbench.pricing import PriceList
+from app.infrastructure.workbench.agent_release import S3ReleaseStore
 from app.infrastructure.workbench.app_server_client import WsAppServerConnector
 from app.infrastructure.workbench.provisioner import HttpProvisioner, ProvisionerConfig
 from app.infrastructure.workbench.publisher import RedisPublisher
@@ -26,6 +28,17 @@ from app.infrastructure.workbench.repository import (
     SqlWorkbenchStores,
     WorkbenchRepository,
 )
+
+
+def agent_release_store(settings) -> ReleaseStore:
+    storage = settings.workbench_agent_release_storage
+    return S3ReleaseStore(
+        endpoint=storage.endpoint,
+        region=storage.region,
+        ca_file=storage.ca_file,
+        access_key=storage.access_key.get_secret_value(),
+        secret_key=storage.secret_key.get_secret_value(),
+    )
 
 
 def workbench_store(session: AsyncSession) -> WorkbenchStore:

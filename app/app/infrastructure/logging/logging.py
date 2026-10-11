@@ -1,7 +1,28 @@
 import logging
 import sys
 
+from app.application.sensitive_paths import redact_sensitive_path
 from core.config import get_settings
+
+
+class _AccessPathRedactor(logging.Filter):
+    """Uvicorn access records carry the raw URL path in positional format args."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple):
+            record.args = tuple(
+                redact_sensitive_path(value) if isinstance(value, str) else value
+                for value in args
+            )
+        elif isinstance(args, dict):
+            record.args = {
+                key: redact_sensitive_path(value) if isinstance(value, str) else value
+                for key, value in args.items()
+            }
+        if isinstance(record.msg, str):
+            record.msg = redact_sensitive_path(record.msg)
+        return True
 
 
 def configure_library_logging(**_: object) -> None:
@@ -40,5 +61,6 @@ def setup_logging():
     console_handler.setLevel(log_level)
     root_logger.addHandler(console_handler)
     configure_library_logging()
+    logging.getLogger("uvicorn.access").addFilter(_AccessPathRedactor())
 
     root_logger.info("日志系统初始化完成")

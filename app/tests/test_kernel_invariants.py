@@ -56,6 +56,7 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20260925_0011_workbench_sandbox_leases.py",
         "20260929_0012_workbench_projects.py",
         "20261007_0013_workbench_library.py",
+        "20261009_0014_agent_onboarding.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert sum("down_revision = None" in content for content in contents) == 1
@@ -71,6 +72,7 @@ def test_one_linear_canonical_migration_chain() -> None:
     assert 'down_revision = "20260925_0010"' in contents[10]
     assert 'down_revision = "20260925_0011"' in contents[11]
     assert 'down_revision = "20260929_0012"' in contents[12]
+    assert 'down_revision = "20261007_0013"' in contents[13]
 
 
 def test_uuid_mixin_has_client_and_database_defaults() -> None:

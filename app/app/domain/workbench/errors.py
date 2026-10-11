@@ -132,3 +132,38 @@ class RecordsRefused(WorkbenchError):
 
     code = "records_refused"
     http_status = 403
+
+
+class RelayIdentityBusy(WorkbenchError):
+    code = "relay_identity_busy"
+    http_status = 409
+
+
+class RelayIdentityChanged(WorkbenchError):
+    code = "relay_identity_changed"
+    http_status = 409
+
+
+class AgentPairingRejected(WorkbenchError):
+    code = "agent_pairing_rejected"
+    http_status = 404
+
+
+class AgentPairingUnavailable(WorkbenchError):
+    code = "agent_pairing_unavailable"
+    http_status = 503
+
+
+class AgentPairingBusy(WorkbenchError):
+    code = "agent_pairing_busy"
+    http_status = 409
+
+
+class AgentPairingSlowDown(WorkbenchError):
+    code = "slow_down"
+    http_status = 429
+
+
+class AgentInstallUnavailable(WorkbenchError):
+    code = "agent_download_unavailable"
+    http_status = 404

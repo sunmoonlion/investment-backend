@@ -7,11 +7,97 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.cross_app import Source, Target, parse_sources, parse_targets
 from app.domain.workbench.pricing import DEFAULT_PRICES_JSON, PriceList, parse_prices
+
+
+class AgentDownload(BaseModel):
+    """Single operator-owned release descriptor; never supplied by the browser."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    mode: Literal["external", "object-storage"] = "external"
+    object_key: str | None = Field(default=None, max_length=256)
+    url: str = Field(min_length=1, max_length=2048)
+    version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
+    zip_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    codex_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    size_bytes: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def hosting(self) -> AgentDownload:
+        import re
+
+        if self.mode == "external":
+            if self.object_key is not None:
+                raise ValueError("external downloads cannot select an object")
+        elif (
+            not self.object_key
+            or not re.fullmatch(
+                r"windows-x64/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.zip", self.object_key
+            )
+            or ".." in self.object_key
+        ):
+            raise ValueError("invalid release object key")
+        return self
+
+    def public_descriptor(self) -> dict:
+        return self.model_dump(exclude={"mode", "object_key"})
+
+    @field_validator("url")
+    @classmethod
+    def public_https(cls, value: str) -> str:
+        u = urlsplit(value)
+        if (
+            u.scheme != "https"
+            or not u.hostname
+            or u.username
+            or u.password
+            or u.query
+            or u.fragment
+            or any(c.isspace() or ord(c) < 32 for c in value)
+            or "\\" in value
+        ):
+            raise ValueError("agent download must be a credential-free HTTPS URL")
+        _ = u.port
+        return value
+
+
+class AgentReleaseStorage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    endpoint: str
+    region: str = "us-east-1"
+    ca_file: str
+    access_key: SecretStr
+    secret_key: SecretStr
+
+    @field_validator("endpoint")
+    @classmethod
+    def endpoint_https(cls, value: str) -> str:
+        AgentDownload.public_https(value)
+        if urlsplit(value).path not in ("", "/"):
+            raise ValueError("storage endpoint cannot contain a path")
+        return value.rstrip("/")
+
+    @field_validator("ca_file", "region", "access_key", "secret_key")
+    @classmethod
+    def not_empty(cls, value):
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if not raw or not raw.strip():
+            raise ValueError("empty release storage setting")
+        return value
+
 
 BrowserSurface = Literal["admin", "web"]
 
@@ -186,6 +272,25 @@ class Settings(BaseSettings):
     workbench_token_signing_key: str | None = Field(
         default=None, validation_alias="WORKBENCH_TOKEN_SIGNING_KEY"
     )
+    # Unset means unavailable. Hosting is chosen by the remote operator, not the client.
+    workbench_agent_download: AgentDownload | None = Field(
+        default=None, validation_alias="WORKBENCH_AGENT_DOWNLOAD"
+    )
+    workbench_agent_release_storage: AgentReleaseStorage | None = Field(
+        default=None, validation_alias="WORKBENCH_AGENT_RELEASE_STORAGE", repr=False
+    )
+    workbench_agent_pairing_hmac_key: SecretStr | None = Field(
+        default=None, validation_alias="WORKBENCH_AGENT_PAIRING_HMAC_KEY", repr=False
+    )
+    workbench_agent_install_script_template: str | None = Field(
+        default=None,
+        validation_alias="WORKBENCH_AGENT_INSTALL_SCRIPT_TEMPLATE",
+        repr=False,
+    )
+    # Only these ingress peer CIDRs may supply the rightmost X-Forwarded-For address.
+    workbench_trusted_proxy_cidrs: str = Field(
+        default="", validation_alias="WORKBENCH_TRUSTED_PROXY_CIDRS", repr=False
+    )
     workbench_token_issuer: str = Field(
         default="sunmoon-workbench", validation_alias="WORKBENCH_TOKEN_ISSUER"
     )
@@ -278,8 +383,32 @@ class Settings(BaseSettings):
             )
         )
 
+    @field_validator("workbench_trusted_proxy_cidrs")
+    @classmethod
+    def trusted_proxy_networks_are_valid(cls, value: str) -> str:
+        import ipaddress
+
+        for item in value.split(","):
+            if item.strip():
+                ipaddress.ip_network(item.strip(), strict=False)
+        return value
+
     @model_validator(mode="after")
     def validate_base_security(self) -> Settings:
+        release = self.workbench_agent_download
+        if release and release.mode == "object-storage":
+            if self.workbench_agent_release_storage is None:
+                raise ValueError(
+                    "object-storage downloads need read-only storage credentials"
+                )
+            if (
+                release.url
+                != self.web_frontend_base_url.rstrip("/")
+                + "/api/workbench/agent/package"
+            ):
+                raise ValueError(
+                    "forwarded download URL must be the Web same-origin package endpoint"
+                )
         if not self.deployment_id.strip():
             raise ValueError("DEPLOYMENT_ID cannot be empty")
         if not self.app_slug or any(

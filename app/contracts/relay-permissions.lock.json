@@ -1,0 +1,119 @@
+{
+  "canonical_sha256": "0b4ec422bebc4835a2c251410cd0432416db7bc39be1a025806f1bcc9d2b6981",
+  "contract": {
+    "capability": "local-permission-v1",
+    "limits": {
+      "grant_max_seconds": 7200,
+      "max_pending_per_agent": 32,
+      "max_pending_total": 1024,
+      "queue_ttl_seconds": 60
+    },
+    "notice": {
+      "capability": "pairing-notice-v1",
+      "code": "codex_version_mismatch"
+    },
+    "receipt_status": [
+      "recorded",
+      "rejected"
+    ],
+    "relay_protocol": 1,
+    "report": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "properties": {
+                  "sandbox": {
+                    "const": "danger-full-access"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "decision": {
+                "const": "denied"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "conn": {
+          "maxLength": 8,
+          "minLength": 8,
+          "pattern": "^[0-9a-f]{8}$",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "approved",
+            "denied"
+          ]
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "permissionDigest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "requestDigest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "network": {
+              "type": "boolean"
+            },
+            "sandbox": {
+              "enum": [
+                "read-only",
+                "workspace-write",
+                "danger-full-access"
+              ]
+            }
+          },
+          "required": [
+            "sandbox",
+            "network"
+          ],
+          "type": "object"
+        },
+        "threadId": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "conn",
+        "threadId",
+        "requestDigest",
+        "permissionDigest",
+        "decision",
+        "scope",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  "provider": "k8s/sunmoonai/relay-platform/relay/local-permission-v1.json"
+}

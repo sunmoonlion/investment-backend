@@ -11,12 +11,20 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from decimal import Decimal
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.application.errors.exceptions import AppException
+from app.application.workbench.agent_download import (
+    InvalidRange,
+    ReleaseIdentity,
+    ReleaseUnavailable,
+    byte_range,
+)
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.provisioning import (
     ProvisioningUnavailable,
@@ -25,6 +33,7 @@ from app.application.workbench.provisioning import (
 from app.application.workbench.session_service import SessionService
 from app.application.workbench.tokens import TokenIssuer
 from app.bootstrap.workbench import (
+    agent_release_store,
     build_provisioner,
     build_relay_admin,
     workbench_store,
@@ -55,6 +64,10 @@ router = APIRouter(
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class RotateRelayIdentity(Strict):
+    expected_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class RegisterEnvironment(Strict):
@@ -747,6 +760,95 @@ async def token_keys(issuer: TokenIssuer | None = Depends(token_issuer)):
     return issuer.public_jwks()
 
 
+@router.get("/agent/download")
+async def agent_download(principal: Principal = Depends(get_web_current_user)):
+    descriptor = get_settings().workbench_agent_download
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "download": descriptor.public_descriptor() if descriptor else None,
+    }
+
+
+@router.api_route("/agent/package", methods=["GET", "HEAD"])
+def agent_package(
+    request: Request, principal: Principal = Depends(get_web_current_user)
+):
+    settings = get_settings()
+    release = settings.workbench_agent_download
+    if not release or release.mode != "object-storage":
+        raise HTTPException(404, "agent_download_unavailable")
+    if request.query_params:
+        raise HTTPException(400, "agent_download_parameters_not_supported")
+    etag = f'"{release.zip_sha256}"'
+    headers = {
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
+        "Cache-Control": "no-store",
+        "X-Checksum-Sha256": release.zip_sha256,
+        "X-Manifest-Sha256": release.manifest_sha256,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": 'attachment; filename="windows-x64.zip"',
+    }
+    requested = request.headers.get("range") if request.method == "GET" else None
+    if request.headers.get("if-range") not in (None, etag):
+        requested = None
+    try:
+        span = byte_range(requested, release.size_bytes)
+    except InvalidRange:
+        return Response(
+            status_code=416,
+            headers={
+                **headers,
+                "Content-Range": f"bytes */{release.size_bytes}",
+            },
+        )
+    identity = ReleaseIdentity(
+        release.object_key,
+        release.size_bytes,
+        release.zip_sha256,
+        release.manifest_sha256,
+    )
+    store = agent_release_store(settings)
+    try:
+        object_etag = store.check(identity)
+        length = span[1] - span[0] + 1 if span else release.size_bytes
+        headers["Content-Length"] = str(length)
+        if span:
+            headers["Content-Range"] = f"bytes {span[0]}-{span[1]}/{release.size_bytes}"
+        if request.method == "HEAD":
+            store.close()
+            return Response(headers=headers, media_type="application/zip")
+        transfer = store.open(identity, object_etag, span)
+    except ReleaseUnavailable as exc:
+        store.close()
+        raise HTTPException(503, "agent_download_unavailable") from exc
+    except Exception:
+        store.close()
+        raise
+    return _PackageResponse(
+        transfer.chunks(),
+        transfer=transfer,
+        status_code=206 if span else 200,
+        headers=headers,
+        media_type="application/zip",
+    )
+
+
+class _PackageResponse(StreamingResponse):
+    """Close upstream even when the client disconnects before consuming the iterator."""
+
+    def __init__(self, *args, transfer, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.transfer = transfer
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(self.transfer.close)
+
+
 @router.post("/sandboxes/provision")
 async def provision_sandbox(
     principal: Principal = Depends(get_web_current_user),
@@ -769,6 +871,7 @@ async def provision_sandbox(
 
 @router.post("/sandboxes/relay-identity/rotate")
 async def rotate_relay_identity(
+    body: RotateRelayIdentity,
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
     cipher=Depends(credential_cipher),
@@ -779,7 +882,7 @@ async def rotate_relay_identity(
     try:
         result = await _provisioning(
             session, principal, cipher, backends, issuer
-        ).rotate_relay_identity(_actor(principal))
+        ).rotate_relay_identity(_actor(principal), body.expected_revision)
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return result
