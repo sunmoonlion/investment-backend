@@ -25,6 +25,7 @@ from app.application.ports.workbench import (
 from app.application.workbench.advisor import Advisor, TurnResult
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
+from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import find_pack
 from app.domain.workbench.pricing import (
     DEFAULT_PRICES,
@@ -43,6 +44,17 @@ from app.domain.workbench.projects import (
     turn_settings,
 )
 from app.domain.workbench.states import TaskState, WaitingReason, Wheel
+from app.domain.workbench.tool_policy import (
+    DECISION_ACCEPT,
+    DECISION_ACCEPT_TASK,
+    DECISION_CANCEL,
+    DECISION_DECLINE,
+    classify,
+    decide,
+    dependents,
+    grant_matches,
+    grant_prefix,
+)
 
 log = logging.getLogger(__name__)
 
@@ -131,9 +143,12 @@ class SandboxLink:
         self.totals: dict[str, Usage | None] = {}
         self.pending_approvals: dict[
             str, asyncio.Future
-        ] = {}  # request_id -> future(decision)
+        ] = {}  # request_id -> future(response dict: decision / answer / answers)
         self._lock = asyncio.Lock()
         self.turn_waiters: dict[str, dict[str, Any]] = {}  # turn_id -> waiter
+        # 用户在审批面点了「停下」（或等不到人）：这条线这一轮是被人停的，不是出错。
+        # thread_id -> {"note": 用户附的话, "source": user / timeout}
+        self.user_stops: dict[str, dict[str, Any]] = {}
 
     async def ensure_connected(self) -> AppServerConnection:
         async with self._lock:
@@ -487,6 +502,7 @@ class SandboxLink:
                 self.active_turns.pop(thread_id, None)
         # 这一轮花的 = 这一轮里每次调用相加。不拿这条线的累计来算
         used = self.turn_usage.pop(turn_id, Usage())
+        stop = self.user_stops.pop(thread_id, None)
         return TurnResult(
             turn_id=turn_id,
             final_text=waiter["text"],
@@ -496,7 +512,9 @@ class SandboxLink:
             cost=cost_of(
                 used, self.runner.prices.of(self.models.get(thread_id) or None)
             ),
-            interrupted=waiter["interrupted"],
+            interrupted=waiter["interrupted"] or stop is not None,
+            stopped_by_user=stop is not None,
+            stop_note=(stop or {}).get("note"),
         )
 
     async def interrupt(
@@ -552,7 +570,7 @@ class SandboxLink:
                 content[name] = ""
         await client.respond(rid, {"action": "accept", "content": content})
 
-    # ---- 服务端请求（审批）→ 按方向盘路由 ----
+    # ---- 服务端请求：审批与提问，按方向盘和策略路由（approval.md 工具级）----
     async def on_server_request(
         self, rid: Any, method: str, params: dict[str, Any]
     ) -> None:
@@ -561,46 +579,79 @@ class SandboxLink:
         if method == "mcpServer/elicitation/request":
             await self._on_elicitation(rid, params)
             return
+        if method == "item/tool/requestUserInput":
+            await self._on_user_input(rid, params)
+            return
         if not method.endswith("requestApproval"):
             await client.respond_error(
                 rid, -32601, f"workbench does not handle {method}"
             )
             return
         request_id = f"{self.sandbox_id}:{rid}"
+        category, tokens = classify(method, params)
+        summary = {
+            "method": method,
+            "category": category,
+            "command": params.get("command"),
+            "tokens": list(tokens),
+            "cwd": params.get("cwd"),
+            "reason": params.get("reason"),
+            "itemId": params.get("itemId"),
+            "environmentId": params.get("environmentId"),
+            "grantRoot": params.get("grantRoot"),
+        }
         async with self.runner.stores() as repo:
             session_id = await self.session_for_thread(thread_id_of(params), repo)
             if session_id is None:
                 await client.respond(rid, {"decision": "decline"})
                 return
             session = await repo.get_session(session_id)
-            summary = {
-                "method": method,
-                "command": params.get("command"),
-                "cwd": params.get("cwd"),
-                "reason": params.get("reason"),
-                "itemId": params.get("itemId"),
-                "environmentId": params.get("environmentId"),
-            }
-            if session["wheel"] == Wheel.advisor:
-                # 顾问驾驶：按专家包 auto_allow 决定；越出的一律拒绝并留痕（第一期不转 Interaction）
-                task_id = (
-                    str(session["active_task_id"])
-                    if session["active_task_id"]
-                    else None
+            where = await self._where(repo, session)
+            wheel, task, pack, step = (
+                where["wheel"],
+                where["task"],
+                where["pack"],
+                where["step"],
+            )
+            task_id = str(task["id"]) if task else None
+            step_id = step.step_id if step else None
+            # 同一步里刚拒绝过：随后任何请求一律问人，并标出来
+            after_decline = False
+            if task_id and step_id:
+                after_decline = any(
+                    a["decision"] in ("decline", "cancel")
+                    for a in await repo.list_approvals(task_id=task_id, step_id=step_id)
                 )
-                decision = "decline"
-                if task_id:
-                    task = await repo.get_task(task_id)
-                    pack = find_pack(task["profile_id"], task["profile_version"])
-                    allow = pack.auto_allow if pack else {}
-                    if method.startswith("item/fileChange/") and allow.get(
-                        "file_change_in_project"
-                    ):
-                        decision = "accept"
-                    elif method.startswith("item/commandExecution/") and allow.get(
-                        "command_escalation"
-                    ):
-                        decision = "accept"
+            # 任务内授权（自驾：这段驾驶里）：用户以前点过「都允许」
+            granted = any(
+                grant_matches(g, category, tokens)
+                for g in await repo.list_tool_grants(
+                    session_id=session_id, task_id=task_id
+                )
+            )
+            # 策略只对「顾问驾驶且找得到步骤」有；没有 Task、找不到专家包或步骤：问人
+            tier = "ask"
+            if wheel == Wheel.advisor and pack is not None and step is not None:
+                tier = decide(
+                    pack.policy_for(step), category, tokens, after_decline=after_decline
+                )
+            source = None
+            if granted and not after_decline:
+                tier, source = "allow", "task_grant"
+            elif tier == "allow":
+                source = "policy"
+            log.info(
+                "approval request sandbox=%s wheel=%s step=%s category=%s tier=%s granted=%s after_decline=%s",
+                self.sandbox_id,
+                wheel,
+                step_id,
+                category,
+                tier,
+                granted,
+                after_decline,
+            )
+            if tier in ("allow", "deny"):
+                decision = "accept" if tier == "allow" else "decline"
                 async with repo.transaction():
                     await repo.log_approval(
                         session_id=session_id,
@@ -609,77 +660,460 @@ class SandboxLink:
                         method=method,
                         summary=summary,
                         decision=decision,
-                        source="policy",
+                        source=source or "policy",
+                        wheel=wheel,
+                        step_id=step_id,
                     )
+                    ev = await repo.append_event(
+                        session_id=session_id,
+                        kind="approval",
+                        event_type="approval/policy",
+                        payload={
+                            "decision": decision,
+                            "source": source or "policy",
+                            "subject": summary,
+                            "step_id": step_id,
+                        },
+                        task_id=task_id,
+                        attempt_id=_opt_str((task or {}).get("active_attempt_id")),
+                    )
+                await self.runner.publisher.publish(
+                    self.runner.publisher.session_channel(session_id), ev
+                )
                 await client.respond(rid, {"decision": decision})
                 return
-            # 用户自驾：开一个 tool_approval Interaction，等用户在网页上答
-            token = secrets.token_urlsafe(32)
-            async with repo.transaction():
-                iid = await repo.insert_interaction(
-                    session_id=session_id,
-                    task_id=None,
-                    attempt_id=None,
-                    kind="tool_approval",
-                    prompt={
-                        "title": "命令需要你批准",
-                        "question": params.get("reason")
-                        or "Codex 请求执行超出沙箱的动作",
-                        "options": [
-                            {"id": "accept", "label": "允许一次"},
-                            {"id": "acceptForSession", "label": "这段对话里都允许"},
-                            {"id": "decline", "label": "拒绝"},
-                        ],
-                        "subject": {"request_id": request_id, **summary},
-                        "evidence": [],
-                        "unknowns": [],
-                    },
-                    subject_digest=None,
-                    token=token,
-                    target_state_version=None,
-                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+        await self._ask_human(
+            rid,
+            request_id=request_id,
+            method=method,
+            params=params,
+            summary=summary,
+            session=session,
+            where=where,
+            category=category,
+            tokens=tokens,
+            after_decline=after_decline,
+        )
+
+    async def _where(
+        self, repo: WorkbenchStore, session: dict[str, Any]
+    ) -> dict[str, Any]:
+        """这条线现在谁在开、在哪个 Task 的哪一步。"""
+        wheel = str(session["wheel"])
+        task = pack = step = None
+        if wheel == Wheel.advisor and session.get("active_task_id"):
+            task = await repo.get_task(str(session["active_task_id"]))
+            pack = find_pack(task["profile_id"], task["profile_version"])
+            step = pack.step(int(task["current_step"])) if pack else None
+        return {"wheel": wheel, "task": task, "pack": pack, "step": step}
+
+    async def _open_ask(
+        self,
+        *,
+        session: dict[str, Any],
+        where: dict[str, Any],
+        kind: str,
+        prompt: InteractionPrompt,
+        waiting_reason: WaitingReason,
+    ) -> dict[str, Any]:
+        """问人只有一条路：开 Interaction。顾问驾驶时 Task 同一提交进 WAITING；自驾只开待办。"""
+        session_id = str(session["id"])
+        task = where["task"]
+        async with self.runner.stores() as repo:
+            if task is not None:
+                opened = await Ledger(repo).open_interaction(
+                    str(task["id"]),
+                    kind=kind,
+                    prompt=prompt,
+                    waiting_reason=waiting_reason,
+                    attempt_id=_opt_str(task.get("active_attempt_id")),
                 )
-                event = await repo.append_event(
-                    session_id=session_id,
-                    kind="approval",
-                    event_type="interaction/opened",
-                    payload={
-                        "interaction_id": iid,
-                        "kind": "tool_approval",
-                        "token": token,
-                        "subject": summary,
-                    },
-                )
-            await self.runner.publisher.publish(
-                self.runner.publisher.session_channel(session_id), event
-            )
+                ev = opened["event"]
+            else:
+                token = secrets.token_urlsafe(32)
+                async with repo.transaction():
+                    iid = await repo.insert_interaction(
+                        session_id=session_id,
+                        task_id=None,
+                        attempt_id=None,
+                        kind=kind,
+                        prompt=prompt.model_dump(),
+                        subject_digest=None,
+                        token=token,
+                        target_state_version=None,
+                        expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    )
+                    ev = await repo.append_event(
+                        session_id=session_id,
+                        kind="approval" if kind == "tool_approval" else "interaction",
+                        event_type="interaction/opened",
+                        payload={
+                            "interaction_id": iid,
+                            "kind": kind,
+                            "token": token,
+                            "subject": prompt.subject,
+                            "prompt": prompt.model_dump(),
+                        },
+                    )
+                opened = {"interaction_id": iid, "token": token, "event": ev}
+        await self.runner.publisher.publish(
+            self.runner.publisher.session_channel(session_id), ev
+        )
+        return opened
+
+    async def _wait_answer(
+        self,
+        request_id: str,
+        timeout: float = 3600,  # noqa: ASYNC109
+    ) -> tuple[dict[str, Any] | None, str]:
+        """等网页上的答复。等不到按「停下」处理，不按拒绝（approval.md「问人怎么问」第 5 条）。"""
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self.pending_approvals[request_id] = fut
         try:
-            decision = await asyncio.wait_for(fut, timeout=3600)
+            return await asyncio.wait_for(fut, timeout=timeout), "user"
         except TimeoutError:
-            decision = "decline"
+            return None, "timeout"
         finally:
             self.pending_approvals.pop(request_id, None)
+
+    async def _settle_timeout(
+        self, *, session: dict[str, Any], where: dict[str, Any], opened: dict[str, Any]
+    ) -> None:
+        """超时：把待办关掉、Task 从 WAITING 放回，再由停下的那一支收尾。"""
+        async with self.runner.stores() as repo:
+            try:
+                await Ledger(repo).respond_interaction(
+                    opened["interaction_id"],
+                    token=opened["token"],
+                    response={"decision": DECISION_CANCEL, "timeout": True},
+                    owner_actor_id=str(session["owner_actor_id"]),
+                )
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "timeout settle failed interaction=%s", opened["interaction_id"]
+                )
+
+    async def _ask_human(
+        self,
+        rid: Any,
+        *,
+        request_id: str,
+        method: str,
+        params: dict[str, Any],
+        summary: dict[str, Any],
+        session: dict[str, Any],
+        where: dict[str, Any],
+        category: str,
+        tokens: tuple[str, ...],
+        after_decline: bool,
+    ) -> None:
+        client = self.client
+        assert client is not None
+        session_id = str(session["id"])
+        wheel, task, pack, step = (
+            where["wheel"],
+            where["task"],
+            where["pack"],
+            where["step"],
+        )
+        task_id = str(task["id"]) if task else None
+        step_id = step.step_id if step else None
+        is_file = category.startswith("file_change")
+        options = [
+            {"id": DECISION_ACCEPT, "label": "允许一次"},
+            {
+                "id": DECISION_ACCEPT_TASK,
+                "label": "这个任务里都允许" if task else "这段驾驶里都允许",
+            },
+            {"id": DECISION_DECLINE, "label": "拒绝这一步"},
+            {"id": DECISION_CANCEL, "label": "停下"},
+        ]
+        subject: dict[str, Any] = {
+            "request_id": request_id,
+            **summary,
+            "wheel": wheel,
+            "after_decline": after_decline,
+            "step": None
+            if step is None
+            else {
+                "step_id": step.step_id,
+                "title": step.title,
+                "index": int(task["current_step"]) + 1,
+            },
+            "dependents": dependents(list(pack.workflow), step.step_id)
+            if pack and step
+            else [],
+        }
+        prompt = InteractionPrompt(
+            title="改动需要你批准" if is_file else "命令需要你批准",
+            question=params.get("reason") or "Codex 请求执行超出沙箱的动作",
+            options=options,
+            subject=subject,
+        )
+        opened = await self._open_ask(
+            session=session,
+            where=where,
+            kind="tool_approval",
+            prompt=prompt,
+            waiting_reason=WaitingReason.APPROVAL,
+        )
+        response, source = await self._wait_answer(request_id)
+        if response is None:
+            await self._settle_timeout(session=session, where=where, opened=opened)
+            response = {"decision": DECISION_CANCEL}
+        decision = str(response.get("decision") or DECISION_DECLINE)
+        if decision not in (
+            DECISION_ACCEPT,
+            DECISION_ACCEPT_TASK,
+            DECISION_DECLINE,
+            DECISION_CANCEL,
+        ):
+            decision = DECISION_DECLINE
+        codex = (
+            "accept"
+            if decision in (DECISION_ACCEPT, DECISION_ACCEPT_TASK)
+            else ("cancel" if decision == DECISION_CANCEL else "decline")
+        )
+        note = _note_of(response)
         async with self.runner.stores() as repo:
             async with repo.transaction():
+                if decision == DECISION_ACCEPT_TASK:
+                    await repo.insert_tool_grant(
+                        session_id=session_id,
+                        task_id=task_id,
+                        category=category,
+                        command_prefix=grant_prefix(category, tokens),
+                        granted_by=str(session["owner_actor_id"]),
+                    )
                 await repo.log_approval(
                     session_id=session_id,
-                    task_id=None,
+                    task_id=task_id,
                     request_id=request_id,
                     method=method,
-                    summary=summary,
-                    decision=decision,
-                    source="user",
+                    summary={**summary, "note": note} if note else summary,
+                    decision=codex,
+                    source=source,
+                    interaction_id=opened["interaction_id"],
+                    wheel=wheel,
+                    step_id=step_id,
                 )
-        await client.respond(rid, {"decision": decision})
+        thread_id = thread_id_of(params)
+        if codex == "cancel" and thread_id:
+            # 停下：整轮中断。顾问驾驶时这一步按「用户停下」收尾（advisor._step_once），不是出错
+            self.user_stops[thread_id] = {
+                "note": note,
+                "source": source,
+                "step_id": step_id,
+            }
+        await client.respond(rid, {"decision": codex})
+        if codex == "decline" and note and thread_id:
+            # 「拒绝，并告诉它怎么改」= decline + turn/steer（approval.md「改得不对」）
+            asyncio.get_running_loop().create_task(
+                self._steer(thread_id, note), name=f"steer:{thread_id}"
+            )
 
-    def resolve_approval(self, request_id: str, decision: str) -> bool:
+    async def _steer(self, thread_id: str, text: str) -> None:
+        try:
+            await asyncio.sleep(0.2)
+            client = await self.ensure_connected()
+            await client.request(
+                "turn/steer",
+                {"threadId": thread_id, "input": [{"type": "text", "text": text}]},
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("turn/steer failed thread=%s", thread_id)
+
+    # ---- Codex 反过来问用户（request_user_input）：澄清，不是审批（approval.md）----
+    async def _on_user_input(self, rid: Any, params: dict[str, Any]) -> None:
+        client = self.client
+        assert client is not None
+        request_id = f"{self.sandbox_id}:{rid}"
+        questions = [
+            {
+                "id": str(q.get("id") or f"q{i}"),
+                "header": str(q.get("header") or ""),
+                "question": str(q.get("question") or ""),
+                "options": [
+                    {
+                        "label": str(o.get("label") or ""),
+                        "description": str(o.get("description") or ""),
+                    }
+                    for o in (q.get("options") or [])
+                    if isinstance(o, dict)
+                ],
+                "is_other": bool(q.get("isOther", q.get("is_other", False))),
+                "is_secret": bool(q.get("isSecret", q.get("is_secret", False))),
+            }
+            for i, q in enumerate(params.get("questions") or [])
+            if isinstance(q, dict)
+        ]
+        empty = {"answers": {q["id"]: {"answers": []} for q in questions}}
+        async with self.runner.stores() as repo:
+            session_id = await self.session_for_thread(thread_id_of(params), repo)
+            if session_id is None or not questions:
+                await client.respond(rid, empty)
+                return
+            session = await repo.get_session(session_id)
+            where = await self._where(repo, session)
+            wheel, task, pack, step = (
+                where["wheel"],
+                where["task"],
+                where["pack"],
+                where["step"],
+            )
+            task_id = str(task["id"]) if task else None
+            step_id = step.step_id if step else None
+            refuse = None
+            if wheel == Wheel.advisor:
+                if any(q["is_secret"] for q in questions):
+                    refuse = "secret"  # 顾问不能向用户收口令
+                elif pack is not None and step is not None:
+                    policy = pack.policy_for(step)
+                    if policy.questions == "deny":
+                        refuse = "policy"
+                    else:
+                        asked = sum(
+                            1
+                            for it in await repo.list_interactions(
+                                session_id=session_id, status=None
+                            )
+                            if it["kind"] == "question"
+                            and str(it.get("task_id") or "") == (task_id or "")
+                            and ((it.get("prompt") or {}).get("subject") or {}).get(
+                                "step_id"
+                            )
+                            == step_id
+                        )
+                        if asked >= policy.max_questions:
+                            refuse = "quota"
+            if refuse:
+                async with repo.transaction():
+                    ev = await repo.append_event(
+                        session_id=session_id,
+                        kind="interaction",
+                        event_type="question/refused",
+                        payload={
+                            "reason": refuse,
+                            "questions": [
+                                {k: v for k, v in q.items() if k != "options"}
+                                for q in questions
+                            ],
+                            "step_id": step_id,
+                        },
+                        task_id=task_id,
+                    )
+                await self.runner.publisher.publish(
+                    self.runner.publisher.session_channel(session_id), ev
+                )
+                await client.respond(rid, empty)
+                return
+        prompt = InteractionPrompt(
+            title="Codex 想问你",
+            question=questions[0]["question"]
+            if len(questions) == 1
+            else f"{len(questions)} 个问题",
+            options=[],
+            subject={
+                "request_id": request_id,
+                "questions": questions,
+                "wheel": wheel,
+                "step_id": step_id,
+                "step": None
+                if step is None
+                else {
+                    "step_id": step.step_id,
+                    "title": step.title,
+                    "index": int(task["current_step"]) + 1,
+                },
+            },
+        )
+        opened = await self._open_ask(
+            session=session,
+            where=where,
+            kind="question",
+            prompt=prompt,
+            waiting_reason=WaitingReason.INPUT,
+        )
+        response, source = await self._wait_answer(request_id)
+        thread_id = thread_id_of(params)
+        if response is None:
+            await self._settle_timeout(session=session, where=where, opened=opened)
+            if thread_id:
+                self.user_stops[thread_id] = {
+                    "note": None,
+                    "source": "timeout",
+                    "step_id": step_id,
+                }
+            await client.respond(rid, empty)
+            if thread_id:
+                try:
+                    await self.interrupt(thread_id)
+                except Exception:  # noqa: BLE001
+                    log.exception("interrupt after question timeout failed")
+            return
+        answers_in = (
+            response.get("answers")
+            or (response.get("answer") or {}).get("answers")
+            or {}
+        )
+        answers = {
+            q["id"]: {
+                "answers": [str(answers_in.get(q["id"]))]
+                if answers_in.get(q["id"]) not in (None, "")
+                else []
+            }
+            for q in questions
+        }
+        # 秘密答案只透传：不落账
+        async with self.runner.stores() as repo:
+            async with repo.transaction():
+                ev = await repo.append_event(
+                    session_id=str(session["id"]),
+                    kind="interaction",
+                    event_type="question/answered",
+                    payload={
+                        "interaction_id": opened["interaction_id"],
+                        "step_id": step_id,
+                        "answers": {
+                            q["id"]: (
+                                "[secret]"
+                                if q["is_secret"]
+                                else answers[q["id"]]["answers"]
+                            )
+                            for q in questions
+                        },
+                    },
+                    task_id=task_id,
+                )
+        await self.runner.publisher.publish(
+            self.runner.publisher.session_channel(str(session["id"])), ev
+        )
+        await client.respond(rid, {"answers": answers})
+
+    def resolve_approval(self, request_id: str, response: dict[str, Any] | str) -> bool:
         fut = self.pending_approvals.get(request_id)
         if fut is None or fut.done():
             return False
-        fut.set_result(decision)
+        if isinstance(response, str):
+            response = {"decision": response}
+        fut.set_result(response)
         return True
+
+
+def _opt_str(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _note_of(response: dict[str, Any]) -> str | None:
+    """用户附在答复上的话（「拒绝，并告诉它怎么改」「停下」可附）。"""
+    answer = response.get("answer")
+    if isinstance(answer, dict):
+        text = answer.get("text") or answer.get("note")
+        return str(text).strip() or None if text else None
+    if isinstance(answer, str) and answer.strip():
+        return answer.strip()
+    return None
 
 
 class Runner:
@@ -751,7 +1185,7 @@ class Runner:
         log.warning("dropping sandbox link sandbox=%s: %s", sandbox_id, why)
         for fut in list(link.pending_approvals.values()):
             if not fut.done():
-                fut.set_result("decline")
+                fut.set_result({"decision": "decline"})
         if link.client:
             try:
                 await link.client.close()
@@ -855,7 +1289,10 @@ class Runner:
             )
             return
         if kind == "approval.respond":
-            ok = link.resolve_approval(payload["request_id"], payload["decision"])
+            response = payload.get("response")
+            if not isinstance(response, dict):
+                response = {"decision": payload.get("decision")}
+            ok = link.resolve_approval(payload["request_id"], response)
             if not ok:
                 raise RuntimeError(
                     "no pending approval for this request (runner restarted or already answered)"

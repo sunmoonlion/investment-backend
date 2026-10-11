@@ -636,7 +636,7 @@ class Ledger:
                 },
                 task_id=task_id,
             )
-            await self.repo.append_event(
+            ev = await self.repo.append_event(
                 session_id=str(task["session_id"]),
                 kind="interaction",
                 event_type="interaction/opened",
@@ -645,11 +645,13 @@ class Ledger:
                     "kind": kind,
                     "token": token,
                     "prompt": prompt.model_dump(),
+                    # 网页的时间线按 subject 画审批卡；放一份在顶层，和自驾那条路一样
+                    "subject": prompt.subject,
                 },
                 task_id=task_id,
                 attempt_id=attempt_id,
             )
-            return {"interaction_id": iid, "token": token}
+            return {"interaction_id": iid, "token": token, "event": ev}
 
     async def respond_interaction(
         self,

@@ -1037,7 +1037,8 @@ async def respond_interaction(
                     kind="task.drive",
                     payload={"task_id": str(it["task_id"])},
                 )
-        if it["kind"] == "tool_approval":
+        if it["kind"] in ("tool_approval", "question"):
+            # 挂在 app-server 那边的请求还在等：把答复送到正握着连接的 runner
             s = await repo.get_session(str(it["session_id"]))
             async with repo.transaction():
                 await repo.enqueue_command(
@@ -1046,7 +1047,9 @@ async def respond_interaction(
                     kind="approval.respond",
                     payload={
                         "request_id": it["prompt"]["subject"]["request_id"],
-                        "decision": body.decision or "decline",
+                        "decision": body.decision
+                        or ("answer" if it["kind"] == "question" else "decline"),
+                        "response": response,
                     },
                 )
     except WorkbenchError as exc:

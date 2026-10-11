@@ -26,7 +26,12 @@ READ_ONLY = {"type": "readOnly", "networkAccess": False}
 WRITE = {"type": "workspaceWrite", "writableRoots": [], "networkAccess": False}
 ENVIRONMENT = [{"environmentId": "user-pc", "cwd": DIRECTORY}]
 # 子代理与「目标」会在账外起轮次、花钱：每条线起的时候都关掉
-NO_SIDE_THREADS = {"features.multi_agent": False, "features.goals": False}
+NO_SIDE_THREADS = {
+    "features.multi_agent": False,
+    "features.goals": False,
+    # 让模型能在一轮中间问人（approval.md「Codex 反过来问用户」）
+    "features.default_mode_request_user_input": True,
+}
 
 
 async def setup(db, fake, *, approval="untrusted"):

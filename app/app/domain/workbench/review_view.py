@@ -18,6 +18,7 @@ KIND_WORDS = {
     "input": "验收没有通过",
     "resource": "预算",
     "tool_approval": "命令要你批准",
+    "question": "Codex 想问你",
 }
 
 
@@ -33,9 +34,13 @@ def consequence(
     if kind == "tool_approval":
         return {
             "accept": "只允许这一次。你机器上的白名单仍然有效，白名单之外的写入照样会被拒",
+            "accept_task": "这个任务里同样的动作不再问你，任务结束即失效。白名单之外的写入照样会被拒",
             "acceptForSession": "这段对话里同样的动作不再问你。白名单之外的写入照样会被拒",
-            "decline": "不执行。模型会被告知没有获准",
+            "decline": "不执行这一条。这一轮继续，它会接着做不依赖它的部分；之后同一步里再要做什么都会先问你",
+            "cancel": "整轮停下。专家停在这一步等你决定：带着你的要求重做，还是停止",
         }.get(option, "")
+    if kind == "question":
+        return ""
     if option == "rework":
         # 不说「预留多少」：请专家已经不填预算上限了，花多少页面上实时看得到
         return "专家重做这一步。重做要再花钱，花了多少顶部实时显示"
@@ -58,6 +63,8 @@ def why(
         return "预算不够做下一步了。专家不会超出你给的上限"
     if kind == "tool_approval":
         return "这个动作超出了当前允许的范围，要你点头才做"
+    if kind == "question":
+        return "模型缺一点信息，问你一下再继续；不答它会按自己的假设做"
     if missing:
         return "这家公司还没有入库。没有数据，专家不往下做，也不重做"
     if step is None:
@@ -168,6 +175,11 @@ def review_view(
         "cwd": subject.get("cwd"),
         "returned": subject.get("last_output"),
         "budget": budget_view(subject["budget"]) if subject.get("budget") else None,
+        # 工具级审批与提问卡多带的（approval.md「问人怎么问」第 2 条）
+        "after_decline": bool(subject.get("after_decline")),
+        "dependents": list(subject.get("dependents") or []),
+        "questions": list(subject.get("questions") or []),
+        "note": subject.get("note"),
     }
     view["validity"] = {
         "expires_at": expires,

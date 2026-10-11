@@ -489,23 +489,46 @@ class WorkbenchStore(Protocol):
         """Reject concurrent identity mutations; hold through external registration and commits."""
         ...
 
-    async def create_agent_pairing(self, row: dict[str, Any], *, pending_limit: int = 500) -> bool: ...
+    async def create_agent_pairing(
+        self, row: dict[str, Any], *, pending_limit: int = 500
+    ) -> bool: ...
 
-    async def get_agent_pairing(self, pairing_id: str, *, for_update: bool = False) -> dict[str, Any] | None: ...
+    async def get_agent_pairing(
+        self, pairing_id: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None: ...
 
-    async def get_pending_agent_pairing_by_code(self, code_hash: str, *, for_update: bool = False) -> dict[str, Any] | None: ...
+    async def get_pending_agent_pairing_by_code(
+        self, code_hash: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None: ...
 
-    async def update_agent_pairing(self, pairing_id: str, *, expected_status: str, **fields: Any) -> bool: ...
+    async def update_agent_pairing(
+        self, pairing_id: str, *, expected_status: str, **fields: Any
+    ) -> bool: ...
 
-    async def mark_agent_pairing_delivered(self, pairing_id: str) -> dict[str, Any] | None: ...
+    async def mark_agent_pairing_delivered(
+        self, pairing_id: str
+    ) -> dict[str, Any] | None: ...
 
-    async def current_online_environment(self, owner_actor_id: str) -> dict[str, Any] | None: ...
+    async def current_online_environment(
+        self, owner_actor_id: str
+    ) -> dict[str, Any] | None: ...
 
-    async def append_agent_audit_event(self, *, owner_actor_id: str, event_type: str, pairing_id: str, metadata: dict[str, Any]) -> None: ...
+    async def append_agent_audit_event(
+        self,
+        *,
+        owner_actor_id: str,
+        event_type: str,
+        pairing_id: str,
+        metadata: dict[str, Any],
+    ) -> None: ...
 
-    async def create_agent_install_credential(self, *, owner_actor_id: str, token_hash: str, expires_at) -> None: ...
+    async def create_agent_install_credential(
+        self, *, owner_actor_id: str, token_hash: str, expires_at
+    ) -> None: ...
 
-    async def consume_agent_install_credential(self, token_hash: str, *, now) -> dict[str, Any] | None: ...
+    async def consume_agent_install_credential(
+        self, token_hash: str, *, now
+    ) -> dict[str, Any] | None: ...
 
     async def cleanup_agent_onboarding(self, *, now) -> dict[str, int]: ...
 
@@ -570,7 +593,35 @@ class WorkbenchStore(Protocol):
         decision: str,
         source: str,
         interaction_id: str | None = None,
+        wheel: str | None = None,
+        step_id: str | None = None,
     ) -> None: ...
+
+    async def list_approvals(
+        self,
+        *,
+        session_id: str | None = None,
+        task_id: str | None = None,
+        step_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """审批日志，按时间。每一次决定一行，不论放行还是拒绝、策略还是用户（approval.md「看得见」）。"""
+        ...
+
+    async def insert_tool_grant(
+        self,
+        *,
+        session_id: str,
+        task_id: str | None,
+        category: str,
+        command_prefix: list[str] | None,
+        granted_by: str,
+    ) -> str: ...
+
+    async def list_tool_grants(
+        self, *, session_id: str, task_id: str | None
+    ) -> list[dict[str, Any]]:
+        """「这个任务里都允许」记下的授权：有 Task 的按 Task；自驾的按对话，且只认最近一次交接之后的。"""
+        ...
 
     async def enqueue_command(
         self, *, session_id: str, sandbox_id: str, kind: str, payload: dict

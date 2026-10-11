@@ -42,6 +42,7 @@ class FakeAppServer:
         self.requests: list[dict] = []
         self.auth_headers: list[str | None] = []
         self.approval_decisions: list[dict] = []
+        self.question_answers: list[dict] = []
         self.ready = asyncio.Event()
 
     async def start(self):
@@ -204,26 +205,49 @@ class FakeAppServer:
                         },
                     }
                 )
-            if "NEED_APPROVAL" in text:
+            # 审批与提问的触发词：工作线的文字里、或专家委托的问题里带上就触发
+            asks: list[tuple[str, dict]] = []
+            command_ask = {
+                "command": "touch /home/u/x",
+                "cwd": "/home/u/research/proj",
+                "reason": "write outside workspace",
+            }
+            file_ask = {"reason": "apply patch inside the project"}
+            if "NEED_APPROVAL_TWICE" in text:
+                asks = [("command", command_ask), ("command", command_ask)]
+            elif "NEED_APPROVAL_THEN_FILE" in text:
+                asks = [("command", command_ask), ("file", file_ask)]
+            elif "NEED_FILE_APPROVAL" in text:
+                asks = [("file", file_ask)]
+            elif "NEED_APPROVAL" in text:
+                asks = [("command", command_ask)]
+            cancelled = False
+            for n, (what, extra) in enumerate(asks, start=1):
                 srid = f"req-{uuid.uuid4().hex[:6]}"
                 fut = asyncio.get_running_loop().create_future()
                 self._pending[srid] = fut
+                method = (
+                    "item/commandExecution/requestApproval"
+                    if what == "command"
+                    else "item/fileChange/requestApproval"
+                )
                 await send(
                     {
                         "id": srid,
-                        "method": "item/commandExecution/requestApproval",
+                        "method": method,
                         "params": {
                             "threadId": tid,
                             "turnId": turn_id,
-                            "itemId": "it-1",
-                            "command": "touch /home/u/x",
-                            "cwd": "/home/u/research/proj",
-                            "reason": "write outside workspace",
+                            "itemId": f"it-{n}",
                             "environmentId": "user-pc",
+                            **extra,
                         },
                     }
                 )
                 decision = await asyncio.wait_for(fut, 20)
+                if decision.get("decision") == "cancel":
+                    cancelled = True
+                    break
                 await send(
                     {
                         "method": "item/completed",
@@ -231,8 +255,10 @@ class FakeAppServer:
                             "threadId": tid,
                             "turnId": turn_id,
                             "item": {
-                                "type": "commandExecution",
-                                "id": "it-1",
+                                "type": "commandExecution"
+                                if what == "command"
+                                else "fileChange",
+                                "id": f"it-{n}",
                                 "status": "completed"
                                 if decision.get("decision") != "decline"
                                 else "declined",
@@ -240,6 +266,48 @@ class FakeAppServer:
                         },
                     }
                 )
+            if "NEED_QUESTION" in text and not cancelled:
+                srid = f"ask-{uuid.uuid4().hex[:6]}"
+                fut = asyncio.get_running_loop().create_future()
+                self._pending[srid] = fut
+                await send(
+                    {
+                        "id": srid,
+                        "method": "item/tool/requestUserInput",
+                        "params": {
+                            "threadId": tid,
+                            "turnId": turn_id,
+                            "itemId": "ask-1",
+                            "questions": [
+                                {
+                                    "id": "q1",
+                                    "header": "年份",
+                                    "question": "看哪一年的年报？",
+                                    "isOther": True,
+                                    "isSecret": False,
+                                    "options": [
+                                        {"label": "2024", "description": "最新"},
+                                        {"label": "2023", "description": ""},
+                                    ],
+                                }
+                            ],
+                            "isBlocking": True,
+                        },
+                    }
+                )
+                answer = await asyncio.wait_for(fut, 20)
+                self.question_answers.append(answer)
+            if cancelled:
+                await send(
+                    {
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": tid,
+                            "turn": {"id": turn_id, "status": "interrupted"},
+                        },
+                    }
+                )
+                return
             await send(
                 {
                     "method": "item/completed",
@@ -962,4 +1030,380 @@ async def test_reconnect_starts_a_new_thread_when_the_rollout_is_gone(db):
             for link in runner.links.values():
                 if link.client is not None:
                     await link.client.close()
+        await fake.close()
+
+
+# ---------------- 工具级审批重做（approval.md；账 77、79）----------------
+
+
+async def _advisor_task(db, sid, text_, key):
+    """请专家（SMOKE）并把 Task 排到 QUEUED：问题文字里带触发词，专家的第一轮就会碰到审批。"""
+    from decimal import Decimal
+
+    from app.domain.workbench.models import HandoverRequest
+    from app.domain.workbench.states import TaskState
+
+    async with db() as s:
+        repo = WorkbenchRepository(s)
+        led = Ledger(repo)
+        task_id = (
+            await led.handover(
+                HandoverRequest(
+                    idempotency_key=key,
+                    session_id=sid,
+                    profile_id="SMOKE",
+                    original_input={"text": text_},
+                    budget_limit=Decimal("5"),
+                ),
+                owner_actor_id=OWNER,
+            )
+        )["task_id"]
+        await led.transition(task_id, TaskState.VALIDATING)
+        await led.transition(task_id, TaskState.QUEUED)
+    return task_id
+
+
+async def _pump(runner, times=6):
+    for _ in range(times):
+        await runner.run_once()
+        await asyncio.sleep(0.05)
+
+
+async def _pending(db, sid, kind):
+    async with db() as s:
+        return [
+            it
+            for it in await WorkbenchRepository(s).list_interactions(
+                session_id=sid, status="pending"
+            )
+            if it["kind"] == kind
+        ]
+
+
+async def _answer(db, sb, sid, it, response):
+    """网页上的回答：消费 Interaction，再排一条 approval.respond 命令（与路由层做的一样）。"""
+    async with db() as s:
+        repo = WorkbenchRepository(s)
+        token = next(
+            e["payload"]["token"]
+            for e in await repo.list_events(session_id=sid)
+            if e["type"] == "interaction/opened"
+            and e["payload"]["interaction_id"] == str(it["id"])
+        )
+        await Ledger(repo).respond_interaction(
+            str(it["id"]), token=token, response=response, owner_actor_id=OWNER
+        )
+        async with repo.transaction():
+            await repo.enqueue_command(
+                session_id=sid,
+                sandbox_id=sb,
+                kind="approval.respond",
+                payload={
+                    "request_id": it["prompt"]["subject"]["request_id"],
+                    "decision": response.get("decision"),
+                    "response": response,
+                },
+            )
+
+
+async def _approval_rows(db, sid):
+    async with db() as s:
+        r = await s.execute(
+            text(
+                "select decision, source, wheel, step_id from workbench_approval_log where session_id = :s order by created_at, id"
+            ),
+            {"s": sid},
+        )
+        return [tuple(x) for x in r.all()]
+
+
+async def test_advisor_policy_lets_in_project_file_changes_through_without_asking(db):
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = build_runner(
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        await runner.run_once()
+        await _advisor_task(db, sid, "NEED_FILE_APPROVAL", "pol-0001")
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        await _pump(runner)
+
+        async def decided():
+            return any(
+                (d.get("result") or {}).get("decision") == "accept"
+                for d in fake.approval_decisions
+            )
+
+        assert await wait_for(decided)
+        assert await _pending(db, sid, "tool_approval") == []
+        rows = await _approval_rows(db, sid)
+        assert rows[0] == ("accept", "policy", "advisor", "smoke-1") or rows[0][:3] == (
+            "accept",
+            "policy",
+            "advisor",
+        )
+        async with db() as s:
+            events = await WorkbenchRepository(s).list_events(session_id=sid)
+        assert any(e["type"] == "approval/policy" for e in events)
+        await runner.wait_drivers(timeout=5)
+        for link in runner.links.values():
+            if link.client:
+                await link.client.close()
+    finally:
+        await fake.close()
+
+
+async def test_advisor_command_asks_with_four_buttons_and_a_task_grant_covers_the_next(
+    db,
+):
+    from app.domain.workbench.states import TaskState, WaitingReason
+
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = build_runner(
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        await runner.run_once()
+        task_id = await _advisor_task(db, sid, "NEED_APPROVAL_TWICE", "grant-0001")
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        await _pump(runner)
+
+        async def opened():
+            return len(await _pending(db, sid, "tool_approval")) == 1
+
+        assert await wait_for(opened)
+        it = (await _pending(db, sid, "tool_approval"))[0]
+        assert str(it["task_id"]) == task_id
+        assert [o["id"] for o in it["prompt"]["options"]] == [
+            "accept",
+            "accept_task",
+            "decline",
+            "cancel",
+        ]
+        subject = it["prompt"]["subject"]
+        assert subject["wheel"] == "advisor" and subject["step"]["index"] == 1
+        assert subject["after_decline"] is False
+        async with db() as s:
+            task = await WorkbenchRepository(s).get_task(task_id)
+        assert task["state"] == TaskState.WAITING
+        assert task["waiting_reason"] == WaitingReason.APPROVAL
+
+        await _answer(db, sb, sid, it, {"decision": "accept_task"})
+        await _pump(runner)
+
+        async def both():
+            return (
+                sum(
+                    1
+                    for d in fake.approval_decisions
+                    if (d.get("result") or {}).get("decision") == "accept"
+                )
+                >= 2
+            )
+
+        assert await wait_for(both)
+        # 第二次同样的命令没有再问人：由工作台记的任务内授权放行（SMOKE 验收不过会返工，返工轮里的
+        # 同样命令也都靠这条授权放行，所以后面可能不止一行 task_grant）
+        assert await _pending(db, sid, "tool_approval") == []
+        rows = await _approval_rows(db, sid)
+        assert [r[:2] for r in rows[:2]] == [
+            ("accept", "user"),
+            ("accept", "task_grant"),
+        ]
+        assert all(r[:2] == ("accept", "task_grant") for r in rows[2:])
+        assert all(r[2] == "advisor" and r[3] for r in rows)
+        async with db() as s:
+            r = await s.execute(
+                text(
+                    "select category, command_prefix from workbench_tool_grants where task_id = :t"
+                ),
+                {"t": task_id},
+            )
+            grants = [tuple(x) for x in r.all()]
+        assert grants == [("command", ["touch", "/home/u/x"])]
+        await runner.wait_drivers(timeout=5)
+        for link in runner.links.values():
+            if link.client:
+                await link.client.close()
+    finally:
+        await fake.close()
+
+
+async def test_after_a_decline_even_allowed_changes_ask_and_say_so(db):
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = build_runner(
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        await runner.run_once()
+        await _advisor_task(db, sid, "NEED_APPROVAL_THEN_FILE", "decl-0001")
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        await _pump(runner)
+
+        async def opened():
+            return len(await _pending(db, sid, "tool_approval")) == 1
+
+        assert await wait_for(opened)
+        first = (await _pending(db, sid, "tool_approval"))[0]
+        await _answer(db, sb, sid, first, {"decision": "decline"})
+        await _pump(runner)
+
+        async def second_opened():
+            pend = await _pending(db, sid, "tool_approval")
+            return len(pend) == 1 and str(pend[0]["id"]) != str(first["id"])
+
+        # 项目内改文件本来是策略放行的；刚拒绝过，就要问人，并标出来
+        assert await wait_for(second_opened)
+        second = (await _pending(db, sid, "tool_approval"))[0]
+        assert second["prompt"]["subject"]["after_decline"] is True
+        assert second["prompt"]["subject"]["category"] == "file_change_in_project"
+        await _answer(db, sb, sid, second, {"decision": "accept"})
+        await _pump(runner)
+        rows = await _approval_rows(db, sid)
+        assert [r[:2] for r in rows] == [("decline", "user"), ("accept", "user")]
+        await runner.wait_drivers(timeout=5)
+        for link in runner.links.values():
+            if link.client:
+                await link.client.close()
+    finally:
+        await fake.close()
+
+
+async def test_stop_interrupts_the_turn_and_parks_the_step_for_the_user(db):
+    from app.domain.workbench.states import TaskState, WaitingReason
+
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = build_runner(
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        await runner.run_once()
+        task_id = await _advisor_task(db, sid, "NEED_APPROVAL", "stop-0001")
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        await _pump(runner)
+
+        async def opened():
+            return len(await _pending(db, sid, "tool_approval")) == 1
+
+        assert await wait_for(opened)
+        it = (await _pending(db, sid, "tool_approval"))[0]
+        await _answer(
+            db,
+            sb,
+            sid,
+            it,
+            {"decision": "cancel", "answer": {"text": "先别碰 x，改用只读的方式"}},
+        )
+        await _pump(runner)
+
+        async def parked():
+            async with db() as s:
+                task = await WorkbenchRepository(s).get_task(task_id)
+            return (
+                task["state"] == TaskState.WAITING
+                and task["waiting_reason"] == WaitingReason.INPUT
+            )
+
+        assert await wait_for(parked)
+        assert any(
+            (d.get("result") or {}).get("decision") == "cancel"
+            for d in fake.approval_decisions
+        )
+        inputs = await _pending(db, sid, "input")
+        assert len(inputs) == 1 and "停下" in inputs[0]["prompt"]["title"]
+        assert inputs[0]["prompt"]["subject"]["note"] == "先别碰 x，改用只读的方式"
+        async with db() as s:
+            events = await WorkbenchRepository(s).list_events(session_id=sid)
+        assert any(e["type"] == "step/stopped" for e in events)
+        rows = await _approval_rows(db, sid)
+        assert rows[0][:2] == ("cancel", "user")
+        await runner.wait_drivers(timeout=5)
+        for link in runner.links.values():
+            if link.client:
+                await link.client.close()
+    finally:
+        await fake.close()
+
+
+async def test_codex_question_becomes_a_card_and_the_answer_goes_back(db):
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = build_runner(
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        await runner.run_once()
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.start",
+                    payload={
+                        "text": "NEED_QUESTION please",
+                        "request_id": "req-q",
+                        "by": "user",
+                    },
+                )
+        await _pump(runner, 3)
+
+        async def opened():
+            return len(await _pending(db, sid, "question")) == 1
+
+        assert await wait_for(opened)
+        it = (await _pending(db, sid, "question"))[0]
+        assert it["task_id"] is None
+        q = it["prompt"]["subject"]["questions"][0]
+        assert q["id"] == "q1" and q["is_other"] is True and len(q["options"]) == 2
+        await _answer(
+            db,
+            sb,
+            sid,
+            it,
+            {"decision": "answer", "answer": {"answers": {"q1": "2023"}}},
+        )
+        await _pump(runner)
+
+        async def answered():
+            return len(fake.question_answers) == 1
+
+        assert await wait_for(answered)
+        assert fake.question_answers[0] == {"answers": {"q1": {"answers": ["2023"]}}}
+        async with db() as s:
+            events = await WorkbenchRepository(s).list_events(session_id=sid)
+        assert any(e["type"] == "question/answered" for e in events)
+        for link in runner.links.values():
+            if link.client:
+                await link.client.close()
+    finally:
         await fake.close()

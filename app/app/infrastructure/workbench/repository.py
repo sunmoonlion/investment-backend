@@ -1308,7 +1308,9 @@ class WorkbenchRepository:
     ) -> bool:
         """Reserve global pending capacity and insert without exposing code collisions."""
         await self.session.execute(
-            text("select pg_advisory_xact_lock(hashtextextended('agent-pairing-pending-cap', 0))")
+            text(
+                "select pg_advisory_xact_lock(hashtextextended('agent-pairing-pending-cap', 0))"
+            )
         )
         await self.session.execute(
             text("""update workbench_agent_pairings set status='expired', token_ciphertext=null
@@ -1316,7 +1318,9 @@ class WorkbenchRepository:
         )
         pending = int(
             await self.session.scalar(
-                text("select count(*) from workbench_agent_pairings where status='pending'")
+                text(
+                    "select count(*) from workbench_agent_pairings where status='pending'"
+                )
             )
         )
         if pending >= pending_limit:
@@ -1360,21 +1364,32 @@ class WorkbenchRepository:
         self, pairing_id: str, *, expected_status: str, **fields: Any
     ) -> bool:
         allowed = {
-            "status", "owner_actor_id", "relay_user", "relay_url",
-            "agent_token_expires_at", "token_ciphertext", "decided_at",
-            "delivered_at", "attempts", "last_polled_at",
+            "status",
+            "owner_actor_id",
+            "relay_user",
+            "relay_url",
+            "agent_token_expires_at",
+            "token_ciphertext",
+            "decided_at",
+            "delivered_at",
+            "attempts",
+            "last_polled_at",
         }
         if not fields or set(fields) - allowed:
             raise ValueError("invalid agent pairing update fields")
         assignments = ",".join(f"{name}=:{name}" for name in fields)
         values = dict(fields) | {"id": pairing_id, "expected_status": expected_status}
         result = await self.session.execute(
-            text(f"update workbench_agent_pairings set {assignments} where id=cast(:id as uuid) and status=:expected_status"),
+            text(
+                f"update workbench_agent_pairings set {assignments} where id=cast(:id as uuid) and status=:expected_status"
+            ),
             values,
         )
         return int(getattr(result, "rowcount", 0)) == 1
 
-    async def mark_agent_pairing_delivered(self, pairing_id: str) -> dict[str, Any] | None:
+    async def mark_agent_pairing_delivered(
+        self, pairing_id: str
+    ) -> dict[str, Any] | None:
         r = await self.session.execute(
             text("""with approved as (
                      select id, relay_user, relay_url, agent_token_expires_at,
@@ -1398,7 +1413,9 @@ class WorkbenchRepository:
         row = r.mappings().first()
         return dict(row) if row else None
 
-    async def current_online_environment(self, owner_actor_id: str) -> dict[str, Any] | None:
+    async def current_online_environment(
+        self, owner_actor_id: str
+    ) -> dict[str, Any] | None:
         r = await self.session.execute(
             text("""select id,name,last_seen_at from workbench_environments where owner_actor_id=cast(:owner as uuid)
                    and status='online' order by last_seen_at desc nulls last,updated_at desc limit 1"""),
@@ -1408,13 +1425,23 @@ class WorkbenchRepository:
         return dict(row) if row else None
 
     async def append_agent_audit_event(
-        self, *, owner_actor_id: str, event_type: str, pairing_id: str, metadata: dict[str, Any]
+        self,
+        *,
+        owner_actor_id: str,
+        event_type: str,
+        pairing_id: str,
+        metadata: dict[str, Any],
     ) -> None:
         await self.session.execute(
             text("""insert into workbench_agent_audit_events (id,owner_actor_id,event_type,pairing_id,metadata)
                    values (cast(:id as uuid),cast(:owner as uuid),:event_type,cast(:pairing as uuid),cast(:metadata as jsonb))"""),
-            {"id": str(uuid.uuid4()), "owner": owner_actor_id, "event_type": event_type,
-             "pairing": pairing_id, "metadata": _j(metadata)},
+            {
+                "id": str(uuid.uuid4()),
+                "owner": owner_actor_id,
+                "event_type": event_type,
+                "pairing": pairing_id,
+                "metadata": _j(metadata),
+            },
         )
 
     async def create_agent_install_credential(
@@ -1423,10 +1450,17 @@ class WorkbenchRepository:
         await self.session.execute(
             text("""insert into workbench_agent_install_credentials (id,owner_actor_id,token_hash,expires_at)
                    values (cast(:id as uuid),cast(:owner as uuid),:hash,:expires_at)"""),
-            {"id": str(uuid.uuid4()), "owner": owner_actor_id, "hash": token_hash, "expires_at": expires_at},
+            {
+                "id": str(uuid.uuid4()),
+                "owner": owner_actor_id,
+                "hash": token_hash,
+                "expires_at": expires_at,
+            },
         )
 
-    async def consume_agent_install_credential(self, token_hash: str, *, now) -> dict[str, Any] | None:
+    async def consume_agent_install_credential(
+        self, token_hash: str, *, now
+    ) -> dict[str, Any] | None:
         r = await self.session.execute(
             text("""update workbench_agent_install_credentials set use_count=use_count+1
                    where token_hash=:hash and expires_at>:now and use_count<5
@@ -1443,10 +1477,15 @@ class WorkbenchRepository:
             {"now": now},
         )
         credentials = await self.session.execute(
-            text("delete from workbench_agent_install_credentials where expires_at<=:now returning id"),
+            text(
+                "delete from workbench_agent_install_credentials where expires_at<=:now returning id"
+            ),
             {"now": now},
         )
-        return {"pairings": len(expired.all()), "install_credentials": len(credentials.all())}
+        return {
+            "pairings": len(expired.all()),
+            "install_credentials": len(credentials.all()),
+        }
 
     async def get_relay_identity(self, owner_actor_id: str) -> dict[str, Any] | None:
         r = await self.session.execute(
@@ -1622,10 +1661,12 @@ class WorkbenchRepository:
         decision: str,
         source: str,
         interaction_id: str | None = None,
+        wheel: str | None = None,
+        step_id: str | None = None,
     ) -> None:
         await self.session.execute(
-            text("""insert into workbench_approval_log (session_id, task_id, request_id, method, summary, decision, source, interaction_id)
-                    values (:s, :t, :r, :m, cast(:sm as jsonb), :d, :src, :i)"""),
+            text("""insert into workbench_approval_log (session_id, task_id, request_id, method, summary, decision, source, interaction_id, wheel, step_id)
+                    values (:s, :t, :r, :m, cast(:sm as jsonb), :d, :src, :i, :w, :st)"""),
             {
                 "s": session_id,
                 "t": task_id,
@@ -1635,10 +1676,98 @@ class WorkbenchRepository:
                 "d": decision,
                 "src": source,
                 "i": interaction_id,
+                "w": wheel,
+                "st": step_id,
             },
         )
 
     # ---------- commands（网页接口 → runner） ----------
+
+    async def list_approvals(
+        self,
+        *,
+        session_id: str | None = None,
+        task_id: str | None = None,
+        step_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where, params = [], {}
+        if session_id is not None:
+            where.append("session_id = :s")
+            params["s"] = session_id
+        if task_id is not None:
+            where.append("task_id = :t")
+            params["t"] = task_id
+        if step_id is not None:
+            where.append("step_id = :st")
+            params["st"] = step_id
+        sql = "select id, session_id, task_id, step_id, wheel, request_id, method, summary, decision, source, interaction_id, created_at from workbench_approval_log"
+        if where:
+            sql += " where " + " and ".join(where)
+        sql += " order by created_at, id"
+        r = await self.session.execute(text(sql), params)
+        return [
+            {
+                **dict(m),
+                "id": str(m["id"]),
+                "session_id": str(m["session_id"]),
+                "task_id": str(m["task_id"]) if m["task_id"] else None,
+                "interaction_id": str(m["interaction_id"])
+                if m["interaction_id"]
+                else None,
+            }
+            for m in r.mappings().all()
+        ]
+
+    async def insert_tool_grant(
+        self,
+        *,
+        session_id: str,
+        task_id: str | None,
+        category: str,
+        command_prefix: list[str] | None,
+        granted_by: str,
+    ) -> str:
+        r = await self.session.execute(
+            text(
+                """insert into workbench_tool_grants (session_id, task_id, category, command_prefix, granted_by)
+                   values (:s, :t, :c, cast(:p as jsonb), :g) returning id"""
+            ),
+            {
+                "s": session_id,
+                "t": task_id,
+                "c": category,
+                "p": _j(command_prefix) if command_prefix is not None else None,
+                "g": granted_by,
+            },
+        )
+        return str(r.scalar_one())
+
+    async def list_tool_grants(
+        self, *, session_id: str, task_id: str | None
+    ) -> list[dict[str, Any]]:
+        if task_id is not None:
+            r = await self.session.execute(
+                text(
+                    "select id, category, command_prefix, created_at from workbench_tool_grants where task_id = :t order by created_at"
+                ),
+                {"t": task_id},
+            )
+        else:
+            # 自驾的授权到下一次交接为止：只认最近一次 wheel/handover 之后记下的
+            r = await self.session.execute(
+                text(
+                    """select g.id, g.category, g.command_prefix, g.created_at from workbench_tool_grants g
+                       where g.session_id = :s and g.task_id is null
+                         and g.created_at > coalesce(
+                           (select max(e.created_at) from workbench_session_events e
+                             where e.session_id = :s and e.event_type = 'wheel/handover'),
+                           'epoch'::timestamptz)
+                       order by g.created_at"""
+                ),
+                {"s": session_id},
+            )
+        return [{**dict(m), "id": str(m["id"])} for m in r.mappings().all()]
+
     async def enqueue_command(
         self, *, session_id: str, sandbox_id: str, kind: str, payload: dict
     ) -> str:

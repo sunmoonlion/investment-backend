@@ -233,7 +233,11 @@ def test_an_approval_policy_codex_no_longer_knows_falls_back():
 
 
 def test_the_thread_starts_with_the_settings_of_its_kind():
-    quiet = {"features.multi_agent": False, "features.goals": False}
+    quiet = {
+        "features.multi_agent": False,
+        "features.goals": False,
+        "features.default_mode_request_user_input": True,
+    }
     assert thread_settings(
         "chat", directory=None, environment_key=None, approval="untrusted"
     ) == {

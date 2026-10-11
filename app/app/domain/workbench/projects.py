@@ -152,7 +152,17 @@ class Mode(StrEnum):
 THREAD_CONFIG: dict[str, Any] = {
     "features.multi_agent": False,
     "features.goals": False,
+    # 让模型能在一轮中间问人（request_user_input → 提问卡，approval.md「Codex 反过来问用户」）。
+    # 0.155.1 里是开发中开关；升 Codex 版本要重验它还在不在，不在了就退回文字提问
+    "features.default_mode_request_user_input": True,
 }
+
+# 被拒后不绕路：Codex 没有这条内置规则，只能在每一轮工作线与顾问步骤的输入里写死（approval.md「被拒之后」）
+NO_DETOUR = (
+    "If a command or file change of yours is declined, do not reach the same effect another "
+    "way. Say what was declined and what therefore cannot be done; continue only with the parts "
+    "that do not depend on it; if nothing is left, stop."
+)
 
 
 def mode_of(
@@ -205,7 +215,8 @@ def mode_note(mode: Mode | str, *, directory: str | None) -> str:
         f"directory {directory} on the user's machine. For this and the following "
         "turns the shell tool IS available, whatever was said earlier in this "
         "conversation. You may read files, and create or change files inside the "
-        "project directory. Anything outside the project directory is off limits."
+        "project directory. Anything outside the project directory is off limits. "
+        + NO_DETOUR
     )
 
 

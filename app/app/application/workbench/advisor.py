@@ -20,6 +20,7 @@ from app.domain.workbench import missing_data
 from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
+from app.domain.workbench.projects import NO_DETOUR
 from app.domain.workbench.states import AttemptState, TaskState, WaitingReason
 from app.domain.workbench.step_view import RAW_CHARS
 
@@ -36,6 +37,9 @@ class TurnResult:
     # 这一轮花了多少（估算）。不认识这个模型的单价时是 None：只有用量，没有金额
     cost: Decimal | None = None
     interrupted: bool = False
+    # 用户在审批面点了「停下」（或等不到人）：这一轮是被人停的，不是出错
+    stopped_by_user: bool = False
+    stop_note: str | None = None
 
 
 class TurnDriver(Protocol):
@@ -183,12 +187,62 @@ class Advisor:
             await repo.commit()
             thread_id = task["thread_id"]
             question = task["original_input"].get("input", {})
+            # 本步之前用户答过的：开步前的问题（ask_before）、停下时附的要求、模型问过的
+            answered = await self._answers_for_step(repo, task, step)
+            if step.ask_before and answered["ask_before"] is None:
+                # 工作台发起的澄清：开步前一次问完（approval.md「Task 级：澄清·工作台发起」）
+                await led.attempt_transition(
+                    attempt_id, AttemptState.CANCELLED, failure_code="ask_before"
+                )
+                await repo.commit()
+                it = await led.open_interaction(
+                    task_id,
+                    kind="question",
+                    prompt=InteractionPrompt(
+                        title=f"开始「{step.title}」之前，专家想先问你",
+                        question=step.ask_before[0].question
+                        if len(step.ask_before) == 1
+                        else f"{len(step.ask_before)} 个问题",
+                        options=[],
+                        subject={
+                            "step_id": step.step_id,
+                            "ask_before": True,
+                            "questions": [
+                                {
+                                    "id": q.id,
+                                    "header": "",
+                                    "question": q.question,
+                                    "options": [
+                                        {
+                                            "label": o.get("label", ""),
+                                            "description": "",
+                                            "id": o.get("id", ""),
+                                        }
+                                        for o in q.options
+                                    ],
+                                    "is_other": q.allow_other,
+                                    "is_secret": False,
+                                }
+                                for q in step.ask_before
+                            ],
+                        },
+                    ),
+                    waiting_reason=WaitingReason.INPUT,
+                )
+                log.info(
+                    "step %s asks before start interaction=%s",
+                    step.step_id,
+                    it["interaction_id"],
+                )
+                return TaskState.WAITING
             text = self.compose(
                 step,
                 question,
                 inputs,
                 reworks,
                 records_task=task_id if self.records else None,
+                ask_before_answers=answered["ask_before"],
+                change_request=answered["change_request"],
             )
 
         result = await self.driver.run_turn(thread_id, text)
@@ -214,6 +268,58 @@ class Advisor:
                         task_id, TaskState.CANCELLED, reason={"by": "user"}
                     )
                 )["state"]
+            if result.stopped_by_user:
+                # 用户在审批面点了「停下」或等不到人：这一步停在这里等用户决定（approval.md：WAITING(USER)，
+                # 这里用现成的 input 待办表达：带着要求重做，或停止）
+                await led.attempt_transition(
+                    attempt_id,
+                    AttemptState.FAILED,
+                    consumed=consumed,
+                    tokens=result.tokens,
+                    failure_code="stopped",
+                    retryable=True,
+                )
+                await repo.append_event(
+                    session_id=str(task["session_id"]),
+                    kind="task",
+                    event_type="step/stopped",
+                    payload={
+                        "step_id": step.step_id,
+                        "note": result.stop_note,
+                        "by": "user",
+                    },
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                )
+                await repo.commit()
+                it = await led.open_interaction(
+                    task_id,
+                    kind="input",
+                    prompt=InteractionPrompt(
+                        title=f"你停下了第「{step.title}」步",
+                        question="带着你的要求重做这一步，还是停止？"
+                        if result.stop_note
+                        else "重做这一步，还是停止？",
+                        options=[
+                            {"id": "rework", "label": "重做这一步"},
+                            {"id": "stop", "label": "停止"},
+                        ],
+                        subject={
+                            "step_id": step.step_id,
+                            "stopped": True,
+                            "note": result.stop_note,
+                            "last_output": (result.final_text or "")[:2000],
+                        },
+                    ),
+                    waiting_reason=WaitingReason.INPUT,
+                    attempt_id=attempt_id,
+                )
+                log.info(
+                    "step %s stopped by user interaction=%s",
+                    step.step_id,
+                    it["interaction_id"],
+                )
+                return TaskState.WAITING
             if result.environment_lost or (result.error and not result.final_text):
                 await led.attempt_transition(
                     attempt_id,
@@ -406,6 +512,45 @@ class Advisor:
             )
             return TaskState.WAITING
 
+    async def _answers_for_step(
+        self, repo: WorkbenchStore, task: dict[str, Any], step: StepContract
+    ) -> dict[str, Any]:
+        """这一步已经问过用户、用户答过的：开步前的问题，和停下 / 返工时附的要求。"""
+        out: dict[str, Any] = {"ask_before": None, "change_request": None}
+        consumed = [
+            it
+            for it in await repo.list_interactions(
+                session_id=str(task["session_id"]), status="consumed"
+            )
+            if str(it.get("task_id") or "") == str(task["id"])
+            and ((it.get("prompt") or {}).get("subject") or {}).get("step_id")
+            == step.step_id
+        ]
+        for it in consumed:
+            subject = (it.get("prompt") or {}).get("subject") or {}
+            response = it.get("response") or {}
+            if it["kind"] == "question" and subject.get("ask_before"):
+                answers = (
+                    response.get("answers")
+                    or (response.get("answer") or {}).get("answers")
+                    or {}
+                )
+                out["ask_before"] = {
+                    q["id"]: answers.get(q["id"])
+                    for q in subject.get("questions") or []
+                }
+            if it["kind"] == "input":
+                answer = response.get("answer")
+                note = None
+                if isinstance(answer, dict):
+                    note = answer.get("text") or answer.get("note")
+                elif isinstance(answer, str):
+                    note = answer
+                note = note or subject.get("note")
+                if note and response.get("decision") == "rework":
+                    out["change_request"] = str(note)
+        return out
+
     async def _no_data(
         self,
         led: Ledger,
@@ -527,6 +672,8 @@ class Advisor:
         reworks: int,
         *,
         records_task: str | None = None,
+        ask_before_answers: dict[str, Any] | None = None,
+        change_request: str | None = None,
     ) -> str:
         parts = [
             f"# Advisor step: {step.title} ({step.step_id}, v{step.step_version})",
@@ -537,7 +684,25 @@ class Advisor:
             "",
             "## Method for this step",
             step.method_text,
+            "",
+            "## Rules",
+            NO_DETOUR,
+            "If you need information you cannot obtain, ask the user with the request_user_input tool "
+            "when it is available; if you get no answer, state your assumption explicitly and continue.",
         ]
+        if ask_before_answers:
+            parts += ["", "## Answers the user gave before this step"]
+            for q in step.ask_before:
+                parts.append(
+                    f"- {q.question}: {ask_before_answers.get(q.id) or '(no answer)'}"
+                )
+        if change_request:
+            parts += [
+                "",
+                "## The user's change request for this step",
+                change_request,
+                "Redo this step following the request above.",
+            ]
         if step.tools:
             parts += ["", "## Tools allowed in this step", ", ".join(step.tools)]
         if inputs:

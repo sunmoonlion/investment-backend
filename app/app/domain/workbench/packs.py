@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.domain.workbench.tool_policy import (
+    ToolPolicy,
+    ToolPolicyOverride,
+    merge_policy,
+)
 
 
 class Strict(BaseModel):
@@ -48,6 +54,13 @@ class MissingData(Strict):
     code: str = "security_code"  # 证券代码写在哪
 
 
+class AskBefore(Strict):
+    id: str
+    question: str
+    options: tuple[dict[str, str], ...] = ()  # {"id","label"}；空 = 只自由作答
+    allow_other: bool = True
+
+
 class StepContract(Strict):
     step_id: str
     step_version: str = "1"
@@ -78,6 +91,10 @@ class StepContract(Strict):
     input_max_chars: int = 8000  # 每个上游交回物放进 turn 输入的字符上限；超出会注明
     # 这一步会发现「没有数据」的，写明怎么认。认出来就不重做（重做也不会有数据），直接问用户
     missing_data: MissingData | None = None
+    # 工具级审批的步骤级覆盖：只能比专家包更严或更具体（approval.md「工具级：策略」）
+    tool_policy: ToolPolicyOverride | None = None
+    # 开步前工作台先问用户的问题（approval.md「Task 级：澄清·工作台发起」）；答案进 compose
+    ask_before: tuple[AskBefore, ...] = ()
 
 
 class DossierBlock(Strict):
@@ -106,17 +123,28 @@ class ExpertPack(Strict):
     internal: bool = False  # 只给我们自己测机制用，不进清单
     dossier: tuple[DossierBlock, ...] = ()
     workflow: tuple[StepContract, ...]
+    # 2026-10-12 起由 tool_policy 三档表代替；留着只为老数据读得出来，运行时不看它
     auto_allow: dict[str, bool] = Field(
         default_factory=lambda: {
             "file_change_in_project": True,
             "command_escalation": False,
         }
     )
+    tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     answers: dict[str, str] = Field(default_factory=dict)  # 六问
     requires_tools: bool = False
 
+    @model_validator(mode="after")
+    def _steps_only_stricter(self) -> ExpertPack:
+        for st in self.workflow:
+            merge_policy(self.tool_policy, st.tool_policy)  # 放宽的在这里就报错
+        return self
+
     def step(self, index: int) -> StepContract | None:
         return self.workflow[index] if 0 <= index < len(self.workflow) else None
+
+    def policy_for(self, step: StepContract | None) -> ToolPolicy:
+        return merge_policy(self.tool_policy, step.tool_policy if step else None)
 
     def index_of(self, step_id: str) -> int:
         for i, s in enumerate(self.workflow):
