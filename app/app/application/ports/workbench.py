@@ -498,6 +498,7 @@ class WorkbenchStore(Protocol):
         owner_actor_id: str,
         sandbox_id: str | None,
         provider: str,
+        base_url: str | None,
         ciphertext: str,
         hint: str,
     ) -> dict[str, Any]: ...

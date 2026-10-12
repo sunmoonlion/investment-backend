@@ -17,6 +17,7 @@ WEB_FIELDS = {
     "id",
     "sandbox_id",
     "provider",
+    "base_url",
     "hint",
     "status",
     "created_at",

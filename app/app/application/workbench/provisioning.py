@@ -15,12 +15,15 @@ import secrets
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
+
 from app.application.ports.workbench import (
     Cipher,
     Provisioner,
     RelayAdmin,
     WorkbenchStore,
 )
+from app.application.workbench.provider_endpoint import require_public_endpoint_dns
 from app.application.workbench.tokens import TokenIssuer, jti_of
 from app.domain.workbench.errors import RelayIdentityChanged, WorkbenchError
 
@@ -244,7 +247,8 @@ class SandboxProvisioning:
         spec = {
             "model_provider": self.provisioner.config.model_provider,
             "model": self.provisioner.config.model,
-            "provider_base_url": self.provisioner.config.provider_base_url,
+            "provider_base_url": credential.get("base_url")
+            or self.provisioner.config.provider_base_url,
             "model_key": model_key,
             "relay_token": sandbox_token,
             "relay_user": identity["relay_user"],
@@ -282,6 +286,15 @@ class SandboxProvisioning:
         credential = await self.repo.active_credential(owner)
         if credential is None:
             raise NoCredential("register a model key in settings first")
+        if credential.get("base_url"):
+            try:
+                await anyio.to_thread.run_sync(
+                    require_public_endpoint_dns, credential["base_url"]
+                )
+            except ValueError as exc:
+                raise ProvisionerFailed(
+                    "the configured model endpoint is no longer publicly reachable"
+                ) from exc
         await self._check_capacity(owner)
         identity, fresh_agent_token = await self.ensure_relay_identity(owner)
         sb_id, result = await self._upsert_sandbox(

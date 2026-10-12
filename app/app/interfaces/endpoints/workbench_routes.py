@@ -14,7 +14,7 @@ from typing import Any
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -29,6 +29,10 @@ from app.application.workbench.ledger import Ledger
 from app.application.workbench.provisioning import (
     ProvisioningUnavailable,
     SandboxProvisioning,
+)
+from app.application.workbench.provider_endpoint import (
+    require_public_endpoint_dns,
+    validate_endpoint_syntax,
 )
 from app.application.workbench.session_service import SessionService
 from app.application.workbench.tokens import TokenIssuer
@@ -138,7 +142,22 @@ class Prefs(Strict):
 class AddCredential(Strict):
     provider: str = Field(min_length=1, max_length=64)
     api_key: str = Field(min_length=8, max_length=512)
+    base_url: str | None = Field(default=None, max_length=2048)
     sandbox_id: str | None = None
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def normalize_base_url(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url_syntax(cls, value: str | None) -> str | None:
+        return validate_endpoint_syntax(value)
 
 
 class Conclusion(Strict):
@@ -1049,6 +1068,14 @@ async def add_credential(
 ):
     """key 只经 HTTPS 提交一次，服务端存密文，接口永不回显（F-WEB-01、C-D9）。"""
     repo = workbench_store(session)
+    if body.base_url:
+        try:
+            await anyio.to_thread.run_sync(require_public_endpoint_dns, body.base_url)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_model_endpoint", "message": str(exc)},
+            ) from exc
     if body.sandbox_id:
         try:
             await repo.get_sandbox(body.sandbox_id, owner_actor_id=_actor(principal))
@@ -1060,6 +1087,7 @@ async def add_credential(
             owner_actor_id=_actor(principal),
             sandbox_id=body.sandbox_id,
             provider=body.provider,
+            base_url=body.base_url,
             ciphertext=ciphertext,
             hint=body.api_key[-4:],
         )

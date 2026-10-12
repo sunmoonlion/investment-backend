@@ -1345,20 +1345,22 @@ class WorkbenchRepository:
         owner_actor_id: str,
         sandbox_id: str | None,
         provider: str,
+        base_url: str | None,
         ciphertext: str,
         hint: str,
     ) -> dict[str, Any]:
         cid = str(uuid.uuid4())
         await self.session.execute(
             text(
-                """insert into workbench_credentials (id, owner_actor_id, sandbox_id, provider, ciphertext, hint, status)
-                   values (:id, :o, :s, :p, :c, :h, 'active')"""
+                """insert into workbench_credentials (id, owner_actor_id, sandbox_id, provider, base_url, ciphertext, hint, status)
+                   values (:id, :o, :s, :p, :u, :c, :h, 'active')"""
             ),
             {
                 "id": cid,
                 "o": owner_actor_id,
                 "s": sandbox_id,
                 "p": provider,
+                "u": base_url,
                 "c": ciphertext,
                 "h": hint,
             },
@@ -1366,6 +1368,7 @@ class WorkbenchRepository:
         return {
             "id": cid,
             "provider": provider,
+            "base_url": base_url,
             "hint": hint,
             "status": "active",
             "sandbox_id": sandbox_id,
@@ -1374,7 +1377,7 @@ class WorkbenchRepository:
     async def list_credentials(self, owner_actor_id: str) -> list[dict[str, Any]]:
         r = await self.session.execute(
             text(
-                """select id, sandbox_id, provider, hint, status, created_at, revoked_at
+                """select id, sandbox_id, provider, base_url, hint, status, created_at, revoked_at
                    from workbench_credentials where owner_actor_id = :o order by created_at desc"""
             ),
             {"o": owner_actor_id},
@@ -1716,7 +1719,7 @@ class WorkbenchRepository:
     async def active_credential(self, owner_actor_id: str) -> dict[str, Any] | None:
         r = await self.session.execute(
             text(
-                """select id, provider, ciphertext, hint from workbench_credentials
+                """select id, provider, base_url, ciphertext, hint from workbench_credentials
                    where owner_actor_id = :o and status = 'active' order by created_at desc limit 1"""
             ),
             {"o": owner_actor_id},

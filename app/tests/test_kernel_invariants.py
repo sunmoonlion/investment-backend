@@ -60,6 +60,7 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20261012_0015_tool_approvals.py",
         "20261012_0016_memories.py",
         "20261012_0017_session_archive.py",
+        "20261012_0018_credential_base_url.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert sum("down_revision = None" in content for content in contents) == 1
@@ -76,6 +77,10 @@ def test_one_linear_canonical_migration_chain() -> None:
     assert 'down_revision = "20260925_0011"' in contents[11]
     assert 'down_revision = "20260929_0012"' in contents[12]
     assert 'down_revision = "20261007_0013"' in contents[13]
+    assert 'down_revision = "20261009_0014"' in contents[14]
+    assert 'down_revision = "20261012_0015"' in contents[15]
+    assert 'down_revision = "20261012_0016"' in contents[16]
+    assert 'down_revision = "20261012_0017"' in contents[17]
 
 
 def test_uuid_mixin_has_client_and_database_defaults() -> None:
