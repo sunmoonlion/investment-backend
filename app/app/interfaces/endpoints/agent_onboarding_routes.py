@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
@@ -57,11 +58,21 @@ from core.config import AgentDownload, get_settings
 public_router = APIRouter(tags=["Agent onboarding"])
 owner_router = APIRouter(tags=["Agent onboarding"])
 logger = logging.getLogger(__name__)
-VERIFY_PATH = "/zh-CN/workbench/settings#computer"
+VERIFY_PATH = "/zh-CN/workbench/settings"
+VERIFY_ANCHOR = "#computer"
 
 
-def pairing_verify_url(web_frontend_base_url: str) -> str:
-    return web_frontend_base_url.rstrip("/") + VERIFY_PATH
+def pairing_verify_url(web_frontend_base_url: str, user_code: str | None = None) -> str:
+    """用户允许这台电脑的那一页。
+
+    带 `code` 时网页自动填码、自动核对，用户只剩看一眼机器名再点「允许」
+    （所有者 2026-10-12 实测：两个标签一前一后弹出来，用户不知道码要誊到哪）。码本身
+    5 分钟一次性、还要用户点允许才生效，进地址栏可以接受；令牌从不进地址。
+    """
+    base = web_frontend_base_url.rstrip("/") + VERIFY_PATH
+    if user_code:
+        base += "?" + urlencode({"code": user_code})
+    return base + VERIFY_ANCHOR
 
 
 class StrictBody(BaseModel):
@@ -73,7 +84,9 @@ class CreatePairing(StrictBody):
     os: str = Field(min_length=1, max_length=64)
     agent_version: str = Field(min_length=1, max_length=64)
     codex_version: str = Field(min_length=1, max_length=64)
-    device_secret_sha256: str = Field(pattern=r"^[a-f0-9]{64}$", min_length=64, max_length=64)
+    device_secret_sha256: str = Field(
+        pattern=r"^[a-f0-9]{64}$", min_length=64, max_length=64
+    )
 
     @field_validator("machine_name", "os", "agent_version", "codex_version")
     @classmethod
@@ -86,7 +99,9 @@ class CreatePairing(StrictBody):
 
 class DeviceSecret(StrictBody):
     model_config = ConfigDict(extra="forbid", strict=True)
-    device_secret: str = Field(min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    device_secret: str = Field(
+        min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
 
 class PairingLookup(StrictBody):
@@ -165,7 +180,11 @@ async def create_pairing_request(
             raise AgentPairingSlowDown("too many pairing requests")
         repo = workbench_store(session)
         service = _onboarding(repo, cipher)
-        verify_url = pairing_verify_url(settings.web_frontend_base_url)
+        base_url = settings.web_frontend_base_url
+
+        def verify_url(user_code: str) -> str:
+            return pairing_verify_url(base_url, user_code)
+
         async with repo.transaction():
             result = await service.create_request(
                 machine_name=body.machine_name,
@@ -318,7 +337,9 @@ async def issue_agent_install_command(
     }
 
 
-@public_router.get("/agent-install/{credential}/script", response_class=PlainTextResponse)
+@public_router.get(
+    "/agent-install/{credential}/script", response_class=PlainTextResponse
+)
 async def agent_install_script(
     credential: str,
     request: Request,
@@ -362,7 +383,9 @@ async def agent_install_script(
             headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
     except WorkbenchError:
-        raise HTTPException(status_code=404, detail="agent_download_unavailable") from None
+        raise HTTPException(
+            status_code=404, detail="agent_download_unavailable"
+        ) from None
 
 
 @public_router.api_route("/agent-install/{credential}/package", methods=["GET", "HEAD"])
@@ -374,11 +397,15 @@ async def agent_install_package(
     require_workbench_enabled()
     settings = get_settings()
     if request.query_params:
-        raise HTTPException(status_code=400, detail="agent_download_parameters_not_supported")
+        raise HTTPException(
+            status_code=400, detail="agent_download_parameters_not_supported"
+        )
     try:
         release = _download_ready(settings)
     except WorkbenchError:
-        raise HTTPException(status_code=404, detail="agent_download_unavailable") from None
+        raise HTTPException(
+            status_code=404, detail="agent_download_unavailable"
+        ) from None
     etag = f'"{release.zip_sha256}"'
     headers = {
         "Accept-Ranges": "bytes",
@@ -400,10 +427,15 @@ async def agent_install_package(
     try:
         await _consume_install_credential(workbench_store(session), credential)
     except WorkbenchError:
-        raise HTTPException(status_code=404, detail="agent_download_unavailable") from None
+        raise HTTPException(
+            status_code=404, detail="agent_download_unavailable"
+        ) from None
     assert release.object_key is not None
     identity = ReleaseIdentity(
-        release.object_key, release.size_bytes, release.zip_sha256, release.manifest_sha256
+        release.object_key,
+        release.size_bytes,
+        release.zip_sha256,
+        release.manifest_sha256,
     )
     from app.bootstrap.workbench import agent_release_store
 
@@ -420,7 +452,9 @@ async def agent_install_package(
         transfer = await run_in_threadpool(store.open, identity, object_etag, span)
     except ReleaseUnavailable as exc:
         await run_in_threadpool(store.close)
-        raise HTTPException(status_code=503, detail="agent_download_unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="agent_download_unavailable"
+        ) from exc
     except Exception:
         await run_in_threadpool(store.close)
         raise

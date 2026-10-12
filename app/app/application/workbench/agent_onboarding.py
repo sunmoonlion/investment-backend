@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -30,7 +31,9 @@ def normalized_code(value: str) -> str:
 
 
 def code_digest(value: str, key: bytes) -> str:
-    return hmac.new(key, normalized_code(value).encode("ascii"), hashlib.sha256).hexdigest()
+    return hmac.new(
+        key, normalized_code(value).encode("ascii"), hashlib.sha256
+    ).hexdigest()
 
 
 def secret_digest(value: str) -> str:
@@ -43,7 +46,9 @@ def install_digest(value: str) -> str:
 
 def valid_pairing_code(value: str) -> str | None:
     normalized = normalized_code(value)
-    if len(normalized) != 8 or any(character not in CODE_ALPHABET for character in normalized):
+    if len(normalized) != 8 or any(
+        character not in CODE_ALPHABET for character in normalized
+    ):
         return None
     return normalized
 
@@ -73,7 +78,7 @@ class AgentOnboarding:
         codex_version: str,
         device_secret_sha256: str,
         source_ip: str,
-        verify_url: str,
+        verify_url: str | Callable[[str], str],
     ) -> dict[str, Any]:
         if len(device_secret_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in device_secret_sha256
@@ -102,7 +107,9 @@ class AgentOnboarding:
                     "user_code": f"{code[:4]}-{code[4:]}",
                     "expires_in": int(PAIRING_TTL.total_seconds()),
                     "interval": int(POLL_INTERVAL.total_seconds()),
-                    "verify_url": verify_url,
+                    "verify_url": verify_url(f"{code[:4]}-{code[4:]}")
+                    if callable(verify_url)
+                    else verify_url,
                 }
         raise AgentPairingUnavailable("pairing capacity unavailable")
 
@@ -154,9 +161,10 @@ class AgentOnboarding:
                     raise AgentPairingRejected("码不对或已过期")
                 previous = await self.repo.get_relay_identity(owner_actor_id)
                 if previous is None:
-                    identity, agent_token = await self.provisioning.ensure_relay_identity(
-                        owner_actor_id
-                    )
+                    (
+                        identity,
+                        agent_token,
+                    ) = await self.provisioning.ensure_relay_identity(owner_actor_id)
                     if not agent_token:
                         raise AgentPairingUnavailable("could not issue agent identity")
                     expires_at = self.provisioning.identity_metadata(identity)[
@@ -167,16 +175,16 @@ class AgentOnboarding:
                     revision = self.provisioning.identity_metadata(previous)[
                         "identity_revision"
                     ]
-                    rotated = await self.provisioning.rotate_relay_identity_in_operation(
-                        owner_actor_id, revision
+                    rotated = (
+                        await self.provisioning.rotate_relay_identity_in_operation(
+                            owner_actor_id, revision
+                        )
                     )
                     agent_token = rotated["relay"]["agent_token"]
                     expires_at = rotated["relay"]["agent_token_expires_at"]
                     relay_user = rotated["relay"]["user"]
                 parsed_expiry = (
-                    datetime.fromisoformat(expires_at)
-                    if expires_at
-                    else None
+                    datetime.fromisoformat(expires_at) if expires_at else None
                 )
                 ok = await self.repo.update_agent_pairing(
                     pairing_id,
@@ -207,7 +215,11 @@ class AgentOnboarding:
     async def deny(self, *, owner_actor_id: str, pairing_id: str) -> None:
         async with self.repo.transaction():
             row = await self.repo.get_agent_pairing(pairing_id, for_update=True)
-            if row is None or row["status"] != "pending" or row["expires_at"] <= datetime.now(UTC):
+            if (
+                row is None
+                or row["status"] != "pending"
+                or row["expires_at"] <= datetime.now(UTC)
+            ):
                 raise AgentPairingRejected("pairing request not found or expired")
             await self.repo.update_agent_pairing(
                 pairing_id,
@@ -221,7 +233,9 @@ class AgentOnboarding:
         expected = secret_digest(device_secret)
         async with self.repo.transaction():
             row = await self.repo.get_agent_pairing(pairing_id, for_update=True)
-            if row is None or not hmac.compare_digest(row["device_secret_hash"], expected):
+            if row is None or not hmac.compare_digest(
+                row["device_secret_hash"], expected
+            ):
                 raise AgentPairingRejected("pairing request not found")
             now = datetime.now(UTC)
             if row["status"] in ("pending", "approved") and row["expires_at"] <= now:
@@ -274,7 +288,9 @@ class AgentOnboarding:
         expected = secret_digest(device_secret)
         async with self.repo.transaction():
             row = await self.repo.get_agent_pairing(pairing_id, for_update=True)
-            if row is None or not hmac.compare_digest(row["device_secret_hash"], expected):
+            if row is None or not hmac.compare_digest(
+                row["device_secret_hash"], expected
+            ):
                 raise AgentPairingRejected("pairing request not found")
             if row["status"] == "pending" and row["expires_at"] > datetime.now(UTC):
                 await self.repo.update_agent_pairing(
@@ -289,5 +305,3 @@ class AgentOnboarding:
 
 def new_install_credential() -> str:
     return secrets.token_urlsafe(32)
-
-

@@ -35,6 +35,13 @@ def test_pairing_verify_url_points_at_the_settings_computer_anchor():
     )
 
 
+def test_pairing_verify_url_carries_the_code_so_the_user_only_confirms():
+    assert (
+        pairing_verify_url("https://investment.example", "AB3D-7K9Q")
+        == "https://investment.example/zh-CN/workbench/settings?code=AB3D-7K9Q#computer"
+    )
+
+
 class Cipher:
     def encrypt(self, value: bytes) -> bytes:
         return b"enc:" + value
@@ -106,12 +113,13 @@ async def test_create_pairing_persists_only_code_digest_and_secret_digest():
         codex_version="0.155.1",
         device_secret_sha256=secret_digest(device_secret),
         source_ip="unknown",
-        verify_url="https://example.test/settings#computer",
+        verify_url=lambda code: f"https://example.test/settings?code={code}#computer",
     )
     assert len(result["user_code"].replace("-", "")) == 8
-    assert store.inserted["code_hash"] == code_digest(
-        result["user_code"], b"k" * 32
+    assert result["verify_url"] == (
+        f"https://example.test/settings?code={result['user_code']}#computer"
     )
+    assert store.inserted["code_hash"] == code_digest(result["user_code"], b"k" * 32)
     assert result["user_code"] not in str(store.inserted)
     assert store.inserted["device_secret_hash"] == secret_digest(device_secret)
     assert device_secret not in str(store.inserted)
@@ -253,16 +261,10 @@ async def test_invalid_unicode_approval_code_returns_not_found():
 
 def test_forwarded_address_is_ignored_without_explicit_trust():
     assert source_ip("192.0.2.10", "198.51.100.44", "") == "192.0.2.10"
-    assert (
-        source_ip("192.0.2.10", "198.51.100.44", "192.0.2.0/24")
-        == "198.51.100.44"
-    )
+    assert source_ip("192.0.2.10", "198.51.100.44", "192.0.2.0/24") == "198.51.100.44"
     assert source_ip("192.0.2.10", None, "192.0.2.0/24") == "unknown"
     assert source_ip("192.0.2.10", "spoofed, bad-address", "192.0.2.0/24") == "unknown"
-    assert (
-        source_ip("203.0.113.5", "198.51.100.44", "192.0.2.0/24")
-        == "203.0.113.5"
-    )
+    assert source_ip("203.0.113.5", "198.51.100.44", "192.0.2.0/24") == "203.0.113.5"
     assert source_ip(None, "198.51.100.44", "") == "unknown"
 
 
@@ -302,7 +304,10 @@ def test_forwarded_chain_accepts_multiple_header_fields_in_wire_order():
 def test_fully_trusted_chain_uses_leftmost_and_invalid_chain_is_unknown():
     trusted = "127.0.0.1/32,10.20.0.0/24"
     assert source_ip("10.20.0.8", "10.20.0.2, 127.0.0.1", trusted) == "10.20.0.2"
-    assert source_ip("10.20.0.8", "198.51.100.44, invalid, 10.20.0.9", trusted) == "unknown"
+    assert (
+        source_ip("10.20.0.8", "198.51.100.44, invalid, 10.20.0.9", trusted)
+        == "unknown"
+    )
 
 
 def test_onboarding_routes_are_registered_and_config_defaults_to_no_proxy_trust():
@@ -345,4 +350,3 @@ def test_uvicorn_access_log_redacts_install_capability():
     line = record.getMessage()
     assert credential not in line
     assert "/api/agent-install/[redacted]/package" in line
-
