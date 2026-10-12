@@ -14,7 +14,9 @@ from app.domain.workbench.errors import WorkbenchError
 SERVICE_PROTOCOL = 1
 SERVICE_SOFTWARE = "workbench"
 MAX_FRAME_BYTES = 1024 * 1024  # 0022：单帧 ≤ 1 MiB
-MAX_READ_BYTES = 1024 * 1024  # fs/readFile 一次 ≤ 1 MiB
+MAX_READ_BYTES = (
+    512 * 1024
+)  # fs/readFile 一次 ≤ 512 KiB 原文：base64 后约 683 KiB，稳在 1 MiB 帧内（astra 2026-10-12 实测 1 MiB 会超）
 MAX_PATH_CHARS = 1024
 CALL_TIMEOUT_SECONDS = 30.0
 

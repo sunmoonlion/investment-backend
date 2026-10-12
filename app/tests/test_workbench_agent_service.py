@@ -222,7 +222,7 @@ async def test_routes_pass_through_and_check_ownership(make_client, db):  # noqa
         assert fake.calls[-1] == (
             "u-aaa",
             "fs/readFile",
-            {"path": "C:\\r\\a.md", "offset": 5, "length": 1024 * 1024},
+            {"path": "C:\\r\\a.md", "offset": 5, "length": 512 * 1024},
         )
         r = await http.get(f"/api/workbench/environments/{env}/service")
         assert r.status_code == 200 and fake.calls[-1][1] == "service/hello"
@@ -248,7 +248,7 @@ async def test_routes_pass_through_and_check_ownership(make_client, db):  # noqa
         assert (
             await http.get(
                 f"/api/workbench/environments/{env}/fs/file",
-                params={"path": "C:\\r\\a", "length": 2_000_000},
+                params={"path": "C:\\r\\a", "length": 600_000},
             )
         ).status_code == 422
         assert (
