@@ -9,7 +9,6 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, Path, Query
-from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,39 +176,3 @@ async def interaction(
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return {"contract_version": CONTRACT_VERSION, "interaction": view}
-
-
-@router.get("/tasks/{task_id}/dossier")
-async def dossier(
-    task_id: str,
-    principal: Principal = Depends(get_web_current_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> dict[str, Any]:
-    """底稿，按这位专家登记的排法排好。结论栏只放用户自己存过的。"""
-    try:
-        view = await ExpertDesk(workbench_store(session)).dossier(
-            task_id, owner_actor_id=_actor(principal)
-        )
-    except WorkbenchError as exc:
-        raise _http(exc) from exc
-    return {"contract_version": CONTRACT_VERSION, **view}
-
-
-@router.get("/tasks/{task_id}/dossier/export", response_class=PlainTextResponse)
-async def dossier_export(
-    task_id: str,
-    principal: Principal = Depends(get_web_current_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> PlainTextResponse:
-    """整份底稿导出成 Markdown，连同出处与「我的结论」。"""
-    try:
-        body = await ExpertDesk(workbench_store(session)).dossier_export(
-            task_id, owner_actor_id=_actor(principal)
-        )
-    except WorkbenchError as exc:
-        raise _http(exc) from exc
-    return PlainTextResponse(
-        body,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="dossier-{task_id}.md"'},
-    )

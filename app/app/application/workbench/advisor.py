@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -17,6 +17,11 @@ from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
 from app.application.workbench.acceptance import judge
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
+from app.domain.workbench.deliverables import (
+    DELIVERABLE_RULES,
+    HANDBACK_RULES,
+    deliverable_seen,
+)
 from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
@@ -41,6 +46,8 @@ class TurnResult:
     # 用户在审批面点了「停下」（或等不到人）：这一轮是被人停的，不是出错
     stopped_by_user: bool = False
     stop_note: str | None = None
+    # 这一轮用补丁改到的文件（绝对路径）；成稿文件写了没有就看它（0015 §3.3）
+    files: list[str] = field(default_factory=list)
 
 
 class TurnDriver(Protocol):
@@ -249,6 +256,7 @@ class Advisor:
                         str(task["owner_actor_id"]), enabled_only=True
                     )
                 ),
+                last_step=pack.workflow[-1].step_id == step.step_id,
             )
 
         result = await self.driver.run_turn(thread_id, text)
@@ -367,12 +375,30 @@ class Advisor:
                 return TaskState.WAITING
             verdict = judge(result.final_text, step.acceptance)
             if verdict.ok:
+                # 成稿文件写了没有：只认这一轮报过的 fileChange；缺了记事件、不填路径，
+                # 不算验收不过（硬检查等账 87 的文件通道，0015 §3.3）
+                written = None
+                if step.output_file:
+                    written = deliverable_seen(result.files, step.output_file)
+                    await repo.append_event(
+                        session_id=str(task["session_id"]),
+                        kind="task",
+                        event_type="step/deliverable",
+                        payload={
+                            "step_id": step.step_id,
+                            "path": step.output_file,
+                            "seen": written,
+                        },
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                    )
                 art = await repo.put_artifact(
                     task_id=task_id,
                     attempt_id=attempt_id,
                     name=step.output_artifact,
                     kind="step",
                     content=verdict.parsed,
+                    workspace_path=step.output_file if written else None,
                 )
                 await led.attempt_transition(
                     attempt_id,
@@ -641,6 +667,9 @@ class Advisor:
         attempts = await repo.list_attempts(task_id)
         did = [f"{a['step_id']}: {a['status']}" for a in attempts]
         verified = [e for e in await repo.list_artifacts(task_id)]
+        files = sorted(
+            {a["workspace_path"] for a in verified if a.get("workspace_path")}
+        )
         handback = {
             "did": did,
             "verified": [
@@ -648,7 +677,13 @@ class Advisor:
                 for a in verified
             ],
             "unknown": [],
-            "workspace_restore": "顾问没有直接改动工作区文件；如有改动见各步 Artifact",
+            # 成稿在项目目录里（0015）；这里只记路径作证据
+            "files": files,
+            "workspace_restore": (
+                "成稿写在项目目录：" + "、".join(files) + "；不要就删掉这些文件"
+                if files
+                else "顾问没有登记写出的成稿文件；如有改动见各步 Artifact 与对话里的改动面板"
+            ),
             "budget": task["budget"],
         }
         hb = await repo.put_artifact(
@@ -681,6 +716,7 @@ class Advisor:
         ask_before_answers: dict[str, Any] | None = None,
         change_request: str | None = None,
         user_facts: str | None = None,
+        last_step: bool = False,
     ) -> str:
         parts = [
             f"# Advisor step: {step.title} ({step.step_id}, v{step.step_version})",
@@ -731,13 +767,25 @@ class Advisor:
             parts += [
                 "",
                 "## Records of this project (read only when needed)",
-                "Earlier conversations and working papers of this project can be read "
-                "with the tools list_project_conversations, read_project_conversation, "
-                "list_project_dossiers and read_project_dossier. Pass "
-                f'task="{records_task}" on every call. Use them only when the question '
-                "refers to earlier work in this project. They never replace the data "
-                "tools: numbers still come from the data tools of this step.",
+                "Earlier conversations of this project can be read with the tools "
+                "list_project_conversations and read_project_conversation. Pass "
+                f'task="{records_task}" on every call. Earlier deliverables are files '
+                "in the project directory: read them there. Use these only when the "
+                "question refers to earlier work in this project. They never replace "
+                "the data tools: numbers still come from the data tools of this step.",
             ]
+        if step.output_file:
+            # 成稿是项目里的文件，给用户看的唯一一份（0015 §3.3）；JSON 仍回正文做机器验收
+            parts += [
+                "",
+                "## Deliverable file",
+                f"Write the deliverable of this step to `{step.output_file}` (path relative "
+                "to the project directory; create the folder if needed; overwrite an "
+                "earlier version). Use the apply_patch/file-edit tool so the change is "
+                "recorded, not a shell redirect. " + DELIVERABLE_RULES,
+            ]
+            if last_step:
+                parts += ["", "## Handback file", HANDBACK_RULES]
         parts += [
             "",
             "## Output",

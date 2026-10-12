@@ -287,51 +287,6 @@ async def test_credentials_never_echo_the_key(make_client, db):  # noqa: F811
     assert listed[0]["status"] == "revoked"
 
 
-async def test_conclusion_is_a_user_draft_artifact(make_client):
-    http = make_client(A)
-    env, sb, _first = await bootstrap(http)
-    sid = (
-        await http.post(
-            "/api/workbench/sessions",
-            json={
-                "environment_id": env,
-                "sandbox_id": sb,
-                "project_root": "/home/u/research/p",
-            },
-        )
-    ).json()["session_id"]
-    tid = (
-        await http.post(
-            f"/api/workbench/sessions/{sid}/handover",
-            json={
-                "idempotency_key": "concl-000001",
-                "profile_id": "SMOKE",
-                "original_input": {"text": "q"},
-                "budget_limit": "1",
-            },
-        )
-    ).json()["task_id"]
-    r = await http.put(
-        f"/api/workbench/tasks/{tid}/conclusion", json={"text": "第一版结论"}
-    )
-    assert (
-        r.status_code == 200
-        and r.json()["kind"] == "user_draft"
-        and r.json()["version"] == 1
-    )
-    r = await http.put(
-        f"/api/workbench/tasks/{tid}/conclusion", json={"text": "第二版"}
-    )
-    assert r.json()["version"] == 2
-    arts = (await http.get(f"/api/workbench/tasks/{tid}/artifacts")).json()["artifacts"]
-    assert [
-        (a["name"], a["version"], a["kind"], a["content"]["text"]) for a in arts
-    ] == [("conclusion", 2, "user_draft", "第二版")]
-    assert (
-        await make_client(B).get(f"/api/workbench/tasks/{tid}/artifacts")
-    ).status_code == 404
-
-
 async def test_credentials_take_a_public_https_base_url_only(make_client, db):  # noqa: F811
     from cryptography.fernet import Fernet
 

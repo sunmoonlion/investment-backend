@@ -149,10 +149,6 @@ class AddCredential(Strict):
     base_url: str | None = Field(default=None, max_length=512)
 
 
-class Conclusion(Strict):
-    text: str = Field(max_length=20000)
-
-
 def credential_cipher():
     """BYOK 凭据的对称加密（Fernet）；未配置密钥即 503。测试用依赖覆盖注入。"""
     key = get_settings().workbench_credential_key
@@ -706,30 +702,6 @@ async def task_artifacts(
         "contract_version": CONTRACT_VERSION,
         "artifacts": [_plain(a) for a in arts],
     }
-
-
-@router.put("/tasks/{task_id}/conclusion")
-async def put_conclusion(
-    task_id: str,
-    body: Conclusion,
-    principal: Principal = Depends(get_web_current_user),
-    session: AsyncSession = Depends(get_db_session),
-):
-    """结论栏是用户草稿：落为 conclusion 交回物的新版本，永远标 kind=user_draft。"""
-    repo = workbench_store(session)
-    try:
-        await repo.get_task(task_id, owner_actor_id=_actor(principal))
-        async with repo.transaction():
-            art = await repo.put_artifact(
-                task_id=task_id,
-                attempt_id=None,
-                name="conclusion",
-                kind="user_draft",
-                content={"text": body.text, "author": "user"},
-            )
-    except WorkbenchError as exc:
-        raise _http(exc) from exc
-    return _plain(art)
 
 
 # ---------------- sandbox provisioning (0003 D9) ----------------

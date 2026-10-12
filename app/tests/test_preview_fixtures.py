@@ -506,8 +506,6 @@ async def record_everything(world: World) -> None:
         base = f"/api/workbench/tasks/{tid}"
         await rec.get(http, base)
         await rec.get(http, f"{base}/artifacts")
-        await rec.get(http, f"{base}/dossier")
-        await rec.get(http, f"{base}/dossier/export")
         shown = await rec.get(http, f"{base}/steps")
         for step in shown["steps"]:
             await rec.get(http, f"{base}/steps/{step['index']}")
@@ -566,15 +564,6 @@ async def build_full(world: World) -> None:
         replies=fin_review(MOUTAI),
         tools=fin_review_tools(MOUTAI),
         until="SUCCEEDED",
-    )
-    await rec.call(
-        http,
-        "PUT",
-        f"/api/workbench/tasks/{world.tasks['done-concluded']}/conclusion",
-        expect=200,
-        json_body={
-            "text": "毛利率三年都在九成以上，变化不大。\n口径在 2024 年变过一次，和前后两年不能直接比。\n（样例：这是用户自己写的草稿）"
-        },
     )
     # 进行中：问数做到第 3 步
     await world.delegate(

@@ -11,19 +11,14 @@ import uuid
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
-from app.application.workbench.expert_desk import ExpertDesk, question_of
 from app.domain.workbench.errors import NotFound, RecordsRefused
-from app.domain.workbench.packs import find_pack
 from app.domain.workbench.records import (
-    DOSSIER_CHARS,
     FIRST_CHARS,
-    clip,
     one_line,
     page_of,
     record_of,
 )
 from app.domain.workbench.states import TASK_TERMINAL, Wheel
-from app.domain.workbench.step_view import TERMINAL_WORDS
 
 RECORD_EVENTS = (
     "turn/requested",
@@ -123,42 +118,4 @@ class ProjectRecords:
             "kind": session["kind"],
             "title": session["title"],
             **shown,
-        }
-
-    async def _dossiers(self, working: dict[str, Any]) -> list[dict[str, Any]]:
-        return await self.repo.list_tasks(
-            owner_actor_id=self.owner, project_id=str(working["project_id"])
-        )
-
-    async def list_dossiers(self, task: Any) -> dict[str, Any]:
-        working = await self._working(task)
-        found = []
-        for row in reversed(await self._dossiers(working)):
-            pack = find_pack(row["profile_id"], row["profile_version"])
-            found.append(
-                {
-                    "dossier": str(row["id"]),
-                    "expert": (pack.name or pack.title) if pack else "",
-                    "state": TERMINAL_WORDS.get(row["state"], "进行中"),
-                    "asked_at": row["created_at"],
-                    "question": one_line(question_of(row), FIRST_CHARS),
-                    "current": str(row["id"]) == str(working["id"]),
-                }
-            )
-        await self._noted(working, "list_project_dossiers")
-        return {"dossiers": found}
-
-    async def read_dossier(self, task: Any, dossier: Any) -> dict[str, Any]:
-        working = await self._working(task)
-        wanted = as_id(dossier, "dossier")
-        if wanted not in {str(row["id"]) for row in await self._dossiers(working)}:
-            raise NotFound("dossier not found")
-        text = await ExpertDesk(self.repo).dossier_export(
-            wanted, owner_actor_id=self.owner
-        )
-        await self._noted(working, "read_project_dossier", dossier=wanted)
-        return {
-            "dossier": wanted,
-            "text": clip(text, DOSSIER_CHARS),
-            "truncated": len(text) > DOSSIER_CHARS,
         }

@@ -75,33 +75,6 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
-    "list_project_dossiers": {
-        "description": (
-            "List the working papers the experts handed back in this project: id, "
-            "expert, final state, when, and the question that was asked."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task": _TASK},
-            "required": ["task"],
-            "additionalProperties": False,
-        },
-    },
-    "read_project_dossier": {
-        "description": "Read one working paper of the project, as text.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task": _TASK,
-                "dossier": {
-                    "type": "string",
-                    "description": "Id from list_project_dossiers.",
-                },
-            },
-            "required": ["task", "dossier"],
-            "additionalProperties": False,
-        },
-    },
     # 知识库（SDD 0011）：用户在我们这里的资料，跨项目。不需要 task；给了就把这次读记在那个委托的账上
     "list_library": {
         "description": (
@@ -213,9 +186,7 @@ async def call(records: ProjectRecords, name: str, args: dict[str, Any]) -> Any:
         return await records.read_conversation(
             args.get("task"), args.get("conversation"), args.get("page", 1)
         )
-    if name == "list_project_dossiers":
-        return await records.list_dossiers(args.get("task"))
-    return await records.read_dossier(args.get("task"), args.get("dossier"))
+    raise ValueError(f"unknown tool {name}")
 
 
 async def handle(

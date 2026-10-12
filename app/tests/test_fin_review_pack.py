@@ -396,3 +396,30 @@ def test_an_input_that_does_not_fit_is_marked_as_truncated():
         SMOKE.workflow[1], {}, {"plan": {"version": 1, "content": big}}, 0
     )
     assert "only the first 8000" in text
+
+
+# ---------------------------------------------------------------- 成稿文件（0015 §3.3，账 80）
+
+
+def test_every_pack_writes_its_deliverable_into_the_project():
+    for pack in BUILTIN_PACKS.values():
+        files = pack.deliverable_files()
+        assert files, pack.pack_id
+        assert pack.workflow[-1].output_file, pack.pack_id
+        assert all(f.endswith(".md") and not f.startswith("/") for f in files), (
+            pack.pack_id
+        )
+
+
+def test_the_turn_input_tells_where_to_write_the_file_and_the_handback_only_last():
+    last = FIN_REVIEW.workflow[-1]
+    text = Advisor.compose(last, {"text": "q"}, {}, 0, last_step=True)
+    assert "## Deliverable file" in text and "`底稿/财报体检-成稿.md`" in text
+    assert "## Handback file" in text and "交回.md" in text
+    assert "buy/sell" in text and "list_project_dossiers" not in text
+    # 不是最后一步：只写成稿，不写交回文件；没有 output_file 的步骤两样都不提
+    middle = Advisor.compose(last, {"text": "q"}, {}, 0, last_step=False)
+    assert "## Deliverable file" in middle and "## Handback file" not in middle
+    plain = Advisor.compose(step("metrics"), {"text": "q"}, {}, 0, records_task="t1")
+    assert "## Deliverable file" not in plain
+    assert "read_project_conversation" in plain and "dossier" not in plain
