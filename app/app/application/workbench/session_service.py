@@ -9,6 +9,7 @@ from app.application.workbench.project_service import ProjectService
 from app.domain.workbench.errors import (
     ConversationChangeRefused,
     NoSandbox,
+    ProjectBusy,
     ProjectHeldByExpert,
     ProjectRequired,
     WheelHeldByOther,
@@ -199,6 +200,28 @@ class SessionService:
                 session_id, owner_actor_id=owner_actor_id, for_update=True
             )
             await self.repo.set_session_title(session_id, clean_title(title))
+            return await self.repo.get_session(session_id)
+
+    async def archive(
+        self, session_id: str, *, owner_actor_id: str, archived: bool = True
+    ) -> dict[str, Any]:
+        """侧边栏的「删除」：从工作台移除这段对话。专家正在这段对话里干活就不许。"""
+        async with self.repo.transaction():
+            session = await self.repo.get_session(
+                session_id, owner_actor_id=owner_actor_id, for_update=True
+            )
+            if archived and session["project_id"] is not None:
+                active = await self.repo.active_task_of_project(
+                    str(session["project_id"])
+                )
+                if active is not None and str(active["session_id"]) == str(
+                    session["id"]
+                ):
+                    raise ProjectBusy(
+                        "the expert is still working in this conversation; "
+                        "it cannot be removed now"
+                    )
+            await self.repo.archive_session(session_id, archived=archived)
             return await self.repo.get_session(session_id)
 
     async def _refuse_while_expert_works(

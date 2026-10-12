@@ -341,8 +341,8 @@ class WorkbenchRepository:
         r = await self.session.execute(
             text(
                 """select p.*,
-                          (select count(*) from workbench_sessions s where s.project_id = p.id) as conversations,
-                          (select max(s.last_active_at) from workbench_sessions s where s.project_id = p.id) as last_active_at
+                          (select count(*) from workbench_sessions s where s.project_id = p.id and s.archived_at is null) as conversations,
+                          (select max(s.last_active_at) from workbench_sessions s where s.project_id = p.id and s.archived_at is null) as last_active_at
                    from workbench_projects p where p.owner_actor_id = :o"""
                 + ("" if include_archived else " and p.archived_at is null")
                 + " order by p.workspace_root, p.path"
@@ -478,17 +478,31 @@ class WorkbenchRepository:
         owner_actor_id: str,
         project_id: str | None = None,
         without_project: bool = False,
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         sql = "select * from workbench_sessions where owner_actor_id = :o"
         if project_id is not None:
             sql += " and project_id = :p"
         if without_project:
             sql += " and project_id is null"
+        if not include_archived:
+            sql += " and archived_at is null"
         r = await self.session.execute(
             text(sql + " order by last_active_at desc"),
             {"o": owner_actor_id, "p": project_id},
         )
         return [dict(m) for m in r.mappings().all()]
+
+    async def archive_session(self, session_id: str, *, archived: bool) -> None:
+        """从工作台移除（或找回）一段对话：只改标记，历史与审批日志都留着。"""
+        await self.session.execute(
+            text(
+                "update workbench_sessions set archived_at = "
+                + ("now()" if archived else "null")
+                + " where id = :id"
+            ),
+            {"id": session_id},
+        )
 
     async def set_session_thread(self, session_id: str, thread_id: str) -> None:
         await self.session.execute(

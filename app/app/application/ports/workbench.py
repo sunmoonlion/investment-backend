@@ -293,7 +293,9 @@ class WorkbenchStore(Protocol):
         owner_actor_id: str,
         project_id: str | None = None,
         without_project: bool = False,
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]: ...
+    async def archive_session(self, session_id: str, *, archived: bool) -> None: ...
 
     async def set_session_thread(self, session_id: str, thread_id: str) -> None: ...
 

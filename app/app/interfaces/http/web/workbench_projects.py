@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -143,6 +144,38 @@ async def change_project(
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return project
+
+
+@router.delete("/projects/{project_id}", status_code=204)
+async def remove_project(
+    project_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    """侧边栏的「删除」：从工作台移除（= 归档）。用户电脑上的文件夹不动（所有者 2026-10-12 定）。"""
+    try:
+        await ProjectService(workbench_store(session)).archive(
+            project_id, owner_actor_id=_actor(principal), archived=True
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return Response(status_code=204)
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def remove_conversation(
+    session_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    """侧边栏的「删除」：从工作台移除这段对话；历史与审批日志留着，不再列出。"""
+    try:
+        await SessionService(workbench_store(session)).archive(
+            session_id, owner_actor_id=_actor(principal), archived=True
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return Response(status_code=204)
 
 
 @router.post("/sessions/{session_id}/project")

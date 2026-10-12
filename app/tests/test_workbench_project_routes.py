@@ -370,3 +370,57 @@ async def test_the_experts_on_offer(make_client, db):  # noqa: F811
         # 只给我们自己测机制用的，不给用户看
         assert (await http.get("/api/workbench/packs/SMOKE")).status_code == 404
         assert (await http.get("/api/workbench/packs/NOPE")).status_code == 404
+
+
+async def test_remove_conversation_and_project_hide_them_but_keep_history(
+    make_client, db
+):  # noqa: F811
+    async with make_client(A) as http:
+        env = await machine(http)
+        made = (await project(http, env, "wuxi")).json()
+        kept = (
+            await http.post(
+                "/api/workbench/sessions",
+                json={"kind": "work", "project_id": made["id"], "title": "留着"},
+            )
+        ).json()
+        gone_response = await http.post(
+            "/api/workbench/sessions",
+            json={"kind": "chat", "project_id": made["id"], "title": "删掉"},
+        )
+        assert gone_response.status_code == 201, gone_response.json()
+        gone = gone_response.json()
+        # 对话：删掉之后清单、项目页都不再列，但记录还在、直接打开还能看
+        assert (
+            await http.delete(f"/api/workbench/sessions/{gone['session_id']}")
+        ).status_code == 204
+        listed = {
+            c["id"]
+            for c in (await http.get("/api/workbench/sessions")).json()["sessions"]
+        }
+        assert kept["session_id"] in listed and gone["session_id"] not in listed
+        seen = (await http.get(f"/api/workbench/projects/{made['id']}")).json()
+        assert [c["id"] for c in seen["conversations"]] == [kept["session_id"]]
+        assert (
+            await http.get(f"/api/workbench/sessions/{gone['session_id']}")
+        ).status_code == 200
+        rows = (await http.get("/api/workbench/projects")).json()["projects"]
+        assert next(p for p in rows if p["id"] == made["id"])["conversations"] == 1
+        # 项目：删掉 = 从工作台移除（归档），清单不再列；勾「含归档」还能找回
+        assert (
+            await http.delete(f"/api/workbench/projects/{made['id']}")
+        ).status_code == 204
+        rows = (await http.get("/api/workbench/projects")).json()["projects"]
+        assert all(p["id"] != made["id"] for p in rows)
+        rows = (await http.get("/api/workbench/projects?include_archived=true")).json()[
+            "projects"
+        ]
+        assert next(p for p in rows if p["id"] == made["id"])["archived"] is True
+        # 已删的对话不能再删一遍到别人头上：别的用户看不见
+    async with make_client(B) as other:
+        assert (
+            await other.delete(f"/api/workbench/sessions/{kept['session_id']}")
+        ).status_code == 404
+        assert (
+            await other.delete(f"/api/workbench/projects/{made['id']}")
+        ).status_code == 404
