@@ -193,6 +193,25 @@ def mode_of(
     return Mode.CHAT
 
 
+WINDOWS_CONSOLE_NOTE = (
+    " The machine runs Windows and its console code page is not UTF-8, so raw "
+    "PowerShell or cmd output reaches you garbled. Start every PowerShell "
+    "-Command script with `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;` "
+    "and every cmd /c command with `chcp 65001>nul &`; prefer PowerShell. Do "
+    "this from the first command, do not wait to see garbled text."
+)
+
+
+def windows_console_note(directory: str | None) -> str:
+    """Windows 中文机上 PowerShell/cmd 往管道里写 GBK，Codex 按 UTF-8 读就是乱码。
+
+    Codex 自带的「PowerShell 先切 UTF-8」只在它本机 shell 是 PowerShell 时才加；我们的
+    app-server 在 Linux 沙箱里，命令转到 Windows 执行端，这一步就没有（2026-10-12 所有者
+    实测每次第一条命令都花）。代理侧的根治见账 88；这里先明说给模型。
+    """
+    return WINDOWS_CONSOLE_NOTE if directory and is_windows_root(directory) else ""
+
+
 def mode_note(mode: Mode | str, *, directory: str | None) -> str:
     """换了情形之后，插进线里给模型看的一段说明。
 
@@ -218,6 +237,7 @@ def mode_note(mode: Mode | str, *, directory: str | None) -> str:
             "system is read-only and nobody will be asked for approval, so do not "
             "try to create, change or delete anything. If the user asks for a "
             "change, say that this conversation has to be switched to work mode."
+            + windows_console_note(directory)
         )
     return (
         "[workbench] This conversation is now in WORK mode inside the project "
@@ -226,6 +246,7 @@ def mode_note(mode: Mode | str, *, directory: str | None) -> str:
         "conversation. You may read files, and create or change files inside the "
         "project directory. Anything outside the project directory is off limits. "
         + NO_DETOUR
+        + windows_console_note(directory)
     )
 
 

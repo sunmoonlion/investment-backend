@@ -359,3 +359,12 @@ def test_a_posix_directory_still_goes_in_both_places():
     assert orchestrator_cwd("/home/u") == "/home/u"
     assert orchestrator_cwd(WINDOWS_DIR) is None
     assert orchestrator_cwd(None) is None
+
+
+def test_mode_note_tells_windows_machines_to_switch_console_to_utf8() -> None:
+    windows = mode_note("work", directory="C:\\Users\\zym\\proj")
+    assert "chcp 65001" in windows and "OutputEncoding" in windows
+    assert "chcp 65001" in mode_note("chat_in_project", directory="D:/data")
+    assert "chcp 65001" in mode_note("expert", directory="\\\\nas\\share")
+    assert "chcp 65001" not in mode_note("work", directory="/home/zym/proj")
+    assert "chcp 65001" not in mode_note("chat", directory=None)
