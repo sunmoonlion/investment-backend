@@ -25,6 +25,13 @@ from app.application.workbench.agent_download import (
     ReleaseUnavailable,
     byte_range,
 )
+from app.application.workbench.agent_service import (
+    MAX_READ_BYTES,
+    AgentOffline,
+    AgentService,
+    AgentServiceUnconfigured,
+    validate_path,
+)
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.provisioning import (
     ProvisioningUnavailable,
@@ -34,6 +41,7 @@ from app.application.workbench.session_service import SessionService
 from app.application.workbench.tokens import TokenIssuer
 from app.bootstrap.workbench import (
     agent_release_store,
+    build_agent_service,
     build_provisioner,
     build_relay_admin,
     workbench_store,
@@ -199,6 +207,17 @@ def token_issuer() -> TokenIssuer | None:
     return TokenIssuer(s.workbench_token_signing_key, issuer=s.workbench_token_issuer)
 
 
+def agent_service() -> AgentService:
+    """0022：工作台到代理的服务流。要会合点地址（与管理通道同一个根）和签名私钥；没配即 503。测试用依赖覆盖注入假的。"""
+    s = get_settings()
+    if not (s.workbench_relay_admin_url and s.workbench_token_signing_key):
+        raise _http(AgentServiceUnconfigured("agent service channel is not configured"))
+    return build_agent_service(
+        s.workbench_relay_admin_url,
+        TokenIssuer(s.workbench_token_signing_key, issuer=s.workbench_token_issuer),
+    )
+
+
 def _actor(principal: Principal) -> str:
     if principal.actor_id is None:
         raise HTTPException(status_code=403, detail="principal has no actor id")
@@ -265,6 +284,133 @@ async def register_environment(
             ceiling=body.ceiling,
         )
     return {"environment_id": env_id}
+
+
+# ---------------- 代理服务流（0022，账 87）：读那台电脑上的文件、读写代理侧设置 ----------------
+async def _relay_user_of(repo, actor: str, environment_id: str) -> str:
+    """这台电脑是不是他的、他有没有配对过的会合点身份。都对才知道该连谁。"""
+    await repo.get_environment(environment_id, owner_actor_id=actor)
+    identity = await repo.get_relay_identity(actor)
+    if not identity or not identity.get("relay_user"):
+        raise AgentOffline("no agent has been paired for this account")
+    return str(identity["relay_user"])
+
+
+async def _ask_agent(
+    service: AgentService,
+    session: AsyncSession,
+    principal: Principal,
+    environment_id: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    repo = workbench_store(session)
+    try:
+        relay_user = await _relay_user_of(repo, _actor(principal), environment_id)
+        return await service.call(relay_user, method, params)
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/environments/{environment_id}/service")
+async def agent_service_hello(
+    environment_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    service: AgentService = Depends(agent_service),
+):
+    """代理此刻的白名单、本地知识库目录、版本与能力：网页据此画文件树的根。"""
+    return await _ask_agent(
+        service, session, principal, environment_id, "service/hello"
+    )
+
+
+@router.get("/environments/{environment_id}/fs/dir")
+async def agent_read_directory(
+    environment_id: str,
+    path: str = Query(..., max_length=1024),
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    service: AgentService = Depends(agent_service),
+):
+    try:
+        wanted = validate_path(path)
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    result = await _ask_agent(
+        service,
+        session,
+        principal,
+        environment_id,
+        "fs/readDirectory",
+        {"path": wanted},
+    )
+    return {"path": wanted, **result}
+
+
+@router.get("/environments/{environment_id}/fs/file")
+async def agent_read_file(
+    environment_id: str,
+    path: str = Query(..., max_length=1024),
+    offset: int = Query(0, ge=0),
+    length: int = Query(MAX_READ_BYTES, ge=1, le=MAX_READ_BYTES),
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    service: AgentService = Depends(agent_service),
+):
+    """内容按代理给的 base64 原样转给浏览器；文本还是二进制由浏览器判。"""
+    try:
+        wanted = validate_path(path)
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    result = await _ask_agent(
+        service,
+        session,
+        principal,
+        environment_id,
+        "fs/readFile",
+        {"path": wanted, "offset": offset, "length": length},
+    )
+    return {"path": wanted, "offset": offset, **result}
+
+
+@router.get("/environments/{environment_id}/settings")
+async def agent_settings(
+    environment_id: str,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    service: AgentService = Depends(agent_service),
+):
+    return await _ask_agent(
+        service, session, principal, environment_id, "settings/read"
+    )
+
+
+class AgentSettingsWrite(BaseModel):
+    """0022 第四节：只收这几项；放宽的由代理在那台电脑上弹窗确认，这里不判。"""
+
+    model_config = ConfigDict(extra="forbid")
+    roots: list[str] | None = Field(default=None, max_length=32)
+    rootChoices: list[str] | None = Field(default=None, max_length=32)
+    ceiling: dict[str, Any] | None = None
+    autostart: bool | None = None
+    libraryDir: str | None = Field(default=None, max_length=1024)
+
+
+@router.put("/environments/{environment_id}/settings")
+async def agent_settings_write(
+    environment_id: str,
+    body: AgentSettingsWrite,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    service: AgentService = Depends(agent_service),
+):
+    changes = body.model_dump(exclude_none=True)
+    if not changes:
+        raise _http(WorkbenchError("nothing to change"))
+    return await _ask_agent(
+        service, session, principal, environment_id, "settings/write", changes
+    )
 
 
 @router.get("/sandboxes")

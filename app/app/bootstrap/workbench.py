@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.ports.workbench import (
@@ -121,3 +123,15 @@ def build_machine_sync(
         build_relay_admin(relay_admin_url, relay_admin_token),
         interval_seconds=interval_seconds,
     )
+
+
+if TYPE_CHECKING:
+    from app.application.workbench.agent_service import AgentService
+    from app.application.workbench.tokens import TokenIssuer
+
+
+def build_agent_service(relay_url: str, issuer: TokenIssuer) -> AgentService:
+    """0022：工作台到代理的服务流客户端（经会合点 /service）。"""
+    from app.infrastructure.workbench.agent_service_ws import WsAgentService
+
+    return WsAgentService(relay_url, issuer)
