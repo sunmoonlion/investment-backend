@@ -85,8 +85,6 @@ async def test_the_handshake_and_the_list_of_tools(served):
         assert names == [
             "list_project_conversations",
             "read_project_conversation",
-            "list_project_dossiers",
-            "read_project_dossier",
             "list_library",
             "read_library_item",
         ]
@@ -164,15 +162,6 @@ async def test_calling_the_tools(served, db):  # noqa: F811
             entries = read.json()["result"]["structuredContent"]["entries"]
             assert entries[0]["said"] == "毛利率是什么"
 
-            paper = await http.post(
-                URL,
-                json=tool(
-                    "read_project_dossier", task=ids["task"], dossier=ids["task"]
-                ),
-                headers=bearer(),
-            )
-            assert "恒瑞医药" in paper.json()["result"]["structuredContent"]["text"]
-
             # 拒绝的都是给模型看的一句话，不是服务的错
             for call in (
                 tool(
@@ -182,7 +171,6 @@ async def test_calling_the_tools(served, db):  # noqa: F811
                 ),
                 tool("list_project_conversations", task=str(uuid.uuid4())),
                 tool("list_project_conversations"),
-                tool("read_project_dossier", task=ids["task"], dossier="x"),
             ):
                 refused = (await http.post(URL, json=call, headers=bearer())).json()
                 assert refused["result"]["isError"] is True, call
@@ -196,11 +184,16 @@ async def test_calling_the_tools(served, db):  # noqa: F811
             )
             assert other.json()["result"]["isError"] is True
 
-            wrong = await http.post(
-                URL, json=tool("delete_project", task=ids["task"]), headers=bearer()
-            )
-            assert wrong.json()["error"]["code"] == -32602
-            shown = got.text + read.text + paper.text
+            for gone in (
+                "delete_project",
+                "list_project_dossiers",
+                "read_project_dossier",
+            ):
+                wrong = await http.post(
+                    URL, json=tool(gone, task=ids["task"]), headers=bearer()
+                )
+                assert wrong.json()["error"]["code"] == -32602, gone
+            shown = got.text + read.text
             assert "token" not in shown and "Advisor step" not in shown
     finally:
         await close(runner)
@@ -216,7 +209,7 @@ async def test_too_many_calls_are_slowed_down(served, db):  # noqa: F811
             for _ in range(5):
                 got = await http.post(
                     URL,
-                    json=tool("list_project_dossiers", task=ids["task"]),
+                    json=tool("list_project_conversations", task=ids["task"]),
                     headers=bearer(),
                 )
                 answers.append(got.json()["result"]["isError"])

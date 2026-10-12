@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.workbench.deliverables import DELIVERABLE_RULES
 from app.domain.workbench.tool_policy import (
     ToolPolicy,
     ToolPolicyOverride,
@@ -95,6 +96,9 @@ class StepContract(Strict):
     tool_policy: ToolPolicyOverride | None = None
     # 开步前工作台先问用户的问题（approval.md「Task 级：澄清·工作台发起」）；答案进 compose
     ask_before: tuple[AskBefore, ...] = ()
+    # 这一步给人看的成稿写到项目目录里的哪个文件（相对项目目录；0015 §3.3）。结构化结果仍按
+    # output_schema 回在正文里做机器验收；文件才是给用户的那一份
+    output_file: str | None = None
 
 
 class DossierBlock(Strict):
@@ -122,6 +126,11 @@ class ExpertPack(Strict):
     tagline: str = ""
     internal: bool = False  # 只给我们自己测机制用，不进清单
     dossier: tuple[DossierBlock, ...] = ()
+
+    def deliverable_files(self) -> tuple[str, ...]:
+        """这位专家会往项目里写哪些成稿文件（0015 §3.3）。"""
+        return tuple(step.output_file for step in self.workflow if step.output_file)
+
     workflow: tuple[StepContract, ...]
     # 2026-10-12 起由 tool_policy 三档表代替；留着只为老数据读得出来，运行时不看它
     auto_allow: dict[str, bool] = Field(
@@ -206,6 +215,7 @@ SMOKE = ExpertPack(
             method_text="Follow the plan artifact given below. Answer the user's question. Every factual claim must carry a citation to a file path in the project or the literal string 'none'. Leave the conclusion field empty: the user fills conclusions. "
             + JSON_ONLY,
             output_artifact="answer",
+            output_file="底稿/烟测-回答.md",
             output_schema={
                 "answer": "string",
                 "citations": ["string"],
@@ -438,8 +448,12 @@ DATA_QUERY = ExpertPack(
             why="答案里每个数都带出处和口径，并写明局限。只给事实，不给评级和买卖建议。",
             input_refs=("rewritten", "table"),
             method_text="Write the research note: the answer table, each number with its data version and 口径, limitations. Conclusion field stays empty for the user. "
+            + "The deliverable file is the research note itself. "
+            + DELIVERABLE_RULES
+            + " "
             + JSON_ONLY,
             output_artifact="note",
+            output_file="底稿/数据查询-成稿.md",
             output_schema={
                 "answer": "string",
                 "table": [{}],
@@ -1131,9 +1145,13 @@ FIN_REVIEW = ExpertPack(
                 "or hold: when the question asks for one, `answer` says that this "
                 "review does not give investment advice and lists what the data shows. "
                 "`conclusion` stays an empty string: the user writes the conclusion. "
+                "The deliverable file is the working paper itself. "
+                + DELIVERABLE_RULES
+                + " "
                 + JSON_ONLY
             ),
             output_artifact="note",
+            output_file="底稿/财报体检-成稿.md",
             output_schema={
                 "answer": "string",
                 "tables": [{"title": "string", "rows": [{}]}],

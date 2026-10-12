@@ -228,35 +228,3 @@ async def test_the_home_of_the_experts_and_the_to_do_list(make_client, db):  # n
     async with make_client(B) as http:
         body = (await http.get("/api/workbench/expert/overview")).json()
         assert body["running"] == []
-
-
-async def test_the_working_paper_over_http(make_client, db):  # noqa: F811
-    async with make_client(A) as http:
-        _, pid = await ready(http)
-        made = (
-            await http.post(f"/api/workbench/projects/{pid}/delegations", json=ask())
-        ).json()
-        base = f"/api/workbench/tasks/{made['task_id']}"
-        got = await http.get(f"{base}/dossier")
-        assert got.status_code == 200
-        body = got.json()
-        assert body["head"] == {"kind": "running", "text": "专家还在做"}
-        assert body["task"]["question"] == QUESTION
-        assert body["conclusion"]["text"] == ""
-        every = [b for s in body["sections"] for b in s["blocks"]]
-        assert every and all(b["status"] == "not_reached" for b in every)
-
-        saved = await http.put(f"{base}/conclusion", json={"text": "我的看法"})
-        assert saved.status_code == 200
-        again = (await http.get(f"{base}/dossier")).json()
-        assert again["conclusion"]["text"] == "我的看法"
-
-        export = await http.get(f"{base}/dossier/export")
-        assert export.status_code == 200
-        assert export.headers["content-type"].startswith("text/markdown")
-        assert "attachment" in export.headers["content-disposition"]
-        assert export.text.startswith(f"# {QUESTION}")
-        assert "我的看法" in export.text
-    async with make_client(B) as http:
-        for path in ("dossier", "dossier/export"):
-            assert (await http.get(f"{base}/{path}")).status_code == 404

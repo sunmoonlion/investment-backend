@@ -26,6 +26,7 @@ from app.application.ports.workbench import (
 from app.application.workbench.advisor import Advisor, TurnResult
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
+from app.domain.workbench.deliverables import changed_paths
 from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import find_pack
@@ -436,6 +437,8 @@ class SandboxLink:
             item = params.get("item") or {}
             if item.get("type") == "agentMessage" and item.get("text"):
                 w["text"] = item["text"]
+            # 这一轮用补丁改到的文件：成稿有没有写出来就看它（0015 §3.3）
+            w["files"].extend(changed_paths(item))
         elif method.startswith("thread/tokenUsage"):
             w["reported"] = True
         elif method == "turn/completed":
@@ -483,6 +486,7 @@ class SandboxLink:
             "error": None,
             "env_lost": False,
             "interrupted": False,
+            "files": [],
         }
         self.turn_waiters[turn_id] = waiter
         self.active_turns[thread_id] = turn_id
@@ -524,6 +528,7 @@ class SandboxLink:
             interrupted=waiter["interrupted"] or stop is not None,
             stopped_by_user=stop is not None,
             stop_note=(stop or {}).get("note"),
+            files=list(waiter["files"]),
         )
 
     async def interrupt(

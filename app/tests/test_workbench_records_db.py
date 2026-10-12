@@ -172,14 +172,6 @@ async def test_the_expert_reads_the_project_it_works_in(db):
             ("assistant", "净利率是……"),
         ]
 
-        papers = (await read(db, "list_dossiers", ids["task"]))["dossiers"]
-        assert [
-            (p["dossier"], p["expert"], p["state"], p["current"]) for p in papers
-        ] == [(ids["task"], "财报体检", "进行中", True)]
-        paper = await read(db, "read_dossier", ids["task"], ids["task"])
-        assert paper["text"].startswith("# 恒瑞医药 2023 到 2025 年的盈利能力怎么样？")
-        assert paper["truncated"] is False
-
         # 读了什么，账里有
         async with db() as s:
             events = await WorkbenchRepository(s).list_events(session_id=ids["current"])
@@ -187,8 +179,6 @@ async def test_the_expert_reads_the_project_it_works_in(db):
         assert [n["tool"] for n in noted] == [
             "list_project_conversations",
             "read_project_conversation",
-            "list_project_dossiers",
-            "read_project_dossier",
         ]
         assert noted[1]["conversation"] == ids["chat"]
         assert all(
@@ -207,8 +197,6 @@ async def test_nothing_outside_the_project_can_be_read(db):
             await read(db, "read_conversation", ids["task"], ids["elsewhere"])
         with pytest.raises(NotFound):
             await read(db, "read_conversation", ids["task"], str(uuid.uuid4()))
-        with pytest.raises(NotFound):
-            await read(db, "read_dossier", ids["task"], str(uuid.uuid4()))
         # 编号不是编号的样子：按找不到答，不走到数据库里去
         for junk in ("", "../etc/passwd", "1 or 1=1", None, 7):
             with pytest.raises(NotFound):
@@ -222,8 +210,6 @@ async def test_nothing_outside_the_project_can_be_read(db):
         for call, args in (
             ("list_conversations", (ids["task"],)),
             ("read_conversation", (ids["task"], ids["chat"])),
-            ("list_dossiers", (ids["task"],)),
-            ("read_dossier", (ids["task"], ids["task"])),
         ):
             with pytest.raises(NotFound):
                 await read(db, call, *args, owner=STRANGER)
@@ -255,12 +241,10 @@ async def test_only_while_the_expert_is_working(db):
                 response={"decision": "stop"},
                 owner_actor_id=OWNER,
             )
-        # 委托结束、方向盘交回之后：四个工具都拒绝
+        # 委托结束、方向盘交回之后：两个工具都拒绝
         for call, args in (
             ("list_conversations", (ids["task"],)),
             ("read_conversation", (ids["task"], ids["chat"])),
-            ("list_dossiers", (ids["task"],)),
-            ("read_dossier", (ids["task"], ids["task"])),
         ):
             with pytest.raises(RecordsRefused):
                 await read(db, call, *args)
