@@ -195,78 +195,52 @@ def use(http, service):
     http._transport.app.dependency_overrides[agent_service] = lambda: service  # type: ignore[attr-defined]
 
 
-async def test_routes_pass_through_and_check_ownership(make_client, db):  # noqa: F811
+async def test_service_hello_passes_through_and_checks_ownership(make_client, db):  # noqa: F811
     async with make_client(A) as http:
         env = await paired_environment(http, db, A)
-        fake = FakeService(
-            {
-                "entries": [{"name": "a.md", "type": "file", "size": 3, "mtime": 1}],
-                "truncated": False,
-            }
-        )
+        fake = FakeService({"roots": ["C:\\r"], "capabilities": ["service-v1"]})
         use(http, fake)
-        r = await http.get(
-            f"/api/workbench/environments/{env}/fs/dir", params={"path": "C:\\r"}
-        )
-        assert (
-            r.status_code == 200
-            and r.json()["path"] == "C:\\r"
-            and r.json()["entries"][0]["name"] == "a.md"
-        )
-        assert fake.calls[-1] == ("u-aaa", "fs/readDirectory", {"path": "C:\\r"})
-        r = await http.get(
-            f"/api/workbench/environments/{env}/fs/file",
-            params={"path": "C:\\r\\a.md", "offset": 5},
-        )
-        assert r.status_code == 200 and r.json()["offset"] == 5
-        assert fake.calls[-1] == (
-            "u-aaa",
-            "fs/readFile",
-            {"path": "C:\\r\\a.md", "offset": 5, "length": 512 * 1024},
-        )
         r = await http.get(f"/api/workbench/environments/{env}/service")
-        assert r.status_code == 200 and fake.calls[-1][1] == "service/hello"
-        r = await http.get(f"/api/workbench/environments/{env}/settings")
-        assert r.status_code == 200 and fake.calls[-1][1] == "settings/read"
-        r = await http.put(
-            f"/api/workbench/environments/{env}/settings",
-            json={"roots": ["C:\\r", "D:\\d"], "autostart": True},
-        )
-        assert r.status_code == 200
-        assert fake.calls[-1] == (
-            "u-aaa",
-            "settings/write",
-            {"roots": ["C:\\r", "D:\\d"], "autostart": True},
-        )
-        # 参数不像样：不去问代理
+        assert r.status_code == 200 and r.json()["roots"] == ["C:\\r"]
+        assert fake.calls[-1] == ("u-aaa", "service/hello", None)
         before = len(fake.calls)
-        assert (
-            await http.get(
-                f"/api/workbench/environments/{env}/fs/dir", params={"path": "a\x00b"}
-            )
-        ).status_code == 400
-        assert (
-            await http.get(
-                f"/api/workbench/environments/{env}/fs/file",
-                params={"path": "C:\\r\\a", "length": 600_000},
-            )
-        ).status_code == 422
-        assert (
-            await http.put(
-                f"/api/workbench/environments/{env}/settings", json={"nope": 1}
-            )
-        ).status_code == 422
-        assert (
-            await http.put(f"/api/workbench/environments/{env}/settings", json={})
-        ).status_code == 400
-        assert len(fake.calls) == before
     # 别人的电脑：404，也不去问代理
     async with make_client(B) as other:
         use(other, fake)
-        r = await other.get(
-            f"/api/workbench/environments/{env}/fs/dir", params={"path": "C:\\r"}
-        )
+        r = await other.get(f"/api/workbench/environments/{env}/service")
         assert r.status_code == 404 and len(fake.calls) == before
+
+
+async def test_local_ticket_is_signed_for_the_owner_only(make_client, db):  # noqa: F811
+    from app.interfaces.endpoints.workbench_routes import token_issuer
+
+    signer = issuer()
+    async with make_client(A) as http:
+        env = await paired_environment(http, db, A, relay_user="u-abc")
+        # 没签名私钥：没有票
+        r = await http.get(f"/api/workbench/environments/{env}/local-ticket")
+        assert r.status_code == 503 and r.json()["code"] == "agent_service_unconfigured"
+        http._transport.app.dependency_overrides[token_issuer] = lambda: signer  # type: ignore[attr-defined]
+        r = await http.get(f"/api/workbench/environments/{env}/local-ticket")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["relay_user"] == "u-abc"
+        claims = claims_of(body["ticket"])
+        assert claims["aud"] == "local-agent" and claims["sub"] == "u-abc"
+        assert (
+            claims["exp"] - claims["iat"] == 600 and body["expires_at"] == claims["exp"]
+        )
+        assert "role" not in claims
+    async with make_client(B) as other:
+        other._transport.app.dependency_overrides[token_issuer] = lambda: signer  # type: ignore[attr-defined]
+        r = await other.get(f"/api/workbench/environments/{env}/local-ticket")
+        assert r.status_code == 404
+        # 自己的电脑但还没配对过
+        r = await other.post("/api/workbench/environments", json={"name": "pc-b"})
+        r = await other.get(
+            f"/api/workbench/environments/{r.json()['environment_id']}/local-ticket"
+        )
+        assert r.status_code == 503 and r.json()["code"] == "agent_offline"
 
 
 async def test_routes_without_pairing_or_configuration(make_client, db):  # noqa: F811
@@ -298,9 +272,7 @@ async def test_routes_translate_agent_refusals(make_client, db):  # noqa: F811
             (AgentOffline("off"), 503, "agent_offline"),
         ]:
             use(http, FakeService(raise_=exc))
-            r = await http.get(
-                f"/api/workbench/environments/{env}/fs/dir", params={"path": "C:\\r"}
-            )
+            r = await http.get(f"/api/workbench/environments/{env}/service")
             assert (r.status_code, r.json()["code"]) == (status, code)
 
 

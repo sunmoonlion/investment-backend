@@ -26,11 +26,9 @@ from app.application.workbench.agent_download import (
     byte_range,
 )
 from app.application.workbench.agent_service import (
-    MAX_READ_BYTES,
     AgentOffline,
     AgentService,
     AgentServiceUnconfigured,
-    validate_path,
 )
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.provisioning import (
@@ -286,7 +284,7 @@ async def register_environment(
     return {"environment_id": env_id}
 
 
-# ---------------- 代理服务流（0022，账 87）：读那台电脑上的文件、读写代理侧设置 ----------------
+# ---------------- 代理（0022，账 87）：服务流给云端自用；本机访问票给网页敲回环口 ----------------
 async def _relay_user_of(repo, actor: str, environment_id: str) -> str:
     """这台电脑是不是他的、他有没有配对过的会合点身份。都对才知道该连谁。"""
     await repo.get_environment(environment_id, owner_actor_id=actor)
@@ -319,98 +317,34 @@ async def agent_service_hello(
     session: AsyncSession = Depends(get_db_session),
     service: AgentService = Depends(agent_service),
 ):
-    """代理此刻的白名单、本地知识库目录、版本与能力：网页据此画文件树的根。"""
+    """经会合点服务流问代理（云端自用：成稿硬检查等）。网页看文件树不走这里，走回环口（0022 乙案）。"""
     return await _ask_agent(
         service, session, principal, environment_id, "service/hello"
     )
 
 
-@router.get("/environments/{environment_id}/fs/dir")
-async def agent_read_directory(
+@router.get("/environments/{environment_id}/local-ticket")
+async def local_agent_ticket(
     environment_id: str,
-    path: str = Query(..., max_length=1024),
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
-    service: AgentService = Depends(agent_service),
+    issuer: TokenIssuer | None = Depends(token_issuer),
 ):
+    """0022 乙案：网页要一张票，拿去敲那台电脑上代理的回环口（127.0.0.1:47811）。
+    文件内容不经工作台；这里只核这台电脑是不是他的、他配对过没有，然后签 10 分钟的票。"""
+    if issuer is None:
+        raise _http(AgentServiceUnconfigured("ticket signing is not configured"))
+    repo = workbench_store(session)
     try:
-        wanted = validate_path(path)
+        relay_user = await _relay_user_of(repo, _actor(principal), environment_id)
     except WorkbenchError as exc:
         raise _http(exc) from exc
-    result = await _ask_agent(
-        service,
-        session,
-        principal,
-        environment_id,
-        "fs/readDirectory",
-        {"path": wanted},
-    )
-    return {"path": wanted, **result}
-
-
-@router.get("/environments/{environment_id}/fs/file")
-async def agent_read_file(
-    environment_id: str,
-    path: str = Query(..., max_length=1024),
-    offset: int = Query(0, ge=0),
-    length: int = Query(MAX_READ_BYTES, ge=1, le=MAX_READ_BYTES),
-    principal: Principal = Depends(get_web_current_user),
-    session: AsyncSession = Depends(get_db_session),
-    service: AgentService = Depends(agent_service),
-):
-    """内容按代理给的 base64 原样转给浏览器；文本还是二进制由浏览器判。"""
-    try:
-        wanted = validate_path(path)
-    except WorkbenchError as exc:
-        raise _http(exc) from exc
-    result = await _ask_agent(
-        service,
-        session,
-        principal,
-        environment_id,
-        "fs/readFile",
-        {"path": wanted, "offset": offset, "length": length},
-    )
-    return {"path": wanted, "offset": offset, **result}
-
-
-@router.get("/environments/{environment_id}/settings")
-async def agent_settings(
-    environment_id: str,
-    principal: Principal = Depends(get_web_current_user),
-    session: AsyncSession = Depends(get_db_session),
-    service: AgentService = Depends(agent_service),
-):
-    return await _ask_agent(
-        service, session, principal, environment_id, "settings/read"
-    )
-
-
-class AgentSettingsWrite(BaseModel):
-    """0022 第四节：只收这几项；放宽的由代理在那台电脑上弹窗确认，这里不判。"""
-
-    model_config = ConfigDict(extra="forbid")
-    roots: list[str] | None = Field(default=None, max_length=32)
-    rootChoices: list[str] | None = Field(default=None, max_length=32)
-    ceiling: dict[str, Any] | None = None
-    autostart: bool | None = None
-    libraryDir: str | None = Field(default=None, max_length=1024)
-
-
-@router.put("/environments/{environment_id}/settings")
-async def agent_settings_write(
-    environment_id: str,
-    body: AgentSettingsWrite,
-    principal: Principal = Depends(get_web_current_user),
-    session: AsyncSession = Depends(get_db_session),
-    service: AgentService = Depends(agent_service),
-):
-    changes = body.model_dump(exclude_none=True)
-    if not changes:
-        raise _http(WorkbenchError("nothing to change"))
-    return await _ask_agent(
-        service, session, principal, environment_id, "settings/write", changes
-    )
+    issued = issuer.local_agent_ticket(relay_user)
+    return {
+        "ticket": issued.token,
+        "expires_at": issued.expires_at,
+        "relay_user": relay_user,
+    }
 
 
 @router.get("/sandboxes")

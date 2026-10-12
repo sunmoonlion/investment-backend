@@ -1,7 +1,7 @@
 """D10：工作台签发的令牌（ES256 JWT），会合点与知识服务用公钥就地验，不回源。
 
-五种：代理令牌（aud=relay, role=agent）、沙箱令牌（aud=relay, role=sandbox）、工作台服务流令牌（aud=relay, role=workbench，0022）、
-知识 MCP 令牌（aud=knowledge）、读项目记录的令牌（aud=workbench-records，工作台自己签、自己验）。
+六种：代理令牌（aud=relay, role=agent）、沙箱令牌（aud=relay, role=sandbox）、工作台服务流令牌（aud=relay, role=workbench，0022）、
+本机访问票（aud=local-agent，网页敲代理回环口用，0022 乙案）、知识 MCP 令牌（aud=knowledge）、读项目记录的令牌（aud=workbench-records）。
 都带 sub（用户的会合点名）、jti、exp。吊销靠会合点管理通道推 jti，或到期自然失效（F-RELAY-06）。
 签名私钥在工作台配置（Secret）；公钥经 /api/workbench/token-keys（JWKS）给边缘与知识服务。
 """
@@ -25,6 +25,8 @@ AGENT_TTL_SECONDS = 30 * 24 * 3600  # 所有者 2026-10-09 定：仅代理 30 �
 WORKBENCH_SERVICE_TTL_SECONDS = (
     10 * 60
 )  # 0022：工作台连会合点服务流用，一问一签，10 分钟
+LOCAL_AGENT_AUDIENCE = "local-agent"
+LOCAL_TICKET_TTL_SECONDS = 10 * 60  # 0022 乙案：浏览器敲本机代理回环口用的票，10 分钟
 DEFAULT_TTL_SECONDS = 90 * 24 * 3600  # 长期：这些令牌随沙箱/代理重签，不是浏览器会话
 
 
@@ -81,6 +83,14 @@ class TokenIssuer:
         """0022：工作台自己作第三种客户连会合点 `/service`（role=workbench）；短期，一问一签。"""
         return self._issue(
             {"aud": "relay", "sub": relay_user, "role": "workbench"}, ttl_seconds
+        )
+
+    def local_agent_ticket(
+        self, relay_user: str, *, ttl_seconds: int = LOCAL_TICKET_TTL_SECONDS
+    ) -> Issued:
+        """0022 乙案：网页拿它去敲用户电脑上代理的回环口；代理用 JWKS 就地验，sub 必须等于它自己的 userId。"""
+        return self._issue(
+            {"aud": LOCAL_AGENT_AUDIENCE, "sub": relay_user}, ttl_seconds
         )
 
     def sandbox_token(
