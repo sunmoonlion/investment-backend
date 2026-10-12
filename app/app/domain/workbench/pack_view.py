@@ -79,6 +79,9 @@ def pack_view(pack: ExpertPack) -> dict[str, Any]:
         "who_judges": answers.get("谁做判断", ""),
         "on_failure": answers.get("失败怎么办", ""),
         "uses_our_data": pack.requires_tools,
+        # 筹备中的专家：看得见、请不了
+        "status": pack.status,
+        "preparing_note": pack.preparing_note,
         "steps": [step_view(s, pack, i) for i, s in enumerate(pack.workflow)],
         # 每一步预留之和：预算低于它，专家连一遍都走不完
         "least_budget": str(sum_reserves(pack)),

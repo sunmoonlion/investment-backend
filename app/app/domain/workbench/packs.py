@@ -125,6 +125,9 @@ class ExpertPack(Strict):
     name: str = ""  # 给用户看的名字。代号不给用户看
     tagline: str = ""
     internal: bool = False  # 只给我们自己测机制用，不进清单
+    # 筹备中的专家：进清单让人看得见、读得到它要做什么，但请不了（所有者 2026-10-13 定：先占位，做好再切）
+    status: Literal["ready", "preparing"] = "ready"
+    preparing_note: str = ""  # 筹备中时给用户的一句话：在做什么、什么时候能用
     dossier: tuple[DossierBlock, ...] = ()
 
     def deliverable_files(self) -> tuple[str, ...]:
@@ -1233,8 +1236,212 @@ FIN_REVIEW = ExpertPack(
     },
 )
 
+# 财务分析与预测：所有者 2026-10-13 定先占位（筹备中），Qwen 把数据（WrenAI 的巴西电商 Olist 样例，9 张表：
+# 订单、明细、支付、商品、客户、卖家、评价、地理）与方法做好后切成 ready。步骤先按五段写个样子，不会被跑：
+# 筹备中的专家请不了（delegation.expert_on_offer 拒绝）。
+FIN_FORECAST = ExpertPack(
+    pack_id="FIN_FORECAST",
+    version="0",
+    profile_id="FIN_FORECAST",
+    title="财务分析与预测（筹备中）",
+    name="财务分析与预测",
+    tagline="看清收入、成本、现金流的走势，给出可核对的预测",
+    status="preparing",
+    preparing_note="数据和方法正在接入（样例是一家电商的订单、支付、商品、客户九张表）；接好后这里直接可用。",
+    requires_tools=True,
+    dossier=(
+        DossierBlock(
+            key="answer",
+            title="回答",
+            kind="text",
+            artifact="note",
+            path="answer",
+            section="answer",
+        ),
+        DossierBlock(
+            key="series",
+            title="取数表",
+            kind="table",
+            artifact="series",
+            path="rows",
+            section="data",
+            also={"columns": "columns"},
+        ),
+        DossierBlock(
+            key="findings",
+            title="分析发现",
+            kind="list",
+            artifact="analysis",
+            path="findings",
+            section="verified",
+        ),
+        DossierBlock(
+            key="forecast",
+            title="预测表",
+            kind="table",
+            artifact="forecast",
+            path="rows",
+            section="data",
+            also={"method": "method", "assumptions": "assumptions"},
+        ),
+        DossierBlock(
+            key="limitations",
+            title="局限",
+            kind="list",
+            artifact="note",
+            path="limitations",
+            section="limits",
+        ),
+        DossierBlock(
+            key="citations",
+            title="出处",
+            kind="list",
+            artifact="note",
+            path="citations",
+            section="sources",
+        ),
+    ),
+    workflow=(
+        StepContract(
+            step_id="scope",
+            title="定范围",
+            summary="说清分析哪段时间、哪些口径：收入按支付还是按订单，成本含不含运费",
+            why="口径先定，后面的数和预测才有意义；口径不同，同一问题答案可以差一倍。",
+            method_text="Rewrite the user's financial question into scope: period, grain, revenue and cost definitions. "
+            + JSON_ONLY,
+            output_artifact="scope",
+            output_schema={
+                "question": "string",
+                "period": "string",
+                "definitions": ["string"],
+            },
+            acceptance=(
+                AcceptanceRule(
+                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                ),
+                AcceptanceRule(
+                    kind="required_keys",
+                    keys=("question", "period"),
+                    message="缺问题或期间",
+                    label="有问题和期间",
+                ),
+            ),
+        ),
+        StepContract(
+            step_id="pull",
+            title="取数",
+            summary="按口径把收入、成本、订单量按月取出来，列出每一列的来源",
+            why="预测要建立在你看得到的数上：每一列从哪张表、怎么算，先摆出来。",
+            input_refs=("scope",),
+            method_text="Query the dataset for monthly revenue, cost and order counts under the agreed definitions; list sources per column. "
+            + JSON_ONLY,
+            tools=("describe_schema", "run_sql"),
+            output_artifact="series",
+            output_schema={
+                "columns": [{"name": "string", "source": "string"}],
+                "rows": [["string"]],
+            },
+            acceptance=(
+                AcceptanceRule(
+                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                ),
+                AcceptanceRule(
+                    kind="required_keys",
+                    keys=("columns", "rows"),
+                    message="缺列或行",
+                    label="有列和行",
+                ),
+            ),
+        ),
+        StepContract(
+            step_id="analyze",
+            title="分析",
+            summary="看趋势、季节性、结构：哪些品类和地区在涨，利润率怎么变",
+            why="先把过去说清楚，预测才有依据；结构变化比总数更能说明问题。",
+            input_refs=("series",),
+            method_text="Analyse trend, seasonality and mix on the series; report findings with the numbers they rest on. "
+            + JSON_ONLY,
+            output_artifact="analysis",
+            output_schema={"findings": [{"text": "string", "evidence": "string"}]},
+            acceptance=(
+                AcceptanceRule(
+                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    keys=("findings",),
+                    min_items=1,
+                    message="没有发现",
+                    label="至少一条发现",
+                ),
+            ),
+        ),
+        StepContract(
+            step_id="forecast",
+            title="预测",
+            summary="按简单、能说清的方法外推下几期，给区间，写明假设",
+            why="预测一定带假设和区间；只给一个数等于没说。",
+            input_refs=("series", "analysis"),
+            method_text="Forecast the next periods with a simple explainable method; give ranges and assumptions. "
+            + JSON_ONLY,
+            output_artifact="forecast",
+            output_schema={
+                "method": "string",
+                "assumptions": ["string"],
+                "rows": [["string"]],
+            },
+            acceptance=(
+                AcceptanceRule(
+                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                ),
+                AcceptanceRule(
+                    kind="required_keys",
+                    keys=("method", "assumptions", "rows"),
+                    message="缺方法、假设或预测值",
+                    label="有方法、假设和预测值",
+                ),
+            ),
+        ),
+        StepContract(
+            step_id="writeup",
+            title="成稿",
+            summary="把范围、数据、分析、预测写成一篇可核对的稿子，落到项目文件里",
+            why="给你的是一篇能逐条核对的稿子，不是几个数。",
+            input_refs=("scope", "series", "analysis", "forecast"),
+            method_text="Write the deliverable in Chinese: scope, data with sources, findings, forecast with assumptions and ranges, limits. "
+            + JSON_ONLY,
+            output_artifact="note",
+            output_schema={
+                "answer": "string",
+                "limitations": ["string"],
+                "citations": ["string"],
+            },
+            output_file="底稿/财务分析与预测-成稿.md",
+            acceptance=(
+                AcceptanceRule(
+                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                ),
+                AcceptanceRule(
+                    kind="non_empty",
+                    keys=("answer",),
+                    message="没有正文",
+                    label="有正文",
+                ),
+            ),
+        ),
+    ),
+    answers={
+        "解决什么": "对一家公司（样例是一家电商）的收入、成本、订单与现金流做趋势与结构分析，并按可说清的方法给出下几期的预测与区间",
+        "不解决什么": "不做估值、不给买卖建议；没有数据的公司不做；预测只是外推，不是承诺",
+        "输入": "一个问题，和分析的时间范围（例如：近两年按月的收入与毛利趋势，预测下两个季度）",
+        "输出": "成稿：口径、取数表（每列带来源）、分析发现、预测表（方法、假设、区间）、局限",
+        "谁做判断": "用户。专家只摆数、说趋势、给带假设的预测",
+        "失败怎么办": "数据没接入或口径说不清时停下交人，不硬算",
+    },
+)
+
 BUILTIN_PACKS: dict[str, ExpertPack] = {
-    p.profile_id: p for p in (SMOKE, DATA_QUERY, FIN_REVIEW)
+    p.profile_id: p for p in (SMOKE, DATA_QUERY, FIN_REVIEW, FIN_FORECAST)
 }
 
 

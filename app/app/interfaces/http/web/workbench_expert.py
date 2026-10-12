@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.workbench.delegation import DelegationService, expert_on_offer
+from app.application.workbench.delegation import (
+    DelegationService,
+    expert_on_view,
+)
 from app.application.workbench.expert_desk import ExpertDesk
 from app.bootstrap.workbench import workbench_store
 from app.domain.security import Principal
@@ -70,7 +73,7 @@ async def one_pack(
     principal: Principal = Depends(get_web_current_user),
 ) -> dict[str, Any]:
     try:
-        pack = expert_on_offer(pack_id)
+        pack = expert_on_view(pack_id)
     except WorkbenchError as exc:
         raise _http(exc) from exc
     return {"contract_version": CONTRACT_VERSION, "pack": pack_view(pack)}

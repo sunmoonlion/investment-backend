@@ -9,6 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 FIELD_WORDS: dict[str, str] = {
+    # 财务分析与预测（占位包，所有者 2026-10-13）
+    "definitions": "口径",
+    "findings": "发现",
+    "text": "内容",
+    "evidence": "依据",
+    "method": "方法",
     # 定范围、改写问题
     "company": "公司",
     "security_code": "证券代码",

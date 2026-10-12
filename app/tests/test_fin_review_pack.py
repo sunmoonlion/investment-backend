@@ -130,7 +130,7 @@ GOOD = {
 
 
 def test_the_pack_is_registered_next_to_the_existing_ones():
-    assert set(BUILTIN_PACKS) == {"SMOKE", "DATA_QUERY", "FIN_REVIEW"}
+    assert set(BUILTIN_PACKS) == {"SMOKE", "DATA_QUERY", "FIN_REVIEW", "FIN_FORECAST"}
     assert find_pack("FIN_REVIEW") is FIN_REVIEW
     assert find_pack("FIN_REVIEW", "1") is FIN_REVIEW
     assert find_pack("FIN_REVIEW", "2") is None

@@ -360,7 +360,13 @@ async def test_the_experts_on_offer(make_client, db):  # noqa: F811
         body = got.json()
         assert body["contract_version"] == 2
         assert body["budget"] == {"currency": "CNY", "default": None}
-        assert [p["name"] for p in body["packs"]] == ["问数", "财报体检"]
+        assert [p["name"] for p in body["packs"]] == [
+            "问数",
+            "财报体检",
+            "财务分析与预测",
+        ]
+        # 筹备中的那位看得见、请不了（所有者 2026-10-13 定先占位）
+        assert [p["status"] for p in body["packs"]] == ["ready", "ready", "preparing"]
         assert "method" not in got.text and "Reply with ONE JSON" not in got.text
 
         one = await http.get("/api/workbench/packs/FIN_REVIEW")

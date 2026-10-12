@@ -167,3 +167,10 @@ class AgentPairingSlowDown(WorkbenchError):
 class AgentInstallUnavailable(WorkbenchError):
     code = "agent_download_unavailable"
     http_status = 404
+
+
+class ExpertNotReady(WorkbenchError):
+    """筹备中的专家：进清单让人看，但请不了（所有者 2026-10-13 定先占位）。"""
+
+    code = "expert_not_ready"
+    http_status = 409
