@@ -24,6 +24,7 @@ from app.application.ports.workbench import (
     WorkbenchStores,
 )
 from app.application.workbench.advisor import Advisor, TurnResult
+from app.application.workbench.deliverable_check import DeliverableCheck
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.deliverables import changed_paths
@@ -1142,8 +1143,10 @@ class Runner:
         poll_seconds: float = 1.0,
         records: bool = False,
         prices: PriceList | None = None,
+        deliverables: DeliverableCheck | None = None,
     ):
         self.records = records
+        self.deliverables = deliverables
         self.prices = prices or DEFAULT_PRICES
         self.stores = stores
         self.connector = connector
@@ -1494,7 +1497,9 @@ class Runner:
                 )
 
     async def _drive(self, task_id: str, link: SandboxLink) -> None:
-        advisor = Advisor(self.stores, link, records=self.records)
+        advisor = Advisor(
+            self.stores, link, records=self.records, deliverables=self.deliverables
+        )
         try:
             state = await advisor.drive(task_id)
             log.info("advisor stopped task=%s state=%s", task_id, state)

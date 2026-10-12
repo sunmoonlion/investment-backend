@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
 from app.application.workbench.acceptance import judge
+from app.application.workbench.deliverable_check import DeliverableCheck, harden
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.deliverables import (
@@ -69,11 +70,14 @@ class Advisor:
         driver: TurnDriver,
         *,
         records: bool = False,
+        deliverables: DeliverableCheck | None = None,
     ):
         self.stores = stores  # 每次调用开一个工作单元
         self.driver = driver
         # 沙箱里配好了读项目记录的工具：每一步的说明里告诉模型有这组工具、委托编号是什么
         self.records = records
+        # 成稿硬检查（0022 段 4）：没配就只有软检查
+        self.deliverables = deliverables
 
     # ---------------- 入口 ----------------
     async def drive(self, task_id: str) -> str:
@@ -374,24 +378,36 @@ class Advisor:
                 )
                 return TaskState.WAITING
             verdict = judge(result.final_text, step.acceptance)
-            if verdict.ok:
-                # 成稿文件写了没有：只认这一轮报过的 fileChange；缺了记事件、不填路径，
-                # 不算验收不过（硬检查等账 87 的文件通道，0015 §3.3）
-                written = None
-                if step.output_file:
-                    written = deliverable_seen(result.files, step.output_file)
-                    await repo.append_event(
-                        session_id=str(task["session_id"]),
-                        kind="task",
-                        event_type="step/deliverable",
-                        payload={
-                            "step_id": step.step_id,
-                            "path": step.output_file,
-                            "seen": written,
-                        },
-                        task_id=task_id,
-                        attempt_id=attempt_id,
+            # 成稿文件写了没有：先认这一轮报过的 fileChange；没见到就经会合点问代理那个文件在不在
+            # （0022 段 4）：在 → 认；明确不在 → 验收不过；问不到 → 只记事件、不填路径（软检查）
+            written = None
+            if verdict.ok and step.output_file:
+                seen = deliverable_seen(result.files, step.output_file)
+                found = None
+                if not seen and self.deliverables is not None:
+                    session = await repo.get_session(str(task["session_id"]))
+                    found = await self.deliverables.exists(
+                        owner=str(task["owner_actor_id"]),
+                        directory=session.get("project_root"),
+                        path=step.output_file,
                     )
+                verdict, written, checked = harden(
+                    verdict, written=seen, found=found, output_file=step.output_file
+                )
+                await repo.append_event(
+                    session_id=str(task["session_id"]),
+                    kind="task",
+                    event_type="step/deliverable",
+                    payload={
+                        "step_id": step.step_id,
+                        "path": step.output_file,
+                        "seen": written,
+                        "checked": checked,
+                    },
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                )
+            if verdict.ok:
                 art = await repo.put_artifact(
                     task_id=task_id,
                     attempt_id=attempt_id,

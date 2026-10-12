@@ -95,6 +95,7 @@ def build_runner(
     poll_seconds: float = 1.0,
     records: bool = False,
     prices: PriceList | None = None,
+    deliverables: DeliverableCheck | None = None,
 ) -> Runner:
     return Runner(
         workbench_stores(session_factory),
@@ -105,6 +106,26 @@ def build_runner(
         poll_seconds=poll_seconds,
         records=records,
         prices=prices,
+        deliverables=deliverables,
+    )
+
+
+def build_deliverable_check(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    relay_url: str | None,
+    signing_key: str | None,
+    issuer_name: str,
+) -> DeliverableCheck | None:
+    """0022 段 4：成稿硬检查要经会合点服务流问代理；没配会合点或签名私钥就只有软检查（返回 None）。"""
+    if not (relay_url and signing_key):
+        return None
+    from app.application.workbench.deliverable_check import AgentDeliverableCheck
+    from app.application.workbench.tokens import TokenIssuer
+
+    return AgentDeliverableCheck(
+        build_agent_service(relay_url, TokenIssuer(signing_key, issuer=issuer_name)),
+        workbench_stores(session_factory),
     )
 
 
@@ -127,6 +148,7 @@ def build_machine_sync(
 
 if TYPE_CHECKING:
     from app.application.workbench.agent_service import AgentService
+    from app.application.workbench.deliverable_check import DeliverableCheck
     from app.application.workbench.tokens import TokenIssuer
 
 

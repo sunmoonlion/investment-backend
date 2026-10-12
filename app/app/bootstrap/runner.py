@@ -10,7 +10,12 @@ import asyncio
 import logging
 import signal
 
-from app.bootstrap.workbench import build_machine_sync, build_runner, event_publisher
+from app.bootstrap.workbench import (
+    build_deliverable_check,
+    build_machine_sync,
+    build_runner,
+    event_publisher,
+)
 from app.infrastructure.logging.logging import setup_logging
 from app.infrastructure.storage.postgres import get_postgres
 from app.infrastructure.storage.redis import get_redis
@@ -27,6 +32,12 @@ async def main() -> None:
         raise SystemExit(2)
     await get_redis().init()
     await get_postgres().init()
+    deliverables = build_deliverable_check(
+        get_postgres().session_factory,
+        relay_url=settings.workbench_relay_admin_url,
+        signing_key=settings.workbench_token_signing_key,
+        issuer_name=settings.workbench_token_issuer,
+    )
     runner = build_runner(
         get_postgres().session_factory,
         publisher=event_publisher(
@@ -37,6 +48,7 @@ async def main() -> None:
         poll_seconds=settings.workbench_poll_seconds,
         records=settings.workbench_records_mcp_enabled,
         prices=settings.workbench_model_prices(),
+        deliverables=deliverables,
     )
     # 我的机器：同一个进程里另起一条线，隔一会儿和会合点对一遍谁在线（没配管理通道就没有这条线）
     machines = build_machine_sync(
