@@ -330,3 +330,71 @@ async def test_conclusion_is_a_user_draft_artifact(make_client):
     assert (
         await make_client(B).get(f"/api/workbench/tasks/{tid}/artifacts")
     ).status_code == 404
+
+
+async def test_credentials_take_a_public_https_base_url_only(make_client, db):  # noqa: F811
+    from cryptography.fernet import Fernet
+
+    from app.interfaces.endpoints.workbench_routes import credential_cipher
+
+    http = make_client(A)
+    http._transport.app.dependency_overrides[credential_cipher] = lambda: Fernet(
+        Fernet.generate_key()
+    )  # type: ignore[attr-defined]
+    for bad in (
+        "http://api.example.com/v1",
+        "https://localhost/v1",
+        "https://10.0.0.8/v1",
+    ):
+        r = await http.post(
+            "/api/workbench/credentials",
+            json={
+                "provider": "kimi",
+                "api_key": "sk-test-1234567890abcd",
+                "base_url": bad,
+            },
+        )
+        assert r.status_code == 422, bad
+    r = await http.post(
+        "/api/workbench/credentials",
+        json={
+            "provider": "kimi",
+            "api_key": "sk-test-1234567890abcd",
+            "base_url": "https://proxy.example.com/openai/v1/",
+        },
+    )
+    assert (
+        r.status_code == 201
+        and r.json()["base_url"] == "https://proxy.example.com/openai/v1"
+    )
+    listed = (await http.get("/api/workbench/credentials")).json()["credentials"]
+    assert listed[0]["base_url"] == "https://proxy.example.com/openai/v1"
+    r = await http.post(
+        "/api/workbench/credentials",
+        json={"provider": "kimi", "api_key": "sk-test-1234567890abcd", "base_url": ""},
+    )
+    assert r.status_code == 201 and r.json()["base_url"] is None
+
+
+async def test_prefs_carry_mcp_source_switches(make_client):
+    http = make_client(A)
+    r = await http.get("/api/workbench/prefs")
+    assert r.json()["mcp_sources"] == {"knowledge": True}
+    r = await http.put(
+        "/api/workbench/prefs",
+        json={"approval_policy": "on-request", "mcp_sources": {"knowledge": False}},
+    )
+    assert r.status_code == 200 and r.json()["mcp_sources"] == {"knowledge": False}
+    # 不带开关只改模型：开关保持
+    r = await http.put(
+        "/api/workbench/prefs", json={"model": "kimi-k3", "approval_policy": "never"}
+    )
+    assert (
+        r.json()["mcp_sources"] == {"knowledge": False}
+        and r.json()["model"] == "kimi-k3"
+    )
+    r = await http.put(
+        "/api/workbench/prefs",
+        json={"approval_policy": "on-request", "mcp_sources": {"records": True}},
+    )
+    assert r.status_code == 422

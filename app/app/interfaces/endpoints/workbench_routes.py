@@ -41,6 +41,10 @@ from app.bootstrap.workbench import (
 from app.domain.security import Principal
 from app.domain.workbench.errors import WorkbenchError
 from app.domain.workbench.models import HandoverRequest
+from app.domain.workbench.provider_url import (
+    normalize_mcp_sources,
+    validate_provider_base_url,
+)
 from app.infrastructure.storage.postgres import get_db_session, get_postgres
 from app.infrastructure.storage.redis import get_redis
 from app.interfaces.http.middleware.auth import get_web_current_user
@@ -133,12 +137,16 @@ class Prefs(Strict):
     approval_policy: str = Field(
         default="on-request", pattern=r"^(untrusted|on-request|on-failure|never)$"
     )
+    # Codex 在云端能用哪些数据源（0021 §二之 2）；不给 = 不改/全开
+    mcp_sources: dict[str, bool] | None = None
 
 
 class AddCredential(Strict):
     provider: str = Field(min_length=1, max_length=64)
     api_key: str = Field(min_length=8, max_length=512)
     sandbox_id: str | None = None
+    # 自建或代理的 OpenAI 兼容端点（0021 §二之 2）；空 = 厂商默认
+    base_url: str | None = Field(default=None, max_length=512)
 
 
 class Conclusion(Strict):
@@ -928,7 +936,11 @@ async def get_prefs(
     session: AsyncSession = Depends(get_db_session),
 ):
     prefs = await workbench_store(session).get_prefs(_actor(principal))
-    return {"contract_version": CONTRACT_VERSION, **_plain(prefs)}
+    return {"contract_version": CONTRACT_VERSION, **_plain(_with_sources(prefs))}
+
+
+def _with_sources(prefs: dict[str, Any]) -> dict[str, Any]:
+    return {**prefs, "mcp_sources": normalize_mcp_sources(prefs.get("mcp_sources"))}
 
 
 @router.put("/prefs")
@@ -938,11 +950,25 @@ async def put_prefs(
     session: AsyncSession = Depends(get_db_session),
 ):
     repo = workbench_store(session)
-    async with repo.transaction():
-        prefs = await repo.put_prefs(
-            _actor(principal), model=body.model, approval_policy=body.approval_policy
+    try:
+        sources = (
+            normalize_mcp_sources(body.mcp_sources)
+            if body.mcp_sources is not None
+            else None
         )
-    return {"contract_version": CONTRACT_VERSION, **_plain(prefs)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    async with repo.transaction():
+        if sources is None:
+            current = await repo.get_prefs(_actor(principal))
+            sources = current.get("mcp_sources")
+        prefs = await repo.put_prefs(
+            _actor(principal),
+            model=body.model,
+            approval_policy=body.approval_policy,
+            mcp_sources=sources,
+        )
+    return {"contract_version": CONTRACT_VERSION, **_plain(_with_sources(prefs))}
 
 
 class MemoryIn(Strict):
@@ -1054,6 +1080,12 @@ async def add_credential(
             await repo.get_sandbox(body.sandbox_id, owner_actor_id=_actor(principal))
         except WorkbenchError as exc:
             raise _http(exc) from exc
+    base_url = None
+    if body.base_url is not None and body.base_url.strip():
+        try:
+            base_url = validate_provider_base_url(body.base_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
     ciphertext = cipher.encrypt(body.api_key.encode()).decode()
     async with repo.transaction():
         row = await repo.add_credential(
@@ -1062,6 +1094,7 @@ async def add_credential(
             provider=body.provider,
             ciphertext=ciphertext,
             hint=body.api_key[-4:],
+            base_url=base_url,
         )
     return _plain(row)
 

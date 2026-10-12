@@ -23,6 +23,7 @@ from app.application.ports.workbench import (
 )
 from app.application.workbench.tokens import TokenIssuer, jti_of
 from app.domain.workbench.errors import RelayIdentityChanged, WorkbenchError
+from app.domain.workbench.provider_url import normalize_mcp_sources
 
 log = logging.getLogger(__name__)
 
@@ -241,18 +242,24 @@ class SandboxProvisioning:
         credential: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
         model_key = self.cipher.decrypt(credential["ciphertext"].encode()).decode()
+        # 用户自己填的接入地址优先；没填用部署配置里的厂商默认（0021 §二之 2）
         spec = {
             "model_provider": self.provisioner.config.model_provider,
             "model": self.provisioner.config.model,
-            "provider_base_url": self.provisioner.config.provider_base_url,
+            "provider_base_url": credential.get("base_url")
+            or self.provisioner.config.provider_base_url,
             "model_key": model_key,
             "relay_token": sandbox_token,
             "relay_user": identity["relay_user"],
         }
-        if self.issuer is not None:
+        sources = normalize_mcp_sources(
+            (await self.repo.get_prefs(owner)).get("mcp_sources")
+        )
+        if self.issuer is not None and sources.get("knowledge", True):
             spec["knowledge_mcp_token"] = self.issuer.knowledge_token(
                 identity["relay_user"], sandbox=identity["relay_user"]
             ).token
+        if self.issuer is not None:
             if self.records_url:
                 # 专家读本项目别的对话与底稿的工具服务。供给器认得这两项之后才会配进沙箱
                 spec["records_mcp_url"] = self.records_url

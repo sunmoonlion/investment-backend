@@ -58,7 +58,8 @@ from core.config import AgentDownload, get_settings
 public_router = APIRouter(tags=["Agent onboarding"])
 owner_router = APIRouter(tags=["Agent onboarding"])
 logger = logging.getLogger(__name__)
-VERIFY_PATH = "/zh-CN/workbench/settings"
+# 设置分三类后，接入电脑是第三类（0021）；旧的 `settings#computer` 由网页转过去
+VERIFY_PATH = "/zh-CN/workbench/settings/computer"
 VERIFY_ANCHOR = "#computer"
 
 

@@ -1243,13 +1243,18 @@ class WorkbenchRepository:
     async def get_prefs(self, owner_actor_id: str) -> dict[str, Any]:
         r = await self.session.execute(
             text(
-                "select model, approval_policy, updated_at from workbench_user_prefs where owner_actor_id = :o"
+                "select model, approval_policy, mcp_sources, updated_at from workbench_user_prefs where owner_actor_id = :o"
             ),
             {"o": owner_actor_id},
         )
         row = r.mappings().first()
         if row is None:
-            return {"model": None, "approval_policy": "on-request", "updated_at": None}
+            return {
+                "model": None,
+                "approval_policy": "on-request",
+                "mcp_sources": None,
+                "updated_at": None,
+            }
         return dict(row)
 
     # ---- 长期记忆（0019 §四）----
@@ -1326,16 +1331,27 @@ class WorkbenchRepository:
         return int(r.rowcount or 0)
 
     async def put_prefs(
-        self, owner_actor_id: str, *, model: str | None, approval_policy: str
+        self,
+        owner_actor_id: str,
+        *,
+        model: str | None,
+        approval_policy: str,
+        mcp_sources: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
         await self.session.execute(
             text(
-                """insert into workbench_user_prefs (owner_actor_id, model, approval_policy, updated_at)
-                   values (:o, :m, :a, now())
+                """insert into workbench_user_prefs (owner_actor_id, model, approval_policy, mcp_sources, updated_at)
+                   values (:o, :m, :a, cast(:s as jsonb), now())
                    on conflict (owner_actor_id) do update set model = excluded.model,
-                     approval_policy = excluded.approval_policy, updated_at = now()"""
+                     approval_policy = excluded.approval_policy,
+                     mcp_sources = excluded.mcp_sources, updated_at = now()"""
             ),
-            {"o": owner_actor_id, "m": model, "a": approval_policy},
+            {
+                "o": owner_actor_id,
+                "m": model,
+                "a": approval_policy,
+                "s": json.dumps(mcp_sources) if mcp_sources is not None else None,
+            },
         )
         return await self.get_prefs(owner_actor_id)
 
@@ -1347,12 +1363,13 @@ class WorkbenchRepository:
         provider: str,
         ciphertext: str,
         hint: str,
+        base_url: str | None = None,
     ) -> dict[str, Any]:
         cid = str(uuid.uuid4())
         await self.session.execute(
             text(
-                """insert into workbench_credentials (id, owner_actor_id, sandbox_id, provider, ciphertext, hint, status)
-                   values (:id, :o, :s, :p, :c, :h, 'active')"""
+                """insert into workbench_credentials (id, owner_actor_id, sandbox_id, provider, ciphertext, hint, status, base_url)
+                   values (:id, :o, :s, :p, :c, :h, 'active', :u)"""
             ),
             {
                 "id": cid,
@@ -1361,6 +1378,7 @@ class WorkbenchRepository:
                 "p": provider,
                 "c": ciphertext,
                 "h": hint,
+                "u": base_url,
             },
         )
         return {
@@ -1369,12 +1387,13 @@ class WorkbenchRepository:
             "hint": hint,
             "status": "active",
             "sandbox_id": sandbox_id,
+            "base_url": base_url,
         }
 
     async def list_credentials(self, owner_actor_id: str) -> list[dict[str, Any]]:
         r = await self.session.execute(
             text(
-                """select id, sandbox_id, provider, hint, status, created_at, revoked_at
+                """select id, sandbox_id, provider, hint, status, base_url, created_at, revoked_at
                    from workbench_credentials where owner_actor_id = :o order by created_at desc"""
             ),
             {"o": owner_actor_id},
@@ -1716,7 +1735,7 @@ class WorkbenchRepository:
     async def active_credential(self, owner_actor_id: str) -> dict[str, Any] | None:
         r = await self.session.execute(
             text(
-                """select id, provider, ciphertext, hint from workbench_credentials
+                """select id, provider, ciphertext, hint, base_url from workbench_credentials
                    where owner_actor_id = :o and status = 'active' order by created_at desc limit 1"""
             ),
             {"o": owner_actor_id},

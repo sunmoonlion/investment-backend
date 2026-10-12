@@ -489,7 +489,12 @@ class WorkbenchStore(Protocol):
     async def clear_memories(self, owner_actor_id: str) -> int: ...
 
     async def put_prefs(
-        self, owner_actor_id: str, *, model: str | None, approval_policy: str
+        self,
+        owner_actor_id: str,
+        *,
+        model: str | None,
+        approval_policy: str,
+        mcp_sources: dict[str, bool] | None = None,
     ) -> dict[str, Any]: ...
 
     async def add_credential(
@@ -500,6 +505,7 @@ class WorkbenchStore(Protocol):
         provider: str,
         ciphertext: str,
         hint: str,
+        base_url: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def list_credentials(self, owner_actor_id: str) -> list[dict[str, Any]]: ...

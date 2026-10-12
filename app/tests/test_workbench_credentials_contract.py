@@ -19,6 +19,7 @@ WEB_FIELDS = {
     "provider",
     "hint",
     "status",
+    "base_url",
     "created_at",
     "revoked_at",
 }
