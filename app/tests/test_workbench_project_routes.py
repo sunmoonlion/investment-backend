@@ -366,7 +366,7 @@ async def test_the_experts_on_offer(make_client, db):  # noqa: F811
             "财务分析与预测",
         ]
         # 筹备中的那位看得见、请不了（所有者 2026-10-13 定先占位）
-        assert [p["status"] for p in body["packs"]] == ["ready", "ready", "preparing"]
+        assert [p["status"] for p in body["packs"]] == ["ready", "ready", "ready"]
         assert "method" not in got.text and "Reply with ONE JSON" not in got.text
 
         one = await http.get("/api/workbench/packs/FIN_REVIEW")

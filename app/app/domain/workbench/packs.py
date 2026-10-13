@@ -1240,7 +1240,7 @@ FIN_REVIEW = ExpertPack(
 # 设计：k8s 仓 tree-build/SDD/modules/0023-fin-forecast.md 第五节。把口径定死，看清过去，按说得清的方法
 # 外推。与财报体检的区别在编排：定范围找不到数据集就交人；分析不过退回取数；预测方法写死、不给返工——
 # 返工提示会催模型改方法、凑结果，与勾稽、对照官方不给返工同理。计算一律在 SQL 里做，结果列用口径名
-# 作别名，评测按列名比对。状态与版本在第 4 段切真时改（筹备中的专家请不了）。
+# 作别名，评测按列名比对。所有者 2026-10-13 要演示，切成可用、版本 1（原定本地十题过线后再切）。
 _FC_DATASET = (
     "Every knowledge tool call in this step MUST pass the argument "
     "dataset=<scope.dataset>; never query the default dataset. "
@@ -1264,13 +1264,11 @@ _FC_PERIODS = (
 
 FIN_FORECAST = ExpertPack(
     pack_id="FIN_FORECAST",
-    version="0",
+    version="1",
     profile_id="FIN_FORECAST",
-    title="财务分析与预测（筹备中）",
+    title="财务分析与预测（先定口径，再看走势，带区间预测）",
     name="财务分析与预测",
     tagline="看清收入、成本、现金流的走势，给出可核对的预测",
-    status="preparing",
-    preparing_note="数据和方法正在接入（样例是一家电商的订单、支付、商品、客户九张表）；接好后这里直接可用。",
     requires_tools=True,
     dossier=(
         DossierBlock(

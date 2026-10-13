@@ -255,16 +255,33 @@ def test_why_a_delegation_ended_in_words_for_the_user(state, reason, said):
         assert word not in said
 
 
-def test_the_preparing_expert_is_listed_but_cannot_be_asked():
-    """所有者 2026-10-13 定：财务分析与预测先占位——看得见、读得到它要做什么，请不了。"""
+def test_the_preparing_expert_is_listed_but_cannot_be_asked(monkeypatch):
+    """所有者 2026-10-13 定的「筹备中」一档：看得见、读得到它要做什么，请不了。
+
+    财务分析与预测同日切成可用；这一档留着给以后的专家，这里用一个筹备中的副本来验。
+    """
     from app.application.workbench.delegation import expert_on_offer
     from app.domain.workbench.errors import ExpertNotReady
     from app.domain.workbench.packs import FIN_FORECAST
 
-    view = pack_view(FIN_FORECAST)
+    preparing = FIN_FORECAST.model_copy(
+        update={"status": "preparing", "preparing_note": "数据和方法正在接入。"}
+    )
+    monkeypatch.setitem(BUILTIN_PACKS, "FIN_FORECAST", preparing)
+    view = pack_view(preparing)
     assert view["status"] == "preparing" and view["preparing_note"]
     assert view["name"] == "财务分析与预测" and len(view["steps"]) == 5
-    assert pack_view(FIN_REVIEW)["status"] == "ready"
     with pytest.raises(ExpertNotReady):
         expert_on_offer("FIN_FORECAST")
     assert expert_on_offer("FIN_REVIEW").profile_id == "FIN_REVIEW"
+
+
+def test_the_forecasting_expert_can_be_asked():
+    """所有者 2026-10-13 要演示：财务分析与预测切成可用、版本 1。"""
+    from app.application.workbench.delegation import expert_on_offer
+    from app.domain.workbench.packs import FIN_FORECAST
+
+    view = pack_view(FIN_FORECAST)
+    assert view["status"] == "ready" and not view["preparing_note"]
+    assert "筹备中" not in FIN_FORECAST.title and FIN_FORECAST.version == "1"
+    assert expert_on_offer("FIN_FORECAST") is FIN_FORECAST
