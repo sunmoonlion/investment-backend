@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,6 +20,11 @@ from .cases import TruthQuery
 Rows = list[dict[str, Any]]
 Dialect = Literal["sqlite", "duckdb"]
 _DUCKDB_TYPES = (("INT", "BIGINT"), ("REAL", "DOUBLE"), ("FLOA", "DOUBLE"))
+
+
+def _sql_text(value: str) -> str:
+    """SQL 字符串字面量。"""
+    return "'" + value.replace("'", "''") + "'"
 
 
 class QueryFailed(Exception):
@@ -75,13 +82,22 @@ class TruthStore:
         return columns, [dict(zip(columns, row, strict=True)) for row in fetched]
 
     def _duckdb(self) -> Any:
-        """数据集原样装进内存库：表名不变，类型照搬；装好后关掉对外访问。"""
+        """数据集原样装进内存库：表名不变，类型照搬；装好后关掉对外访问。
+
+        每张表先写成临时 CSV，再由 DuckDB 自己的读取器按建好的列类型读进来：DuckDB 把
+        Python 值逐个转进去很慢（几万行要几十秒），读 CSV 不到一秒。字符串一律加引号、
+        空值写成不加引号的空字段，读时不把加引号的空串当空值，所以空串与空值不会混；
+        小数按 Python 的最短精确写法写出，读回来逐位相同。
+        """
         if self._duck is not None:
             return self._duck
         import duckdb
 
         db = duckdb.connect(":memory:")
-        with sqlite3.connect(f"file:{self.db_path.resolve()}?mode=ro", uri=True) as src:
+        with (
+            sqlite3.connect(f"file:{self.db_path.resolve()}?mode=ro", uri=True) as src,
+            tempfile.TemporaryDirectory(prefix="eval-truth-") as tmp,
+        ):
             tables = [
                 str(r[0])
                 for r in src.execute(
@@ -89,7 +105,7 @@ class TruthStore:
                     "AND name NOT LIKE 'sqlite_%' ORDER BY name"
                 )
             ]
-            for table in tables:
+            for index, table in enumerate(tables):
                 info = src.execute(f'PRAGMA table_info("{table}")').fetchall()
                 names = [str(c[1]) for c in info]
                 kinds = [
@@ -103,13 +119,20 @@ class TruthStore:
                     f'"{n}" {k}' for n, k in zip(names, kinds, strict=True)
                 )
                 db.execute(f'CREATE TABLE "{table}" ({spec})')
-                rows = src.execute(f'SELECT * FROM "{table}"').fetchall()  # noqa: S608
-                if rows:
-                    marks = ", ".join("?" for _ in names)
-                    db.executemany(
-                        f'INSERT INTO "{table}" VALUES ({marks})',  # noqa: S608
-                        rows,
-                    )
+                path = Path(tmp) / f"{index}.csv"
+                with path.open("w", newline="", encoding="utf-8") as out:
+                    writer = csv.writer(out, quoting=csv.QUOTE_STRINGS)
+                    writer.writerows(src.execute(f'SELECT * FROM "{table}"'))  # noqa: S608
+                columns = ", ".join(
+                    f"{_sql_text(n)}: {_sql_text(k)}"
+                    for n, k in zip(names, kinds, strict=True)
+                )
+                db.execute(
+                    f'INSERT INTO "{table}" SELECT * FROM read_csv('  # noqa: S608
+                    f"{_sql_text(str(path))}, header = false, delim = ',', "
+                    "quote = '\"', escape = '\"', allow_quoted_nulls = false, "
+                    f"columns = {{{columns}}})"
+                )
         db.execute("SET enable_external_access=false")
         db.execute("SET lock_configuration=true")
         self._duck = db
