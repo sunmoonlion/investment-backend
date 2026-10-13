@@ -9,12 +9,42 @@ from __future__ import annotations
 from typing import Any
 
 FIELD_WORDS: dict[str, str] = {
-    # 财务分析与预测（占位包，所有者 2026-10-13）
-    "definitions": "口径",
+    # 财务分析与预测（0023）
     "findings": "发现",
     "text": "内容",
-    "evidence": "依据",
+    "numbers": "依据的数",
     "method": "方法",
+    "start": "起",
+    "end": "止",
+    "grain": "粒度",
+    "complete_period": "完整的期间",
+    "unavailable": "数据里没有的",
+    "reason": "原因",
+    "forecast": "预测",
+    "horizon": "预测哪几期",
+    "excluded_periods": "排除的期",
+    "window": "窗口",
+    "count": "期数",
+    "quarters": "按季度合计",
+    "actual_months": "用实际值的月份",
+    "forecast_point": "预测值",
+    "forecast_low": "区间下限",
+    "forecast_high": "区间上限",
+    "backtest": "回测",
+    "mape": "平均误差",
+    "inside": "落在区间内的期数",
+    "total": "总期数",
+    # 样例数据集 olist-ecommerce 的口径名（演示时会直接出现在交回物里）。别的数据集的口径名
+    # 页面照原名显示；它们的中文名在取数一步的 columns 里
+    "gmv": "成交额",
+    "item_revenue": "商品收入",
+    "freight_revenue": "运费收入",
+    "payment_total": "支付额",
+    "order_count": "订单数",
+    "cancel_rate": "取消率",
+    "credit_card_installment_share": "信用卡分期占比",
+    "active_customers": "下单客户数",
+    "repeat_customer_share": "复购客户占比",
     # 定范围、改写问题
     "company": "公司",
     "security_code": "证券代码",

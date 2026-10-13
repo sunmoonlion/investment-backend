@@ -1,8 +1,8 @@
 """专家包与步骤契约（methods.md「专家包」、task-contract.md「步骤交回物」）。
 
 专家包是数据：workflow[] 的每一步说清输入引用、方法文本、输出 schema、验收条目、不合格的去向。顾问按它逐步发 turn；
-它不是 skill（做成 skill 等于整包交出去），也不写判断规则（F-POS-02）。内置三份：SMOKE（跑机制）、DATA_QUERY（问数五阶段，工具随 0006 来）、
-FIN_REVIEW（财报体检七步，0008-info 段四）。
+它不是 skill（做成 skill 等于整包交出去），也不写判断规则（F-POS-02）。内置四份：SMOKE（跑机制）、DATA_QUERY（问数五阶段，工具随 0006 来）、
+FIN_REVIEW（财报体检七步，0008-info 段四）、FIN_FORECAST（财务分析与预测五步，0023）。
 """
 
 from __future__ import annotations
@@ -1236,9 +1236,32 @@ FIN_REVIEW = ExpertPack(
     },
 )
 
-# 财务分析与预测：所有者 2026-10-13 定先占位（筹备中），Qwen 把数据（WrenAI 的巴西电商 Olist 样例，9 张表：
-# 订单、明细、支付、商品、客户、卖家、评价、地理）与方法做好后切成 ready。步骤先按五段写个样子，不会被跑：
-# 筹备中的专家请不了（delegation.expert_on_offer 拒绝）。
+# ---------------------------------------------------------------- 财务分析与预测
+# 设计：k8s 仓 tree-build/SDD/modules/0023-fin-forecast.md 第五节。把口径定死，看清过去，按说得清的方法
+# 外推。与财报体检的区别在编排：定范围找不到数据集就交人；分析不过退回取数；预测方法写死、不给返工——
+# 返工提示会催模型改方法、凑结果，与勾稽、对照官方不给返工同理。计算一律在 SQL 里做，结果列用口径名
+# 作别名，评测按列名比对。状态与版本在第 4 段切真时改（筹备中的专家请不了）。
+_FC_DATASET = (
+    "Every knowledge tool call in this step MUST pass the argument "
+    "dataset=<scope.dataset>; never query the default dataset. "
+)
+_FC_SQL = (
+    "Do every computation in SQL (sums, averages, minimums, maximums, ratios, "
+    "growth rates); never compute a number in your head. Name every computed column "
+    "exactly after its metric_name from metric_definitions (for example AS gmv), "
+    "name the period column `period`, and write periods in the formats declared by "
+    "dataset_metadata.period_formats (months YYYY-MM, quarters YYYY-Qn). Keep ratios "
+    "as fractions between 0 and 1 and do not round them in SQL. Dimension columns "
+    "keep their field names. "
+)
+_FC_PERIODS = (
+    "Use complete periods only. If dataset_metadata declares complete_start and "
+    "complete_end, use exactly that range; otherwise treat as incomplete the leading "
+    "and trailing periods whose volume is below half the median of the other "
+    "periods, and say that this is how you decided. An incomplete period is never "
+    "read as a decline. "
+)
+
 FIN_FORECAST = ExpertPack(
     pack_id="FIN_FORECAST",
     version="0",
@@ -1265,15 +1288,7 @@ FIN_FORECAST = ExpertPack(
             artifact="series",
             path="rows",
             section="data",
-            also={"columns": "columns"},
-        ),
-        DossierBlock(
-            key="findings",
-            title="分析发现",
-            kind="list",
-            artifact="analysis",
-            path="findings",
-            section="verified",
+            also={"columns": "columns", "data_version": "data_version"},
         ),
         DossierBlock(
             key="forecast",
@@ -1282,7 +1297,23 @@ FIN_FORECAST = ExpertPack(
             artifact="forecast",
             path="rows",
             section="data",
-            also={"method": "method", "assumptions": "assumptions"},
+            also={"method": "method", "assumptions": "assumptions", "window": "window"},
+        ),
+        DossierBlock(
+            key="quarters",
+            title="按季度合计",
+            kind="table",
+            artifact="forecast",
+            path="quarters",
+            section="data",
+        ),
+        DossierBlock(
+            key="findings",
+            title="分析发现",
+            kind="list",
+            artifact="analysis",
+            path="findings",
+            section="verified",
         ),
         DossierBlock(
             key="limitations",
@@ -1305,138 +1336,417 @@ FIN_FORECAST = ExpertPack(
         StepContract(
             step_id="scope",
             title="定范围",
-            summary="说清分析哪段时间、哪些口径：收入按支付还是按订单，成本含不含运费",
-            why="口径先定，后面的数和预测才有意义；口径不同，同一问题答案可以差一倍。",
-            method_text="Rewrite the user's financial question into scope: period, grain, revenue and cost definitions. "
-            + JSON_ONLY,
+            summary="认出数据集，把问题落到口径、期间和粒度上；数据里没有的口径照实列出",
+            why="口径先定，后面的数和预测才有意义；同一个问题，口径不同，答案可以差一倍。找不到能回答的数据就停下问你。",
+            method_text=(
+                "Turn the user's question into a fixed scope before any number is "
+                "used. 1) Call list_datasets and choose the dataset that can answer "
+                "the question, judging by its title and tables. If none can, set "
+                "`dataset` to null and stop; never use a dataset that does not fit. "
+                "2) With dataset=<that dataset> on every call: read dataset_metadata "
+                "(all rows) and copy into `notes`, verbatim, every note about periods, "
+                "truncation, missing data, keys and status rules; call describe_schema "
+                "and metric_definitions. 3) Map the question onto metric names "
+                "returned by metric_definitions and list them in `metrics`; use only "
+                "names that exist there. Every quantity the question asks for whose "
+                "definition has kind=unavailable, or that has no definition at all, "
+                "goes into `unavailable` with the reason; never substitute another "
+                "field for it. 4) Set `period` to the range and grain the question "
+                "asks for. If the question names no range, or a vague one such as "
+                "近两年, use complete_start to complete_end and say so in "
+                "`assumptions`. Copy complete_start and complete_end into "
+                "`complete_period`. 5) If the question asks for a forecast, put the "
+                "periods to forecast in `forecast.horizon` (for the next two quarters: "
+                "the two quarters after the last complete quarter, counting a quarter "
+                "that is only partly complete as the first); otherwise set `forecast` "
+                "to null. Do not ask the user about definitions that metric_definitions "
+                "settles; state your reading in `assumptions`. " + JSON_ONLY
+            ),
+            tools=("list_datasets", "describe_schema", "metric_definitions", "run_sql"),
             output_artifact="scope",
             output_schema={
                 "question": "string",
-                "period": "string",
-                "definitions": ["string"],
+                "dataset": "string or null",
+                "data_version": "string, as reported by the tools",
+                "period": {"start": "YYYY-MM", "end": "YYYY-MM", "grain": "month"},
+                "complete_period": {"start": "YYYY-MM", "end": "YYYY-MM"},
+                "metrics": ["metric_name from metric_definitions"],
+                "unavailable": [{"name": "string", "reason": "string"}],
+                "forecast": {"horizon": ["YYYY-Qn"]},
+                "notes": ["verbatim notes from dataset_metadata"],
+                "assumptions": ["string"],
             },
             acceptance=(
                 AcceptanceRule(
-                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                    kind="json_object",
+                    message="交回物不是 JSON 对象",
+                    label="交回的格式对",
                 ),
                 AcceptanceRule(
                     kind="required_keys",
-                    keys=("question", "period"),
-                    message="缺问题或期间",
-                    label="有问题和期间",
+                    keys=(
+                        "dataset",
+                        "data_version",
+                        "period",
+                        "metrics",
+                        "unavailable",
+                    ),
+                    message="缺数据集、数据版本、期间、口径或数据里没有的口径",
+                    label="有数据集、数据版本、期间、口径",
+                ),
+                AcceptanceRule(
+                    kind="non_empty",
+                    path="dataset",
+                    message="没有找到能回答这个问题的数据集",
+                    label="认出了能回答的数据集",
+                ),
+                AcceptanceRule(
+                    kind="non_empty",
+                    path="data_version",
+                    message="没有数据版本",
+                    label="有数据版本",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="metrics",
+                    min_items=1,
+                    message="问题没有落到任何口径上",
+                    label="问题落到了口径上",
                 ),
             ),
+            on_reject="human",
+            max_reworks=0,
+            input_max_chars=_FIN_INPUT_CHARS,
         ),
         StepContract(
             step_id="pull",
             title="取数",
-            summary="按口径把收入、成本、订单量按月取出来，列出每一列的来源",
-            why="预测要建立在你看得到的数上：每一列从哪张表、怎么算，先摆出来。",
+            summary="按口径把每期的数取出来，每列写明出自哪张表、什么口径；不完整的期排除并说明",
+            why="后面的分析和预测都建立在这张表上：每列从哪来、怎么算，先摆出来给你核对。",
             input_refs=("scope",),
-            method_text="Query the dataset for monthly revenue, cost and order counts under the agreed definitions; list sources per column. "
-            + JSON_ONLY,
+            method_text=(
+                "Pull the series the scope needs. "
+                + _FC_DATASET
+                + "For each metric in scope.metrics, query it per period over "
+                "scope.period at scope.period.grain, following its definition "
+                "(expression and row_filter) exactly. Return one row per period with "
+                "one column per metric. List every period inside scope.period that is "
+                "not complete in `excluded_periods` with the reason, and leave it out "
+                "of `rows`. In `columns` give, for each column, its name, its display "
+                "name and its source (table, field and filter). Put every SQL "
+                "statement you ran in `sql`. "
+                + _FC_SQL
+                + _FC_PERIODS
+                + _FIN_NUMBERS
+                + JSON_ONLY
+            ),
             tools=("describe_schema", "run_sql"),
             output_artifact="series",
             output_schema={
-                "columns": [{"name": "string", "source": "string"}],
-                "rows": [["string"]],
+                "columns": [
+                    {
+                        "name": "gmv",
+                        "display_name": "成交额",
+                        "source": "table.field and filter",
+                    }
+                ],
+                "rows": [{"period": "YYYY-MM", "gmv": 0.0}],
+                "excluded_periods": [{"period": "YYYY-MM", "reason": "string"}],
+                "sql": ["every SQL statement that was run"],
+                "data_version": "string",
             },
             acceptance=(
                 AcceptanceRule(
-                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                    kind="json_object",
+                    message="交回物不是 JSON 对象",
+                    label="交回的格式对",
                 ),
                 AcceptanceRule(
                     kind="required_keys",
-                    keys=("columns", "rows"),
-                    message="缺列或行",
-                    label="有列和行",
+                    keys=("columns", "rows", "excluded_periods", "sql", "data_version"),
+                    message="缺列说明、取数结果、排除的期、查询语句或数据版本",
+                    label="有列说明、取数结果、排除的期、查询语句、数据版本",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="rows",
+                    min_items=1,
+                    message="取数结果为空",
+                    label="取到了数",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="sql",
+                    min_items=1,
+                    message="没有交回执行过的查询语句",
+                    label="交回了执行过的查询语句",
+                ),
+                AcceptanceRule(
+                    kind="non_empty",
+                    path="data_version",
+                    message="没有数据版本",
+                    label="有数据版本",
                 ),
             ),
+            on_reject="rework",
+            max_reworks=1,
+            input_max_chars=_FIN_INPUT_CHARS,
         ),
         StepContract(
             step_id="analyze",
             title="分析",
-            summary="看趋势、季节性、结构：哪些品类和地区在涨，利润率怎么变",
-            why="先把过去说清楚，预测才有依据；结构变化比总数更能说明问题。",
-            input_refs=("series",),
-            method_text="Analyse trend, seasonality and mix on the series; report findings with the numbers they rest on. "
-            + JSON_ONLY,
+            summary="看走势、结构和季节性，每条发现都带它依据的数和查询",
+            why="先把过去说清楚，预测才有依据；每条发现都能回到数据上核对。",
+            input_refs=("scope", "series"),
+            method_text=(
+                "Describe the past before anyone forecasts it. "
+                + _FC_DATASET
+                + "Using the series, and further queries where needed: 1) trend: "
+                "change from period to period and, where the same period a year "
+                "earlier is in range, year on year; 2) structure, only where the "
+                "question needs it: shares by region or category and how they changed; "
+                "3) seasonality only if the series covers at least two complete years; "
+                "otherwise say in a finding that it cannot be judged from this data. "
+                "Each finding states the fact, the numbers it rests on, and the SQL "
+                "that produced those numbers. At least two findings. Describe only; do "
+                "not say whether something is good or bad. "
+                + _FC_SQL
+                + _FIN_NUMBERS
+                + JSON_ONLY
+            ),
+            tools=("run_sql",),
             output_artifact="analysis",
-            output_schema={"findings": [{"text": "string", "evidence": "string"}]},
+            output_schema={
+                "findings": [
+                    {
+                        "text": "string",
+                        "numbers": ["string"],
+                        "sql": "the SQL that produced the numbers",
+                    }
+                ],
+                "data_version": "string",
+            },
             acceptance=(
                 AcceptanceRule(
-                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                    kind="json_object",
+                    message="交回物不是 JSON 对象",
+                    label="交回的格式对",
+                ),
+                AcceptanceRule(
+                    kind="required_keys",
+                    keys=("findings",),
+                    message="缺分析发现",
+                    label="有分析发现",
                 ),
                 AcceptanceRule(
                     kind="list_min",
-                    keys=("findings",),
-                    min_items=1,
-                    message="没有发现",
-                    label="至少一条发现",
+                    path="findings",
+                    min_items=2,
+                    message="分析发现少于两条",
+                    label="至少两条发现",
                 ),
             ),
+            on_reject="back",
+            back_to="pull",
+            max_reworks=0,  # 不先重做本步：不过就直接退回取数，回来仍不过交人
+            max_backs=1,
+            input_max_chars=_FIN_INPUT_CHARS,
         ),
         StepContract(
             step_id="forecast",
             title="预测",
-            summary="按简单、能说清的方法外推下几期，给区间，写明假设",
-            why="预测一定带假设和区间；只给一个数等于没说。",
-            input_refs=("series", "analysis"),
-            method_text="Forecast the next periods with a simple explainable method; give ranges and assumptions. "
-            + JSON_ONLY,
+            summary="按固定的方法外推：先回测看误差，再给每期的预测值、区间和假设；残缺的季度用实际加预测",
+            why="预测一定带区间和假设，只给一个数等于没说；方法写死、不合格不返工，不让模型改方法凑结果。",
+            input_refs=("scope", "series", "analysis"),
+            method_text=(
+                "Forecast with the fixed method below; do not choose another method. "
+                + _FC_DATASET
+                + "Method: moving average. 1) Complete periods come from "
+                "scope.complete_period and series.excluded_periods. The window is the "
+                "6 latest complete periods; if fewer than 6 exist use all of them; if "
+                "fewer than 3 exist, do not forecast: leave `rows` empty and say why in "
+                "`method` and `assumptions`. 2) Backtest first when there are at least "
+                "12 complete periods: move the window back by 6 periods, forecast the "
+                "6 periods after it with the same rule, compare with the actual "
+                "values, and report the mean absolute percentage error and how many "
+                "actual values fall inside the range. Otherwise set `backtest` to null "
+                "and say why in `assumptions`. 3) For each period in the horizon, the "
+                "point forecast is the average of the window and the range is the "
+                "minimum and the maximum of the window. The forecast starts at the "
+                "first period after the last complete period; a period that exists in "
+                "the data but is incomplete is forecast, not read. 4) Quarters: a "
+                "quarter's point is the sum of its monthly points and its range is the "
+                "sum of the monthly lows and highs; a quarter with complete months "
+                "adds their actual values instead of forecasts for those months, and "
+                "lists them in `actual_months`. Compute everything in SQL; name the "
+                "columns forecast_point, forecast_low and forecast_high, and the period "
+                "column period. Give at least two assumptions (for example: the recent "
+                "level persists; no new promotion, policy or definition change). Never "
+                "call a forecast certain, a promise or a target. "
+                + _FC_SQL
+                + _FIN_NUMBERS
+                + JSON_ONLY
+            ),
+            tools=("run_sql",),
             output_artifact="forecast",
             output_schema={
                 "method": "string",
+                "window": {"start": "YYYY-MM", "end": "YYYY-MM", "count": 6},
+                "excluded_periods": [{"period": "YYYY-MM", "reason": "string"}],
                 "assumptions": ["string"],
-                "rows": [["string"]],
+                "rows": [
+                    {
+                        "period": "YYYY-MM",
+                        "forecast_point": 0.0,
+                        "forecast_low": 0.0,
+                        "forecast_high": 0.0,
+                    }
+                ],
+                "quarters": [
+                    {
+                        "period": "YYYY-Qn",
+                        "forecast_point": 0.0,
+                        "forecast_low": 0.0,
+                        "forecast_high": 0.0,
+                        "actual_months": ["YYYY-MM"],
+                    }
+                ],
+                "backtest": {
+                    "window": {"start": "YYYY-MM", "end": "YYYY-MM"},
+                    "mape": 0.0,
+                    "inside": 0,
+                    "total": 6,
+                },
+                "sql": ["every SQL statement that was run"],
+                "data_version": "string",
             },
             acceptance=(
                 AcceptanceRule(
-                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                    kind="json_object",
+                    message="交回物不是 JSON 对象",
+                    label="交回的格式对",
                 ),
                 AcceptanceRule(
                     kind="required_keys",
-                    keys=("method", "assumptions", "rows"),
-                    message="缺方法、假设或预测值",
-                    label="有方法、假设和预测值",
+                    keys=("method", "window", "assumptions", "rows", "backtest", "sql"),
+                    message="缺方法、窗口、假设、预测值、回测或查询语句",
+                    label="有方法、窗口、假设、预测值、回测、查询语句",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="assumptions",
+                    min_items=2,
+                    message="假设少于两条",
+                    label="至少两条假设",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="rows",
+                    min_items=1,
+                    message="没有预测值",
+                    label="有预测值",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="sql",
+                    min_items=1,
+                    message="没有交回执行过的查询语句",
+                    label="交回了执行过的查询语句",
                 ),
             ),
+            on_reject="human",
+            max_reworks=0,
+            input_max_chars=_FIN_INPUT_CHARS,
         ),
         StepContract(
             step_id="writeup",
             title="成稿",
-            summary="把范围、数据、分析、预测写成一篇可核对的稿子，落到项目文件里",
-            why="给你的是一篇能逐条核对的稿子，不是几个数。",
+            summary="把范围、取数、发现、预测写成一篇可核对的稿子，落到项目文件里",
+            why="给你的是一篇能逐条核对的稿子：数都有出处，预测带区间和假设，缺的数据和截断照实写进局限。",
             input_refs=("scope", "series", "analysis", "forecast"),
-            method_text="Write the deliverable in Chinese: scope, data with sources, findings, forecast with assumptions and ranges, limits. "
-            + JSON_ONLY,
+            method_text=(
+                "Write the deliverable in Chinese from the input artifacts only; do not "
+                "call any tool. `answer` answers the question in plain words first: the "
+                "trend and, when a forecast was asked, the point and the range for each "
+                "forecast period with the method in one sentence. `limitations` MUST "
+                "contain: every item of scope.unavailable with its reason; every "
+                "excluded or incomplete period with its reason; that the forecast "
+                "assumes the recent level persists, with the backtest error (or why "
+                "there was no backtest); any note in scope.notes that limits the "
+                "reading. `citations` name the dataset, its title and the data version. "
+                "No valuation, rating, target price, or advice to buy, sell or hold; a "
+                "forecast is an extrapolation, never a promise or a target. "
+                "The deliverable file holds the full write-up: answer, the series with "
+                "sources, the findings, the forecast table with method, window, "
+                "assumptions and backtest, limitations and sources. "
+                + DELIVERABLE_RULES
+                + " "
+                + JSON_ONLY
+            ),
             output_artifact="note",
+            output_file="底稿/财务分析与预测-成稿.md",
             output_schema={
                 "answer": "string",
                 "limitations": ["string"],
                 "citations": ["string"],
+                "data_version": "string",
             },
-            output_file="底稿/财务分析与预测-成稿.md",
             acceptance=(
                 AcceptanceRule(
-                    kind="json_object", message="交回物不是对象", label="交回的格式对"
+                    kind="json_object",
+                    message="交回物不是 JSON 对象",
+                    label="交回的格式对",
+                ),
+                AcceptanceRule(
+                    kind="required_keys",
+                    keys=("answer", "limitations", "citations", "data_version"),
+                    message="缺回答、局限、出处或数据版本",
+                    label="有回答、局限、出处、数据版本",
                 ),
                 AcceptanceRule(
                     kind="non_empty",
-                    keys=("answer",),
-                    message="没有正文",
-                    label="有正文",
+                    path="answer",
+                    message="回答为空",
+                    label="回答不是空的",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="limitations",
+                    min_items=1,
+                    message="没有写局限",
+                    label="写了局限",
+                ),
+                AcceptanceRule(
+                    kind="list_min",
+                    path="citations",
+                    min_items=1,
+                    message="没有出处",
+                    label="有出处",
+                ),
+                AcceptanceRule(
+                    kind="no_positioning_advice",
+                    message="含有评级、目标价或买卖建议的措辞",
+                    label="没有评级、目标价、买卖建议",
+                ),
+                AcceptanceRule(
+                    kind="max_chars",
+                    max_chars=30000,
+                    message="成稿过长",
+                    label="成稿没有超长",
                 ),
             ),
+            on_reject="human",
+            max_reworks=1,
+            input_max_chars=_FIN_INPUT_CHARS,
         ),
     ),
     answers={
-        "解决什么": "对一家公司（样例是一家电商）的收入、成本、订单与现金流做趋势与结构分析，并按可说清的方法给出下几期的预测与区间",
-        "不解决什么": "不做估值、不给买卖建议；没有数据的公司不做；预测只是外推，不是承诺",
-        "输入": "一个问题，和分析的时间范围（例如：近两年按月的收入与毛利趋势，预测下两个季度）",
-        "输出": "成稿：口径、取数表（每列带来源）、分析发现、预测表（方法、假设、区间）、局限",
-        "谁做判断": "用户。专家只摆数、说趋势、给带假设的预测",
-        "失败怎么办": "数据没接入或口径说不清时停下交人，不硬算",
+        "解决什么": "对一份已入库的经营或财务数据，按定死的口径看清过去的走势与结构，并用说得清的方法给出带区间、带假设、先回测的预测",
+        "不解决什么": "估值、评级、买卖建议；数据里没有的口径（例如没有成本就不算毛利）；复杂的统计模型",
+        "输入": "一个问题，例如：近两年按月收入怎么走，预测下两个季度",
+        "输出": "成稿：回答、取数表（每列带出处）、分析发现、预测表（方法、区间、假设、回测）、局限、出处",
+        "谁做判断": "用户。专家只摆数、说走势、给带假设的预测",
+        "失败怎么办": "找不到能回答的数据集或范围认不出时停下问你；分析不过退回取数一次；预测不合格不返工，直接交你看",
     },
 )
 
