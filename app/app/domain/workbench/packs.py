@@ -1264,7 +1264,7 @@ _FC_PERIODS = (
 
 FIN_FORECAST = ExpertPack(
     pack_id="FIN_FORECAST",
-    version="1",
+    version="2",
     profile_id="FIN_FORECAST",
     title="财务分析与预测（先定口径，再看走势，带区间预测）",
     name="财务分析与预测",
@@ -1334,31 +1334,44 @@ FIN_FORECAST = ExpertPack(
         StepContract(
             step_id="scope",
             title="定范围",
-            summary="认出数据集，把问题落到口径、期间和粒度上；数据里没有的口径照实列出",
-            why="口径先定，后面的数和预测才有意义；同一个问题，口径不同，答案可以差一倍。找不到能回答的数据就停下问你。",
+            summary="认出数据集，把问题落到口径、期间和粒度上；说不清是哪家就先问你，数据里没有的口径照实列出",
+            why="口径先定，后面的数和预测才有意义；同一个问题，口径不同，答案可以差一倍。说不清是哪家、或找不到能回答的数据，就停下问你。",
             method_text=(
                 "Turn the user's question into a fixed scope before any number is "
-                "used. 1) Call list_datasets and choose the dataset that can answer "
-                "the question, judging by its title and tables. If none can, set "
-                "`dataset` to null and stop; never use a dataset that does not fit. "
-                "2) With dataset=<that dataset> on every call: read dataset_metadata "
+                "used. 1) Call list_datasets, and metric_definitions for each dataset "
+                "listed. This version supports only datasets whose metrics are "
+                "aggregated per period (kind=aggregate), such as sales or order data; "
+                "it does not support financial statement datasets whose metrics are "
+                "computed per report row (kind=row). Keep only the datasets that have "
+                "kind=aggregate metrics for what the question asks. 2) Choose among "
+                "the kept datasets. If the question names the company or the dataset, "
+                "take that one. If it does not (for example 这个公司 or 它) and exactly "
+                "one kept dataset fits, take it and say so in `assumptions`. If more "
+                "than one fits, ask the user which one, with the dataset titles as the "
+                "options, and use the answer. If none fits, or what the question asks "
+                "is only in a financial statement dataset, set `dataset` to null, say "
+                "why in `assumptions` and stop; never use a dataset that does not fit. "
+                "3) With dataset=<that dataset> on every call: read dataset_metadata "
                 "(all rows) and copy into `notes`, verbatim, every note about periods, "
-                "truncation, missing data, keys and status rules; call describe_schema "
-                "and metric_definitions. 3) Map the question onto metric names "
-                "returned by metric_definitions and list them in `metrics`; use only "
-                "names that exist there. Every quantity the question asks for whose "
-                "definition has kind=unavailable, or that has no definition at all, "
-                "goes into `unavailable` with the reason; never substitute another "
-                "field for it. 4) Set `period` to the range and grain the question "
-                "asks for. If the question names no range, or a vague one such as "
-                "近两年, use complete_start to complete_end and say so in "
-                "`assumptions`. Copy complete_start and complete_end into "
-                "`complete_period`. 5) If the question asks for a forecast, put the "
-                "periods to forecast in `forecast.horizon` (for the next two quarters: "
-                "the two quarters after the last complete quarter, counting a quarter "
-                "that is only partly complete as the first); otherwise set `forecast` "
-                "to null. Do not ask the user about definitions that metric_definitions "
-                "settles; state your reading in `assumptions`. " + JSON_ONLY
+                "truncation, missing data, keys and status rules; call describe_schema. "
+                "4) Map the question onto metrics returned by metric_definitions and "
+                "list each in `metrics` with its name and its kind copied exactly as "
+                "returned (a missing kind is written as unknown); use only names that "
+                "exist there. Every quantity the question asks for whose definition "
+                "has kind=unavailable, or that has no definition at all, goes into "
+                "`unavailable` with the reason; never substitute another field for it. "
+                "5) Set `period` to the range and grain the question asks for, never "
+                "finer than the data is stored in. If the question names no range, or "
+                "a vague one such as 近两年, use complete_start to complete_end and say "
+                "so in `assumptions`; if the dataset declares no complete period, use "
+                "at most the latest 36 periods and say so. Copy complete_start and "
+                "complete_end into `complete_period`. 6) If the question asks for a "
+                "forecast, put the periods to forecast in `forecast.horizon` (for the "
+                "next quarter or quarters: the quarters after the last complete "
+                "quarter, counting a quarter that is only partly complete as the "
+                "first); otherwise set `forecast` to null. Do not ask the user about "
+                "definitions that metric_definitions settles; state your reading in "
+                "`assumptions`. " + JSON_ONLY
             ),
             tools=("list_datasets", "describe_schema", "metric_definitions", "run_sql"),
             output_artifact="scope",
@@ -1368,7 +1381,9 @@ FIN_FORECAST = ExpertPack(
                 "data_version": "string, as reported by the tools",
                 "period": {"start": "YYYY-MM", "end": "YYYY-MM", "grain": "month"},
                 "complete_period": {"start": "YYYY-MM", "end": "YYYY-MM"},
-                "metrics": ["metric_name from metric_definitions"],
+                "metrics": [
+                    {"name": "metric_name from metric_definitions", "kind": "aggregate"}
+                ],
                 "unavailable": [{"name": "string", "reason": "string"}],
                 "forecast": {"horizon": ["YYYY-Qn"]},
                 "notes": ["verbatim notes from dataset_metadata"],
@@ -1411,6 +1426,14 @@ FIN_FORECAST = ExpertPack(
                     message="问题没有落到任何口径上",
                     label="问题落到了口径上",
                 ),
+                AcceptanceRule(
+                    kind="all_equal",
+                    path="metrics",
+                    field="kind",
+                    equals="aggregate",
+                    message="这份数据不是按期汇总的经营数据：本版只支持这一类（例如样例电商），财报类请用「财报体检」",
+                    label="口径都是按期汇总的（本版支持的数据）",
+                ),
             ),
             on_reject="human",
             max_reworks=0,
@@ -1425,8 +1448,9 @@ FIN_FORECAST = ExpertPack(
             method_text=(
                 "Pull the series the scope needs. "
                 + _FC_DATASET
-                + "For each metric in scope.metrics, query it per period over "
-                "scope.period at scope.period.grain, following its definition "
+                + "For each metric in scope.metrics (by its name), query it per period "
+                "over scope.period at scope.period.grain, never splitting data into a "
+                "finer grain than it is stored in, following its definition "
                 "(expression and row_filter) exactly. Return one row per period with "
                 "one column per metric. List every period inside scope.period that is "
                 "not complete in `excluded_periods` with the reason, and leave it out "

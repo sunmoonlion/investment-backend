@@ -41,7 +41,7 @@ SCOPE = {
     "data_version": VERSION,
     "period": {"start": "2017-01", "end": "2018-08", "grain": "month"},
     "complete_period": {"start": "2017-01", "end": "2018-08"},
-    "metrics": ["gmv"],
+    "metrics": [{"name": "gmv", "kind": "aggregate"}],
     "unavailable": [],
     "forecast": {"horizon": ["2018-Q3", "2018-Q4"]},
     "notes": ["2018-09 只有 1 单（已取消），之后没有数据，是数据截断，不是业务下滑"],
@@ -230,6 +230,34 @@ def test_scope_without_a_dataset_stops_and_says_why():
     assert failures("scope", {**SCOPE, "metrics": []}) == [
         "list_min(metrics): 问题没有落到任何口径上"
     ]
+
+
+@pytest.mark.parametrize("kind", ["row", "unknown"])
+def test_scope_on_data_this_version_does_not_support_stops_and_says_why(kind):
+    """2026-10-14 现网：「预测这个公司下个季度的表现」选中了 600009 的财报（口径是逐行的），取数超时。"""
+    statement = {
+        **SCOPE,
+        "dataset": "sh600009-financials",
+        "metrics": [{"name": "gross_margin", "kind": kind}],
+    }
+    found = failures("scope", statement)
+    assert len(found) == 1 and found[0].startswith("all_equal(metrics):")
+    assert "财报体检" in found[0]
+
+
+def test_scope_asks_when_the_company_is_unclear():
+    text = step("scope").method_text
+    for phrase in (
+        "kind=aggregate",
+        "does not support financial statement datasets",
+        "这个公司",
+        "exactly one kept dataset fits, take it and say so in `assumptions`",
+        "ask the user which one",
+        "never finer than the data is stored in",
+        "at most the latest 36 periods",
+    ):
+        assert phrase in text, phrase
+    assert "never splitting data into a finer grain" in step("pull").method_text
 
 
 def test_pull_needs_rows_and_the_sql_that_was_run():

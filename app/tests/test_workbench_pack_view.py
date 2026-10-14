@@ -283,5 +283,5 @@ def test_the_forecasting_expert_can_be_asked():
 
     view = pack_view(FIN_FORECAST)
     assert view["status"] == "ready" and not view["preparing_note"]
-    assert "筹备中" not in FIN_FORECAST.title and FIN_FORECAST.version == "1"
+    assert "筹备中" not in FIN_FORECAST.title and FIN_FORECAST.version == "2"
     assert expert_on_offer("FIN_FORECAST") is FIN_FORECAST

@@ -34,6 +34,7 @@ FIELD_WORDS: dict[str, str] = {
     "mape": "平均误差",
     "inside": "落在区间内的期数",
     "total": "总期数",
+    "kind": "种类",
     # 样例数据集 olist-ecommerce 的口径名（演示时会直接出现在交回物里）。别的数据集的口径名
     # 页面照原名显示；它们的中文名在取数一步的 columns 里
     "gmv": "成交额",
