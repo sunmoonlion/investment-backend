@@ -35,6 +35,7 @@ from app.application.workbench.provisioning import (
     ProvisioningUnavailable,
     SandboxProvisioning,
 )
+from app.application.workbench.run_files import task_dossier
 from app.application.workbench.session_service import SessionService
 from app.application.workbench.tokens import TokenIssuer
 from app.bootstrap.workbench import (
@@ -715,7 +716,7 @@ async def list_tasks(
     return {
         "contract_version": CONTRACT_VERSION,
         "tasks": [
-            _plain(t)
+            {**_plain(t), "dossier": task_dossier(t)}
             for t in await repo.list_tasks(
                 owner_actor_id=_actor(principal), session_id=session_id
             )

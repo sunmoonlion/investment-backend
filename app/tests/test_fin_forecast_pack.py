@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
 from app.application.workbench.acceptance import judge
 from app.application.workbench.advisor import Advisor
+from app.application.workbench.run_files import task_dossier
 from app.domain.workbench.packs import BUILTIN_PACKS, FIN_FORECAST, FIN_REVIEW
 
 KNOWLEDGE_TOOLS = {
@@ -327,6 +329,27 @@ def test_the_last_step_writes_the_file_and_the_handback():
     assert "*** Add File:" in text and "never use `*** Update File`" in text
     # 成稿这一步要写文件：不能再叫它「不调任何工具」
     assert "do not call any tool" not in text and "do not call any data tool" in text
+
+
+def test_the_files_go_into_this_requests_folder_and_the_task_list_names_them():
+    folder = "底稿/对话-0ca14efb/2026-10-14-092623-财务分析与预测"
+    last = FIN_FORECAST.workflow[-1]
+    text = Advisor.compose(last, {"text": "q"}, {}, 0, last_step=True, folder=folder)
+    assert f"`{folder}/财务分析与预测-成稿.md`" in text
+    assert f"`{folder}/交回.md`" in text and "for this request only" in text
+    task = {
+        "profile_id": "FIN_FORECAST",
+        "profile_version": FIN_FORECAST.version,
+        "session_id": "0ca14efb-4af9-40ae-8066-bd48f1c1af84",
+        "created_at": datetime(2026, 10, 14, 1, 26, 23, tzinfo=UTC),
+    }
+    assert task_dossier(task) == {
+        "folder": folder,
+        "expert": "财务分析与预测",
+        "files": [f"{folder}/财务分析与预测-成稿.md", f"{folder}/交回.md"],
+    }
+    # 旧版本的委托（专家包对不上）不列：它们写在旧的固定路径上
+    assert task_dossier({**task, "profile_version": "1"}) is None
 
 
 def test_it_is_a_different_orchestration_from_the_financial_review():

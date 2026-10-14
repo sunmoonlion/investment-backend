@@ -20,9 +20,12 @@ from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.deliverables import (
     DELIVERABLE_RULES,
-    HANDBACK_RULES,
+    HANDBACK_FILE,
     WRITE_FILE_RULES,
     deliverable_seen,
+    handback_rules,
+    placed,
+    run_folder,
 )
 from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.memory import memory_note
@@ -253,11 +256,16 @@ class Advisor:
                     it["interaction_id"],
                 )
                 return TaskState.WAITING
+            # 这一次委托的底稿放在自己那一格，不覆盖别的对话与前几次（所有者 2026-10-14）
+            folder = run_folder(
+                str(task["session_id"]), task["created_at"], pack.name or pack.title
+            )
             text = self.compose(
                 step,
                 question,
                 inputs,
                 reworks,
+                folder=folder,
                 records_task=task_id if self.records else None,
                 ask_before_answers=answered["ask_before"],
                 change_request=answered["change_request"],
@@ -395,18 +403,19 @@ class Advisor:
             # 成稿文件写了没有：先认这一轮报过的 fileChange；没见到就经会合点问代理那个文件在不在
             # （0022 段 4）：在 → 认；明确不在 → 验收不过；问不到 → 只记事件、不填路径（软检查）
             written = None
-            if verdict.ok and step.output_file:
-                seen = deliverable_seen(result.files, step.output_file)
+            output_file = placed(step.output_file, folder) if step.output_file else None
+            if verdict.ok and output_file:
+                seen = deliverable_seen(result.files, output_file)
                 found = None
                 if not seen and self.deliverables is not None:
                     session = await repo.get_session(str(task["session_id"]))
                     found = await self.deliverables.exists(
                         owner=str(task["owner_actor_id"]),
                         directory=session.get("project_root"),
-                        path=step.output_file,
+                        path=output_file,
                     )
                 verdict, written, checked = harden(
-                    verdict, written=seen, found=found, output_file=step.output_file
+                    verdict, written=seen, found=found, output_file=output_file
                 )
                 await repo.append_event(
                     session_id=str(task["session_id"]),
@@ -414,7 +423,7 @@ class Advisor:
                     event_type="step/deliverable",
                     payload={
                         "step_id": step.step_id,
-                        "path": step.output_file,
+                        "path": output_file,
                         "seen": written,
                         "checked": checked,
                     },
@@ -428,7 +437,7 @@ class Advisor:
                     name=step.output_artifact,
                     kind="step",
                     content=verdict.parsed,
-                    workspace_path=step.output_file if written else None,
+                    workspace_path=output_file if written else None,
                 )
                 await led.attempt_transition(
                     attempt_id,
@@ -748,6 +757,7 @@ class Advisor:
         change_request: str | None = None,
         user_facts: str | None = None,
         last_step: bool = False,
+        folder: str | None = None,
     ) -> str:
         parts = [
             f"# Advisor step: {step.title} ({step.step_id}, v{step.step_version})",
@@ -810,12 +820,16 @@ class Advisor:
             parts += [
                 "",
                 "## Deliverable file",
-                f"Write the deliverable of this step to `{step.output_file}` (path relative "
-                "to the project directory; create the folder if needed; overwrite an "
-                "earlier version). " + WRITE_FILE_RULES + " " + DELIVERABLE_RULES,
+                f"Write the deliverable of this step to `{placed(step.output_file, folder)}` (path relative "
+                "to the project directory; create the folders if needed; the folder is "
+                "for this request only, so files of earlier requests stay as they are). "
+                + WRITE_FILE_RULES
+                + " "
+                + DELIVERABLE_RULES,
             ]
             if last_step:
-                parts += ["", "## Handback file", HANDBACK_RULES]
+                handback = f"{folder}/{HANDBACK_FILE}" if folder else HANDBACK_FILE
+                parts += ["", "## Handback file", handback_rules(handback)]
         parts += [
             "",
             "## Output",

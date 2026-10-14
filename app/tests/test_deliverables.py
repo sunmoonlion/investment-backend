@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from app.domain.workbench.deliverables import (
     DELIVERABLE_RULES,
     HANDBACK_RULES,
     WRITE_FILE_RULES,
     changed_paths,
     deliverable_seen,
+    handback_rules,
+    placed,
+    run_files,
+    run_folder,
 )
 
 
@@ -53,3 +59,39 @@ def test_files_are_written_whole_in_the_one_command_shape_codex_catches():
     )
     assert "Windows PowerShell included" in rules
     assert "Add File" in HANDBACK_RULES
+
+
+# ---------------------------------------------------------------- 按对话、按次分开存（所有者 2026-10-14）
+
+
+def test_each_request_writes_into_its_own_folder_under_its_conversation():
+    talk = "0ca14efb-4af9-40ae-8066-bd48f1c1af84"
+    first = run_folder(
+        talk, datetime(2026, 10, 14, 1, 26, 23, tzinfo=UTC), "财务分析与预测"
+    )
+    again = run_folder(
+        talk, datetime(2026, 10, 14, 2, 0, 5, tzinfo=UTC), "财务分析与预测"
+    )
+    other = run_folder(
+        "3dda6292-0000", datetime(2026, 10, 14, 1, 26, 23, tzinfo=UTC), "财务分析与预测"
+    )
+    # 北京时间，资源管理器里按名字排就是先后
+    assert first == "底稿/对话-0ca14efb/2026-10-14-092623-财务分析与预测"
+    assert again.startswith("底稿/对话-0ca14efb/") and again != first
+    assert other.startswith("底稿/对话-3dda6292/")
+    # Windows 文件名里不许有的字符拿掉
+    assert run_folder("x", datetime(2026, 1, 1, tzinfo=UTC), 'a:b/c?"').endswith("-abc")
+
+
+def test_the_files_of_one_request_sit_together_with_its_handback():
+    folder = "底稿/对话-0ca14efb/2026-10-14-092623-财务分析与预测"
+    assert (
+        placed("底稿/财务分析与预测-成稿.md", folder)
+        == f"{folder}/财务分析与预测-成稿.md"
+    )
+    assert placed("底稿/财务分析与预测-成稿.md", None) == "底稿/财务分析与预测-成稿.md"
+    assert run_files(["底稿/财务分析与预测-成稿.md"], folder) == [
+        f"{folder}/财务分析与预测-成稿.md",
+        f"{folder}/交回.md",
+    ]
+    assert f"`{folder}/交回.md`" in handback_rules(f"{folder}/交回.md")

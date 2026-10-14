@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # 各专家包成稿步骤共用的写法要求（原 PRD 七的底稿区块规则改写成对文件的要求）
@@ -43,13 +45,46 @@ WRITE_FILE_RULES = (
 )
 
 HANDBACK_FILE = "交回.md"
-HANDBACK_RULES = (
-    f"Also write `{HANDBACK_FILE}` at the project root, the same way (one Add File hunk; it "
-    "replaces an earlier one), for the user "
-    "to keep: 做了什么 (each step in one line); 验过什么 (what was checked); 未知 (what "
-    "stays unknown); 改了哪些文件 (every file you created or changed in this project, one "
-    "per line); 怎么恢复 (how to undo the changes if the user wants to)."
-)
+
+
+def handback_rules(path: str = HANDBACK_FILE) -> str:
+    return (
+        f"Also write `{path}` (path relative to the project directory), the same way (one "
+        "Add File hunk; it replaces an earlier one), for the user to keep: 做了什么 (each step "
+        "in one line); 验过什么 (what was checked); 未知 (what stays unknown); 改了哪些文件 "
+        "(every file you created or changed in this project, one per line); 怎么恢复 (how to "
+        "undo the changes if the user wants to)."
+    )
+
+
+HANDBACK_RULES = handback_rules()
+
+# 每请一次专家，底稿写进自己的一格，不覆盖别的对话、也不覆盖同一段对话里前几次的（所有者 2026-10-14）：
+# 底稿/对话-<对话编号前 8 位>/<开始时间>-<专家名>/。同一次里返工才覆盖（那是同一份稿子的改稿）。
+# 时间按北京时间写：用户在国内，文件夹名是给人在资源管理器里认的
+DOSSIER_ROOT = "底稿"
+_BEIJING = timezone(timedelta(hours=8))
+_NOT_IN_NAMES = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def run_folder(session_id: str, started: datetime, expert: str) -> str:
+    """这一次委托的底稿放在项目目录下哪一格（相对路径，正斜杠）。"""
+    talk = str(session_id).replace("-", "")[:8]
+    when = started.astimezone(_BEIJING).strftime("%Y-%m-%d-%H%M%S")
+    name = _NOT_IN_NAMES.sub("", expert).strip(" .") or "专家"
+    return f"{DOSSIER_ROOT}/对话-{talk}/{when}-{name}"
+
+
+def placed(output_file: str, folder: str | None) -> str:
+    """专家包里写的成稿文件名放进这一次的那一格。没有那一格（只拼说明看的时候）就原样。"""
+    if not folder:
+        return output_file
+    return f"{folder}/{output_file.replace(chr(92), '/').rsplit('/', 1)[-1]}"
+
+
+def run_files(outputs: Iterable[str], folder: str) -> list[str]:
+    """这一次会写出的全部文件：各步的成稿，最后是交回。"""
+    return [*(placed(f, folder) for f in outputs), f"{folder}/{HANDBACK_FILE}"]
 
 
 def _norm(path: str) -> str:
