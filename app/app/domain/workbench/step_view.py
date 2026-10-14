@@ -42,6 +42,8 @@ def reason_text(state: str, reason: dict[str, Any] | None) -> str:
         return ""
     if reason.get("code") == "no_expert_pack":
         return "这个问题不在专家的范围里，可以自己在对话里接着做"
+    if reason.get("code") == "pack_version_gone":
+        return "这个委托是按专家的旧版建的，旧版已经换下，请重新请一次专家"
     if reason.get("code") == "no_thread":
         return "这段对话还没有准备好"
     if reason.get("code") == "missing_input":

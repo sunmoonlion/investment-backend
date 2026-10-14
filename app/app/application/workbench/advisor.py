@@ -105,12 +105,17 @@ class Advisor:
             if task["state"] == TaskState.VALIDATING:
                 pack = find_pack(task["profile_id"], task["profile_version"])
                 if pack is None:
+                    # 专家还在、只是委托绑的那一版已经下架（升版前建的单）：说清楚，别说成不在范围
+                    gone = find_pack(task["profile_id"]) is not None
                     await led.transition(
                         task_id,
                         TaskState.REJECTED,
                         reason={
-                            "code": "no_expert_pack",
-                            "message": "这个问题不在专家范围，继续自己用 Codex 即可",
+                            "code": "pack_version_gone" if gone else "no_expert_pack",
+                            "message": "这个委托按专家的旧版建的，旧版已经换下，请重新请一次专家"
+                            if gone
+                            else "这个问题不在专家范围，继续自己用 Codex 即可",
+                            "version": task["profile_version"],
                         },
                     )
                     return TaskState.REJECTED

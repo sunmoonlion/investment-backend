@@ -17,7 +17,7 @@ from app.application.workbench.ledger import Ledger
 from app.application.workbench.session_service import SessionService
 from app.bootstrap.workbench import build_runner
 from app.domain.workbench.models import HandoverRequest
-from app.domain.workbench.packs import SMOKE, AcceptanceRule
+from app.domain.workbench.packs import FIN_FORECAST, SMOKE, AcceptanceRule, find_pack
 from app.domain.workbench.states import TaskState
 from app.infrastructure.workbench.publisher import RedisPublisher
 from app.infrastructure.workbench.repository import WorkbenchRepository
@@ -399,6 +399,53 @@ async def test_unknown_profile_is_rejected_readably(db):
                 and "不在专家范围" in task["rejection"]["message"]
             )
             assert (await repo.get_session(sid))["wheel"] == "user"
+        await close(runner)
+    finally:
+        await fake.close()
+
+
+async def test_new_task_binds_the_pack_version_on_shelf(db):
+    """2026-10-14 现网：财务分析与预测升到第 2 版，入口不传版本，账房仍记 "1"，受理时找不到专家包就打回。"""
+    fake = ScriptedAppServer([])
+    await fake.start()
+    try:
+        runner, sid, sb, t = await seed(db, fake, profile="FIN_FORECAST")
+        async with db() as s:
+            task = await WorkbenchRepository(s).get_task(t)
+            assert task["profile_version"] == FIN_FORECAST.version != "1"
+            assert (
+                find_pack(task["profile_id"], task["profile_version"]) is FIN_FORECAST
+            )
+        await close(runner)
+    finally:
+        await fake.close()
+
+
+async def test_task_bound_to_a_retired_version_says_so(db):
+    fake = ScriptedAppServer([])
+    await fake.start()
+    try:
+        runner, sid, sb, t = await seed(db, fake)
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                task = await repo.get_task(t)
+                await repo.cas_task(
+                    t, expected_version=int(task["state_version"]), profile_version="0"
+                )
+        await drive(runner)
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            task = await repo.get_task(t)
+            assert task["state"] == TaskState.REJECTED
+            assert task["rejection"]["code"] == "pack_version_gone"
+            back = [
+                e
+                for e in await repo.list_events(session_id=sid)
+                if e["type"] == "wheel/return"
+            ]
+            assert back[-1]["payload"]["final_state"] == TaskState.REJECTED
+            assert "旧版" in back[-1]["payload"]["reason_text"]
         await close(runner)
     finally:
         await fake.close()

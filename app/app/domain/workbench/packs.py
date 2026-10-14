@@ -1787,3 +1787,9 @@ def find_pack(profile_id: str, version: str | None = None) -> ExpertPack | None:
     if pack is None or (version not in (None, "", pack.version)):
         return None
     return pack
+
+
+def current_pack_version(profile_id: str) -> str:
+    """新委托绑哪一版：没点名就是现在上架的那一版。没有这位专家时记 "1"，受理时照样打回。"""
+    pack = BUILTIN_PACKS.get(profile_id)
+    return pack.version if pack is not None else "1"

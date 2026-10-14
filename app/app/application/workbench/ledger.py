@@ -23,6 +23,7 @@ from app.domain.workbench.errors import (
     WheelHeldByOther,
 )
 from app.domain.workbench.models import Budget, HandoverRequest, InteractionPrompt
+from app.domain.workbench.packs import current_pack_version
 from app.domain.workbench.states import (
     ATTEMPT_TERMINAL,
     TASK_TERMINAL,
@@ -35,6 +36,7 @@ from app.domain.workbench.states import (
     validate_task_transition,
     wheel_after_task_state,
 )
+from app.domain.workbench.step_view import reason_text
 from app.domain.workbench.tokens import token_hash
 
 INTERACTION_TTL = timedelta(hours=72)
@@ -61,7 +63,7 @@ class Ledger:
         *,
         owner_actor_id: str,
         tenant: str = "default",
-        profile_version: str = "1",
+        profile_version: str | None = None,
         expert_pack_version: str | None = None,
     ) -> dict[str, Any]:
         """F-INTAKE-01/02、F-ADMIT-01、F-WHEEL-01：幂等建单、首事件、wheel=advisor，同一提交。"""
@@ -123,7 +125,9 @@ class Ledger:
                     "idempotency_key": req.idempotency_key,
                     "request_digest": digest,
                     "profile_id": req.profile_id,
-                    "profile_version": req.profile_version or profile_version,
+                    "profile_version": req.profile_version
+                    or profile_version
+                    or current_pack_version(req.profile_id),
                     "expert_pack_version": expert_pack_version,
                     "original_input": {
                         "input": req.original_input,
@@ -307,6 +311,8 @@ class Ledger:
                             "to": "user",
                             "task_id": task_id,
                             "final_state": target,
+                            # 对话里交回那一行要说清为什么停：打回是根本没开工，不能叫人去看底稿
+                            "reason_text": reason_text(target, reason),
                         },
                         task_id=task_id,
                     )
