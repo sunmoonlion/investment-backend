@@ -59,6 +59,13 @@ class RootOutsideWhitelist(WorkbenchError):
     http_status = 400
 
 
+class ProjectDirectoryMissing(WorkbenchError):
+    """电脑上没有这个文件夹（或那是个文件）：不登记，免得把不存在的目录交给 Codex 当工作目录（0024）。"""
+
+    code = "project_directory_missing"
+    http_status = 409
+
+
 class ProjectPathInvalid(WorkbenchError):
     """项目的目录不合规则：越出工作区、带盘符、往上走。"""
 

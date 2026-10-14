@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.workbench.agent_service import AgentService
 from app.application.workbench.project_service import ProjectService, plain
 from app.application.workbench.session_service import SessionService
 from app.bootstrap.workbench import workbench_store
@@ -19,6 +20,7 @@ from app.interfaces.endpoints.workbench_routes import (
     CONTRACT_VERSION,
     _actor,
     _http,
+    optional_agent_service,
     require_workbench_enabled,
 )
 from app.interfaces.http.middleware.auth import get_web_current_user
@@ -91,9 +93,10 @@ async def create_project(
     body: CreateProject,
     principal: Principal = Depends(get_web_current_user),
     session: AsyncSession = Depends(get_db_session),
+    agent: AgentService | None = Depends(optional_agent_service),
 ) -> dict[str, Any]:
     try:
-        return await ProjectService(workbench_store(session)).create(
+        return await ProjectService(workbench_store(session), agent).create(
             owner_actor_id=_actor(principal),
             environment_id=body.environment_id,
             workspace_root=body.workspace_root,

@@ -217,6 +217,17 @@ def agent_service() -> AgentService:
     )
 
 
+def optional_agent_service() -> AgentService | None:
+    """同上，但没配就给 None：用在「问得到就核一下，问不到照做」的地方（新建项目核目录，0024）。"""
+    s = get_settings()
+    if not (s.workbench_relay_admin_url and s.workbench_token_signing_key):
+        return None
+    return build_agent_service(
+        s.workbench_relay_admin_url,
+        TokenIssuer(s.workbench_token_signing_key, issuer=s.workbench_token_issuer),
+    )
+
+
 def _actor(principal: Principal) -> str:
     if principal.actor_id is None:
         raise HTTPException(status_code=403, detail="principal has no actor id")

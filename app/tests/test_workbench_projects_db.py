@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from test_workbench_ledger_db import OTHER, OWNER, ROOT, seed
 from test_workbench_ledger_db import db as db
 
+from app.application.workbench.agent_service import AgentOffline, AgentRefused
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.project_service import ProjectService
 from app.application.workbench.session_service import SessionService
@@ -25,6 +26,7 @@ from app.domain.workbench.errors import (
     NotFound,
     ProjectArchived,
     ProjectBusy,
+    ProjectDirectoryMissing,
     ProjectExists,
     ProjectHeldByExpert,
     ProjectPathInvalid,
@@ -135,6 +137,74 @@ async def test_a_project_cannot_leave_its_workspace(db, path):
         assert (
             await s.execute(text("select count(*) from workbench_projects"))
         ).scalar() == 0
+
+
+class FakeAgent:
+    """经会合点问代理目录在不在（0024）。answer 是回包或要抛的异常。"""
+
+    def __init__(self, answer):
+        self.answer, self.calls = answer, []
+
+    async def call(self, relay_user, method, params=None):
+        self.calls.append((relay_user, method, params))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+async def paired(factory, owner=OWNER):
+    async with factory() as s:
+        repo = WorkbenchRepository(s)
+        async with repo.transaction():
+            await repo.put_relay_identity(
+                owner,
+                relay_user="u-1",
+                agent_token_ciphertext="a",
+                sandbox_token_ciphertext="s",
+            )
+
+
+async def create_with(factory, env, agent, path="财务预测"):
+    async with factory() as s:
+        return await ProjectService(WorkbenchRepository(s), agent).create(
+            owner_actor_id=OWNER,
+            environment_id=env,
+            workspace_root=WORKSPACE,
+            path=path,
+        )
+
+
+async def test_a_project_is_registered_only_when_its_folder_is_on_the_computer(db):
+    """2026-10-14 现网：只登记了路径，电脑上没有那个文件夹，工作对话写文件时代理一直报工作目录不存在。"""
+    env, _ = await machine(db)
+    await paired(db)
+    for answer in (AgentRefused(-32012, "not found"), {"type": "file"}):
+        agent = FakeAgent(answer)
+        with pytest.raises(ProjectDirectoryMissing):
+            await create_with(db, env, agent)
+        assert agent.calls == [
+            ("u-1", "fs/getMetadata", {"path": WORKSPACE + "/财务预测"})
+        ]
+    async with db() as s:
+        assert (
+            await s.execute(text("select count(*) from workbench_projects"))
+        ).scalar() == 0
+    made = await create_with(db, env, FakeAgent({"type": "dir", "size": 0, "mtime": 1}))
+    assert made["directory"] == WORKSPACE + "/财务预测"
+
+
+async def test_a_project_is_still_registered_when_the_computer_cannot_be_asked(db):
+    env, _ = await machine(db)
+    silent = FakeAgent({"type": "dir"})
+    assert (await create_with(db, env, silent, "a"))["path"] == "a"  # 没配对：不问
+    assert silent.calls == []
+    await paired(db)
+    for answer, path in (
+        (AgentOffline("agent offline"), "b"),
+        (AgentRefused(-32010, "outside"), "c"),
+    ):
+        assert (await create_with(db, env, FakeAgent(answer), path))["path"] == path
+    assert (await create_with(db, env, None, "d"))["path"] == "d"  # 没配通道
 
 
 async def test_a_workspace_must_be_on_the_whitelist_and_the_machine_mine(db):

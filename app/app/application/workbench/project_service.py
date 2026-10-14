@@ -1,14 +1,18 @@
-"""工作区与项目（PRD/apps/investment.md 第二、七节）。只管账；用户机器上的目录由 Codex 去碰。"""
+"""工作区与项目（PRD/apps/investment.md 第二、七节）。只管账；用户机器上的目录由代理去建（0024），这里登记前问一声在不在。"""
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
+from app.application.workbench.agent_service import AgentRefused, AgentService
 from app.domain.workbench.errors import (
     ProjectArchived,
     ProjectBusy,
+    ProjectDirectoryMissing,
     RootOutsideWhitelist,
+    WorkbenchError,
 )
 from app.domain.workbench.packs import find_pack
 from app.domain.workbench.projects import (
@@ -22,6 +26,7 @@ from app.domain.workbench.states import TASK_TERMINAL
 from app.domain.workbench.step_view import TERMINAL_WORDS, money
 
 ONLINE = "online"
+log = logging.getLogger(__name__)
 
 
 def plain(row: dict[str, Any]) -> dict[str, Any]:
@@ -36,8 +41,27 @@ def plain(row: dict[str, Any]) -> dict[str, Any]:
 
 
 class ProjectService:
-    def __init__(self, repo: WorkbenchStore):
+    def __init__(self, repo: WorkbenchStore, agent: AgentService | None = None):
         self.repo = repo
+        self.agent = agent
+
+    async def directory_state(self, owner_actor_id: str, directory: str) -> str | None:
+        """经会合点服务流问代理这个目录：dir / file / other / missing；问不到（没配通道、没配对、代理离线或旧版）给 None。"""
+        if self.agent is None:
+            return None
+        identity = await self.repo.get_relay_identity(owner_actor_id)
+        relay_user = identity.get("relay_user") if identity else None
+        if not relay_user:
+            return None
+        try:
+            result = await self.agent.call(
+                str(relay_user), "fs/getMetadata", {"path": directory}
+            )
+        except AgentRefused as exc:
+            return "missing" if exc.code == "not_found" else None
+        except WorkbenchError:
+            return None
+        return str(result.get("type") or "") or None
 
     async def workspaces(self, *, owner_actor_id: str) -> list[dict[str, Any]]:
         """我的工作区：每台机器的每个根目录。增减在用户机器上的本地代理里做，这里只读。"""
@@ -75,6 +99,25 @@ class ProjectService:
         title: str | None = None,
     ) -> dict[str, Any]:
         relative = clean_relative_path(path)
+        env = await self.repo.get_environment(
+            environment_id, owner_actor_id=owner_actor_id
+        )
+        if workspace_root not in list(env.get("roots") or []):
+            raise RootOutsideWhitelist(
+                "this workspace is not one of the machine's whitelisted roots",
+                workspace_root=workspace_root,
+            )
+        # 先建后记（0024）：网页先请代理建好或拉好，这里再核一次。明确不在就不登记；问不到照登记（代理新版装上前不至于建不了）
+        directory = project_dir(workspace_root, relative)
+        state = await self.directory_state(owner_actor_id, directory)
+        if state is None:
+            log.warning("project directory not checked", extra={"code": "unchecked"})
+        elif state != "dir":
+            raise ProjectDirectoryMissing(
+                "this folder is not on the computer; create it from the new-project dialog",
+                directory=directory,
+                found=state,
+            )
         async with self.repo.transaction():
             env = await self.repo.get_environment(
                 environment_id, owner_actor_id=owner_actor_id
