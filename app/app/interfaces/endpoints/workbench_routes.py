@@ -749,8 +749,8 @@ async def cancel_task(
         result = await Ledger(repo).request_cancel(
             task_id, owner_actor_id=_actor(principal)
         )
-        if result.get("cancel_requested"):
-            # 专家正在做某一步：马上把这一步停下，不等它自己做完
+        if result.get("interrupt"):
+            # 专家正在做某一步（在跑，或卡在等你批准、等你回答）：马上把这一轮停下，不等它自己做完
             task = await repo.get_task(task_id)
             talk = await repo.get_session(str(task["session_id"]))
             async with repo.transaction():

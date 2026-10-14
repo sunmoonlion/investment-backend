@@ -389,18 +389,24 @@ class Ledger:
                 task_id=task_id,
             )
             if TaskState(task["state"]) is not TaskState.RUNNING:
-                # 没有 Attempt 在跑：直接收敛
-                return await self.transition(
+                # 不在跑：直接收敛。WAITING 时那一轮可能还卡在等人批准、等人回答，
+                # 要调用方照样发一次中断把它收住（interrupt），不然 Codex 要等到时限
+                done = await self.transition(
                     task_id,
                     TaskState.CANCELLED,
                     expected_version=version,
                     reason={"by": "user"},
                 )
+                return {
+                    **done,
+                    "interrupt": TaskState(task["state"]) is TaskState.WAITING,
+                }
             return {
                 "task_id": task_id,
                 "state": task["state"],
                 "state_version": version,
                 "cancel_requested": True,
+                "interrupt": True,
             }
 
     # ---------------- Attempt ----------------

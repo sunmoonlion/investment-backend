@@ -153,6 +153,10 @@ class SandboxLink:
         self.pending_approvals: dict[
             str, asyncio.Future
         ] = {}  # request_id -> future(response dict: decision / answer / answers)
+        # 等人答的那一问属于哪条线：专家被取消时，只放掉这条线上的（同一台机器上别的对话不动）
+        self.pending_threads: dict[str, str] = {}
+        # 被「取消委托」放掉的那几问：它们不再等人，也不再去关待办（待办已随委托关掉）
+        self.released: set[str] = set()
         self._lock = asyncio.Lock()
         self.turn_waiters: dict[str, dict[str, Any]] = {}  # turn_id -> waiter
         # 用户在审批面点了「停下」（或等不到人）：这条线这一轮是被人停的，不是出错。
@@ -783,16 +787,39 @@ class SandboxLink:
         self,
         request_id: str,
         timeout: float = 3600,  # noqa: ASYNC109
+        *,
+        thread_id: str | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
-        """等网页上的答复。等不到按「停下」处理，不按拒绝（approval.md「问人怎么问」第 5 条）。"""
+        """等网页上的答复。等不到按「停下」处理，不按拒绝（approval.md「问人怎么问」第 5 条）。
+        委托被取消时这一问被放掉：回 (None, "cancelled")，按「停下」收尾。"""
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self.pending_approvals[request_id] = fut
+        if thread_id:
+            self.pending_threads[request_id] = thread_id
         try:
-            return await asyncio.wait_for(fut, timeout=timeout), "user"
+            answer = await asyncio.wait_for(fut, timeout=timeout)
+            if request_id in self.released:
+                return None, "cancelled"
+            return answer, "user"
         except TimeoutError:
             return None, "timeout"
         finally:
             self.pending_approvals.pop(request_id, None)
+            self.pending_threads.pop(request_id, None)
+            self.released.discard(request_id)
+
+    def release_waits(self, thread_id: str | None) -> int:
+        """委托被取消：这条线上还在等人答的审批、提问一律放掉，让 Codex 那一轮马上收住，而不是卡到时限。"""
+        if not thread_id:
+            return 0
+        n = 0
+        for request_id, owner in list(self.pending_threads.items()):
+            fut = self.pending_approvals.get(request_id)
+            if owner == thread_id and fut is not None and not fut.done():
+                self.released.add(request_id)
+                fut.set_result(None)
+                n += 1
+        return n
 
     async def _settle_timeout(
         self, *, session: dict[str, Any], where: dict[str, Any], opened: dict[str, Any]
@@ -875,9 +902,12 @@ class SandboxLink:
             prompt=prompt,
             waiting_reason=WaitingReason.APPROVAL,
         )
-        response, source = await self._wait_answer(request_id)
+        response, source = await self._wait_answer(
+            request_id, thread_id=thread_id_of(params)
+        )
         if response is None:
-            await self._settle_timeout(session=session, where=where, opened=opened)
+            if source != "cancelled":
+                await self._settle_timeout(session=session, where=where, opened=opened)
             response = {"decision": DECISION_CANCEL}
         decision = str(response.get("decision") or DECISION_DECLINE)
         if decision not in (
@@ -1053,10 +1083,11 @@ class SandboxLink:
             prompt=prompt,
             waiting_reason=WaitingReason.INPUT,
         )
-        response, source = await self._wait_answer(request_id)
         thread_id = thread_id_of(params)
+        response, source = await self._wait_answer(request_id, thread_id=thread_id)
         if response is None:
-            await self._settle_timeout(session=session, where=where, opened=opened)
+            if source != "cancelled":
+                await self._settle_timeout(session=session, where=where, opened=opened)
             if thread_id:
                 self.user_stops[thread_id] = {
                     "note": None,
@@ -1362,8 +1393,23 @@ class Runner:
                 )
             return
         if kind == "turn.interrupt":
-            # 用户点了停止。页面不用知道是哪一轮：停的是这条线正在跑的那一轮
-            stopped = await link.interrupt(session["thread_id"], payload.get("turn_id"))
+            # 用户点了停止。页面不用知道是哪一轮：停的是这条线正在跑的那一轮。
+            # 取消委托时那一轮可能正卡在等人批准、等人回答：先把这几问放掉（按停下答 Codex），
+            # 不然 Codex 一直等，要到 15 分钟时限才停（2026-10-14 所有者：专家页的停止不管用）
+            released = (
+                link.release_waits(session["thread_id"])
+                if payload.get("task_id")
+                else 0
+            )
+            try:
+                stopped = await link.interrupt(
+                    session["thread_id"], payload.get("turn_id")
+                )
+            except Exception:
+                # 放掉之后 Codex 可能已经自己收住了这一轮，再中断会报「没有这一轮」
+                if not released:
+                    raise
+                stopped = None
             async with self.stores() as repo:
                 async with repo.transaction():
                     ev = await repo.append_event(

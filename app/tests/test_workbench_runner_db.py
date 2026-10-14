@@ -1353,6 +1353,82 @@ async def test_stop_interrupts_the_turn_and_parks_the_step_for_the_user(db):
         await fake.close()
 
 
+async def test_cancelling_while_the_step_waits_for_approval_stops_the_turn_now(db):
+    """2026-10-14 所有者：专家页的「停止」不管用。卡在等人批准时取消：委托直接收成已取消，
+    但那一轮还在 Codex 里等批准，要到 15 分钟时限才停；顾问随后再收一次「已取消」还会出错。
+    现在取消也发中断，runner 先把这条线上等着的那一问按「停下」答掉，那一轮马上收住。"""
+    from app.domain.workbench.states import AttemptState, TaskState
+
+    fake = FakeAppServer()
+    await fake.start()
+    try:
+        _, sb, sid = await seed(db, fake)
+        runner = build_runner(
+            db, publisher=RedisPublisher(None, "t"), runner_id="r1", poll_seconds=0.05
+        )
+        await runner.run_once()
+        task_id = await _advisor_task(db, sid, "NEED_APPROVAL", "cancel-wait-0001")
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid, sandbox_id=sb, kind="noop", payload={}
+                )
+        await _pump(runner)
+
+        async def opened():
+            return len(await _pending(db, sid, "tool_approval")) == 1
+
+        assert await wait_for(opened)
+        # 和取消路由做的一样：先记取消，要中断就排一条 turn.interrupt
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            result = await Ledger(repo).request_cancel(task_id, owner_actor_id=OWNER)
+            assert (
+                result["state"] == TaskState.CANCELLED and result["interrupt"] is True
+            )
+            async with repo.transaction():
+                await repo.enqueue_command(
+                    session_id=sid,
+                    sandbox_id=sb,
+                    kind="turn.interrupt",
+                    payload={"by": "user", "task_id": task_id},
+                )
+        await _pump(runner)
+
+        async def settled():
+            async with db() as s:
+                attempts = await WorkbenchRepository(s).list_attempts(task_id)
+            return not runner.driving and all(
+                a["status"] == AttemptState.CANCELLED for a in attempts
+            )
+
+        assert await wait_for(settled, timeout=5)
+        # Codex 收到的是「停下」，不是一直等
+        assert any(
+            (d.get("result") or {}).get("decision") == "cancel"
+            for d in fake.approval_decisions
+        )
+        async with db() as s:
+            repo = WorkbenchRepository(s)
+            task = await repo.get_task(task_id)
+            events = await repo.list_events(session_id=sid)
+        assert task["state"] == TaskState.CANCELLED
+        # 中断那条命令本身不报错（放掉之后 Codex 已经自己收住了这一轮）
+        assert not any(
+            e["type"] == "command/failed" and e["payload"]["kind"] == "turn.interrupt"
+            for e in events
+        )
+        stop = [e for e in events if e["type"] == "turn/stop_requested"]
+        assert len(stop) == 1
+        for link in runner.links.values():
+            assert not link.pending_approvals and not link.pending_threads
+            if link.client:
+                await link.client.close()
+    finally:
+        await fake.close()
+
+
 async def test_codex_question_becomes_a_card_and_the_answer_goes_back(db):
     fake = FakeAppServer()
     await fake.start()

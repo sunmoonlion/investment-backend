@@ -32,7 +32,12 @@ from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
 from app.domain.workbench.projects import NO_DETOUR
-from app.domain.workbench.states import AttemptState, TaskState, WaitingReason
+from app.domain.workbench.states import (
+    TASK_TERMINAL,
+    AttemptState,
+    TaskState,
+    WaitingReason,
+)
 from app.domain.workbench.step_view import RAW_CHARS
 
 log = logging.getLogger(__name__)
@@ -297,6 +302,9 @@ class Advisor:
                     tokens=result.tokens,
                     failure_code="cancelled",
                 )
+                if task["state"] in TASK_TERMINAL:
+                    # 停在等人批准、等人回答时取消的：委托已经收成「已取消」，这里只把这一步记完
+                    return task["state"]
                 return (
                     await led.transition(
                         task_id, TaskState.CANCELLED, reason={"by": "user"}
