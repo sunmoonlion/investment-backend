@@ -14,13 +14,14 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
-from app.application.workbench.acceptance import judge
+from app.application.workbench.acceptance import judge, timed_out
 from app.application.workbench.deliverable_check import DeliverableCheck, harden
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.deliverables import (
     DELIVERABLE_RULES,
     HANDBACK_RULES,
+    WRITE_FILE_RULES,
     deliverable_seen,
 )
 from app.domain.workbench.errors import BudgetExhausted
@@ -32,6 +33,9 @@ from app.domain.workbench.states import AttemptState, TaskState, WaitingReason
 from app.domain.workbench.step_view import RAW_CHARS
 
 log = logging.getLogger(__name__)
+
+# 专家每一步的时限（一个 turn）。到点还没做完就停下，按验收不过走返工、退回或交人
+STEP_TIMEOUT_SECONDS = 900
 
 
 @dataclass
@@ -49,6 +53,8 @@ class TurnResult:
     stop_note: str | None = None
     # 这一轮用补丁改到的文件（绝对路径）；成稿文件写了没有就看它（0015 §3.3）
     files: list[str] = field(default_factory=list)
+    # 这一步到了时限还没做完，被工作台停下：最后一句只是进度说明，不是交回物，不拿去验
+    timed_out: bool = False
 
 
 class TurnDriver(Protocol):
@@ -59,7 +65,7 @@ class TurnDriver(Protocol):
         thread_id: str,
         text: str,
         *,
-        timeout: float = 900,  # noqa: ASYNC109
+        timeout: float = STEP_TIMEOUT_SECONDS,  # noqa: ASYNC109
     ) -> TurnResult: ...
 
 
@@ -263,7 +269,9 @@ class Advisor:
                 last_step=pack.workflow[-1].step_id == step.step_id,
             )
 
-        result = await self.driver.run_turn(thread_id, text)
+        result = await self.driver.run_turn(
+            thread_id, text, timeout=STEP_TIMEOUT_SECONDS
+        )
 
         async with self.stores() as repo:
             led = Ledger(repo)
@@ -338,7 +346,9 @@ class Advisor:
                     it["interaction_id"],
                 )
                 return TaskState.WAITING
-            if result.environment_lost or (result.error and not result.final_text):
+            if result.environment_lost or (
+                result.error and not result.final_text and not result.timed_out
+            ):
                 await led.attempt_transition(
                     attempt_id,
                     AttemptState.FAILED,
@@ -377,7 +387,11 @@ class Advisor:
                     tokens=result.tokens,
                 )
                 return TaskState.WAITING
-            verdict = judge(result.final_text, step.acceptance)
+            verdict = (
+                timed_out(STEP_TIMEOUT_SECONDS // 60, step.acceptance)
+                if result.timed_out
+                else judge(result.final_text, step.acceptance)
+            )
             # 成稿文件写了没有：先认这一轮报过的 fileChange；没见到就经会合点问代理那个文件在不在
             # （0022 段 4）：在 → 认；明确不在 → 验收不过；问不到 → 只记事件、不填路径（软检查）
             written = None
@@ -461,6 +475,7 @@ class Advisor:
                 AttemptState.FAILED,
                 consumed=consumed,
                 tokens=result.tokens,
+                # 超时也记成验收不过：返工额度照算，不会因为一直超时而无限重做
                 failure_code="acceptance",
                 retryable=True,
             )
@@ -797,8 +812,7 @@ class Advisor:
                 "## Deliverable file",
                 f"Write the deliverable of this step to `{step.output_file}` (path relative "
                 "to the project directory; create the folder if needed; overwrite an "
-                "earlier version). Use the apply_patch/file-edit tool so the change is "
-                "recorded, not a shell redirect. " + DELIVERABLE_RULES,
+                "earlier version). " + WRITE_FILE_RULES + " " + DELIVERABLE_RULES,
             ]
             if last_step:
                 parts += ["", "## Handback file", HANDBACK_RULES]

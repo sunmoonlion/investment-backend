@@ -97,6 +97,36 @@ def _all_equal(value: Any, name: str | None, expected: Any) -> tuple[bool, str]:
     return not bad, f"items {bad[:10]} differ" if bad else f"len={len(value)}"
 
 
+def timed_out(minutes: int, rules: tuple[AcceptanceRule, ...]) -> Verdict:
+    """这一步到了时限没做完：没有交回物。不拿最后那句进度说明去验，各条照实记成「没有验」。"""
+    message = f"这一步 {minutes} 分钟内没有做完，被停下，没有交回物"
+    return Verdict(
+        ok=False,
+        failures=[f"timeout: {minutes} min"],
+        checks=[
+            {
+                "rule": "in_time",
+                "path": None,
+                "pass": False,
+                "detail": f"timed out after {minutes} min",
+                "label": "在时限内交回",
+                "message": message,
+            },
+            *(
+                {
+                    "rule": r.kind,
+                    "path": r.path,
+                    "pass": None,
+                    "detail": "not checked",
+                    "label": r.label,
+                    "message": "",
+                }
+                for r in rules
+            ),
+        ],
+    )
+
+
 def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
     v = Verdict(ok=True)
     parsed: Any = None

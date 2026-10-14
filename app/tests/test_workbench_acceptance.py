@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from app.application.workbench.acceptance import judge
+from app.application.workbench.acceptance import judge, timed_out
 from app.domain.workbench.packs import AcceptanceRule
 
 
@@ -220,3 +220,22 @@ def test_when_the_format_is_wrong_the_rest_is_recorded_as_not_checked():
     ]
     assert result.checks[0]["message"] == "交回物不是 JSON 对象"
     assert len(result.failures) == 1
+
+
+def test_a_step_that_ran_out_of_time_is_not_graded_on_its_last_progress_line():
+    # 2026-10-14 现网：到点被停下，最后一句「准备写文件」被拿去验，报成「交回物不是 JSON 对象」
+    rules = (
+        AcceptanceRule(
+            kind="json_object", message="交回物不是 JSON 对象", label="格式对"
+        ),
+        AcceptanceRule(
+            kind="non_empty", path="answer", message="回答为空", label="有回答"
+        ),
+    )
+    v = timed_out(15, rules)
+    assert not v.ok and v.parsed is None and v.failures == ["timeout: 15 min"]
+    first, *rest = v.checks
+    assert first["rule"] == "in_time" and first["pass"] is False
+    assert first["message"] == "这一步 15 分钟内没有做完，被停下，没有交回物"
+    assert [c["pass"] for c in rest] == [None, None]
+    assert all(c["message"] != "交回物不是 JSON 对象" for c in v.checks)

@@ -324,6 +324,9 @@ def test_the_last_step_writes_the_file_and_the_handback():
     last = FIN_FORECAST.workflow[-1]
     text = Advisor.compose(last, {"text": "q"}, {}, 0, last_step=True)
     assert "`底稿/财务分析与预测-成稿.md`" in text and "## Handback file" in text
+    assert "*** Add File:" in text and "never use `*** Update File`" in text
+    # 成稿这一步要写文件：不能再叫它「不调任何工具」
+    assert "do not call any tool" not in text and "do not call any data tool" in text
 
 
 def test_it_is_a_different_orchestration_from_the_financial_review():

@@ -1688,7 +1688,7 @@ FIN_FORECAST = ExpertPack(
             input_refs=("scope", "series", "analysis", "forecast"),
             method_text=(
                 "Write the deliverable in Chinese from the input artifacts only; do not "
-                "call any tool. `answer` answers the question in plain words first: the "
+                "call any data tool (writing the files is the only tool use). `answer` answers the question in plain words first: the "
                 "trend and, when a forecast was asked, the point and the range for each "
                 "forecast period with the method in one sentence. `limitations` MUST "
                 "contain: every item of scope.unavailable with its reason; every "

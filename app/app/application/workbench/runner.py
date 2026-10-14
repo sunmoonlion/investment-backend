@@ -488,6 +488,7 @@ class SandboxLink:
             "env_lost": False,
             "interrupted": False,
             "files": [],
+            "timed_out": False,
         }
         self.turn_waiters[turn_id] = waiter
         self.active_turns[thread_id] = turn_id
@@ -500,6 +501,7 @@ class SandboxLink:
                 await asyncio.sleep(0.1)
         except TimeoutError:
             waiter["error"] = "turn timed out"
+            waiter["timed_out"] = True
             try:
                 await client.request(
                     "turn/interrupt",
@@ -530,6 +532,7 @@ class SandboxLink:
             stopped_by_user=stop is not None,
             stop_note=(stop or {}).get("note"),
             files=list(waiter["files"]),
+            timed_out=waiter["timed_out"],
         )
 
     async def interrupt(

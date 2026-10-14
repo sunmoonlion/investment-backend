@@ -22,9 +22,21 @@ DELIVERABLE_RULES = (
     "Do not paste raw JSON into the file."
 )
 
+# 文件怎么写（2026-10-14 现网：用户电脑是 Windows，模型想改昨天那份成稿，补丁对不上原文两次出错，
+# 改用 bash 语法写文件交给了 PowerShell，一步耗满 15 分钟）。整份 Add File 会覆盖已有文件，不依赖原文
+WRITE_FILE_RULES = (
+    "Write each file with the apply_patch tool as ONE `*** Add File:` hunk that carries the "
+    "whole content. Add File replaces a file that already exists, so never use "
+    "`*** Update File` for these files (an earlier version will not match). Never write them "
+    "through the shell: the shell may be Windows PowerShell, and shell writes are not "
+    "recorded. If a patch is rejected, fix it and send the Add File hunk again. Write the "
+    "files first; your final message is the JSON only."
+)
+
 HANDBACK_FILE = "交回.md"
 HANDBACK_RULES = (
-    f"Also write `{HANDBACK_FILE}` at the project root (overwrite if it exists), for the user "
+    f"Also write `{HANDBACK_FILE}` at the project root, the same way (one Add File hunk; it "
+    "replaces an earlier one), for the user "
     "to keep: 做了什么 (each step in one line); 验过什么 (what was checked); 未知 (what "
     "stays unknown); 改了哪些文件 (every file you created or changed in this project, one "
     "per line); 怎么恢复 (how to undo the changes if the user wants to)."
