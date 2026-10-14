@@ -41,10 +41,15 @@ def test_the_rules_forbid_ratings_and_raw_json_and_name_the_handback_file():
     assert "交回.md" in HANDBACK_RULES and "怎么恢复" in HANDBACK_RULES
 
 
-def test_files_are_written_whole_so_an_earlier_version_never_blocks_them():
-    # 2026-10-14 现网：Windows 上改昨天那份成稿，补丁对不上、bash 语法交给 PowerShell，一步耗满 15 分钟
-    assert "*** Add File:" in WRITE_FILE_RULES and "whole content" in WRITE_FILE_RULES
-    assert "never use `*** Update File`" in WRITE_FILE_RULES
-    assert "Never write them through the shell" in WRITE_FILE_RULES
-    assert "PowerShell" in WRITE_FILE_RULES
+def test_files_are_written_whole_in_the_one_command_shape_codex_catches():
+    # 2026-10-14 现网：Windows 上 kimi-k3 没有 apply_patch 工具，补丁少 End Patch、正文不带 +、
+    # bash 的 cat 写法交给 PowerShell，一步耗满 15 分钟
+    rules = WRITE_FILE_RULES
+    assert "*** Begin Patch" in rules and "*** Add File: <path>" in rules
+    assert "*** End Patch" in rules and "with `+` in front of it" in rules
+    assert "never use `*** Update File`" in rules
+    assert (
+        "exactly `apply_patch <<'EOF'`" in rules and "nothing before or after" in rules
+    )
+    assert "Windows PowerShell included" in rules
     assert "Add File" in HANDBACK_RULES

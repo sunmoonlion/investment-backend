@@ -22,15 +22,24 @@ DELIVERABLE_RULES = (
     "Do not paste raw JSON into the file."
 )
 
-# 文件怎么写（2026-10-14 现网：用户电脑是 Windows，模型想改昨天那份成稿，补丁对不上原文两次出错，
-# 改用 bash 语法写文件交给了 PowerShell，一步耗满 15 分钟）。整份 Add File 会覆盖已有文件，不依赖原文
+# 文件怎么写（2026-10-14 现网，Windows + kimi-k3）：Codex 不认识的模型没有 apply_patch 工具，只能经命令行
+# 调；Codex 只在整条命令恰好是 `apply_patch <<'EOF' … EOF` 时自己接住（PowerShell 也一样，按 bash 语法
+# 解析），别的写法都原样交给 PowerShell，报找不到 apply_patch。模型少写 End Patch、正文行不带 +、改用 bash
+# 的 cat 写法，一步耗满 15 分钟。所以这里把补丁格式与命令的样子写死；整份 Add File 会覆盖已有文件，不依赖原文
 WRITE_FILE_RULES = (
-    "Write each file with the apply_patch tool as ONE `*** Add File:` hunk that carries the "
-    "whole content. Add File replaces a file that already exists, so never use "
-    "`*** Update File` for these files (an earlier version will not match). Never write them "
-    "through the shell: the shell may be Windows PowerShell, and shell writes are not "
-    "recorded. If a patch is rejected, fix it and send the Add File hunk again. Write the "
-    "files first; your final message is the JSON only."
+    "How to write each file: one patch that adds the file with its whole content. Add File "
+    "replaces a file that already exists, so never use `*** Update File` for these files "
+    "(an earlier version will not match). The patch text is exactly: a line "
+    "`*** Begin Patch`; a line `*** Add File: <path>`; then every line of the content with "
+    "`+` in front of it (an empty line becomes a lone `+`); a last line `*** End Patch`. "
+    "If you have an apply_patch tool, call it with this text. Otherwise run through the "
+    "shell tool one command that is exactly `apply_patch <<'EOF'`, a newline, the patch "
+    "text, a newline, `EOF` - nothing before or after it in the same command: no pipe, no "
+    "here-string, no `cat`, no redirect. Codex catches this command itself on every system, "
+    "Windows PowerShell included, and records the change; do not search for an apply_patch "
+    "program and do not write the file any other way. If the patch is rejected, read the "
+    "error, fix the patch text and send the same command again. Write the files first; "
+    "your final message is the JSON only."
 )
 
 HANDBACK_FILE = "交回.md"
