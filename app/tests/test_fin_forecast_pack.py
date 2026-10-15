@@ -15,7 +15,7 @@ from app.application.workbench.advisor import Advisor
 from app.application.workbench.run_files import task_dossier
 from app.domain.workbench.packs import BUILTIN_PACKS, FIN_FORECAST, FIN_REVIEW
 
-KNOWLEDGE_TOOLS = {
+KNOWBASE_TOOLS = {
     "list_datasets",
     "describe_schema",
     "metric_definitions",
@@ -143,7 +143,7 @@ def test_every_input_was_produced_by_an_earlier_step():
 
 def test_only_knowledge_tools_and_only_where_data_is_read():
     for s in FIN_FORECAST.workflow:
-        assert set(s.tools) <= KNOWLEDGE_TOOLS, s.step_id
+        assert set(s.tools) <= KNOWBASE_TOOLS, s.step_id
     assert set(step("scope").tools) == {
         "list_datasets",
         "describe_schema",

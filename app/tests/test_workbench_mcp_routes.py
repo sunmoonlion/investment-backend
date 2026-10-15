@@ -110,7 +110,7 @@ async def test_who_is_let_in(served):
             bearer(ttl_seconds=-10),  # 过期的
             # 别的用途的令牌（给知识服务的）不能拿来读记录
             {
-                "Authorization": f"Bearer {ISSUER.knowledge_token('u-abc', sandbox='u-abc').token}"
+                "Authorization": f"Bearer {ISSUER.knowbase_token('u-abc', sandbox='u-abc').token}"
             },
         ):
             got = await http.post(URL, json=rpc("tools/list"), headers=headers)

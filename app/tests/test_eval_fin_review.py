@@ -1,6 +1,6 @@
 """财报体检十三题（0008-info 段四、0009-semantic 丙段，MVP-08、SEM-10）。
 
-数据集是 info 按自述第二版重建的 600009 原件。不访问网络，不需要数据库。
+数据集是 knowfeed 按自述第二版重建的 600009 原件。不访问网络，不需要数据库。
 """
 
 from __future__ import annotations

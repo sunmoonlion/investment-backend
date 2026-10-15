@@ -270,7 +270,7 @@ async def test_jwt_identity_and_rotation(make_client, db):  # noqa: F811
     spec = fake_api.specs[0]
     assert verify(spec["relay_token"], pub, audience="relay")["role"] == "sandbox"
     assert (
-        verify(spec["knowledge_mcp_token"], pub, audience="knowledge")["sandbox"]
+        verify(spec["knowbase_mcp_token"], pub, audience="knowbase")["sandbox"]
         == user
     )
     assert (
@@ -435,13 +435,13 @@ async def test_the_records_tools_are_given_to_the_sandbox_only_when_configured(
     assert spec["records_mcp_url"] == address
     assert issuer.owner_of_records_token(spec["records_mcp_token"]) == A
     # 这张令牌只能读记录：拿去当知识服务的、会合点的令牌都验不过
-    for audience in ("knowledge", "relay"):
+    for audience in ("knowbase", "relay"):
         try:
             verify(spec["records_mcp_token"], issuer.public_pem(), audience=audience)
         except ValueError:
             continue
         raise AssertionError(audience)
-    assert issuer.owner_of_records_token(spec["knowledge_mcp_token"]) is None
+    assert issuer.owner_of_records_token(spec["knowbase_mcp_token"]) is None
 
 
 async def test_identity_operation_rejects_concurrency_and_releases_after_error(db):

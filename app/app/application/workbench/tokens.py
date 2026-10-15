@@ -1,7 +1,7 @@
 """D10：工作台签发的令牌（ES256 JWT），会合点与知识服务用公钥就地验，不回源。
 
 六种：代理令牌（aud=relay, role=agent）、沙箱令牌（aud=relay, role=sandbox）、工作台服务流令牌（aud=relay, role=workbench，0022）、
-本机访问票（aud=local-agent，网页敲代理回环口用，0022 乙案）、知识 MCP 令牌（aud=knowledge）、读项目记录的令牌（aud=workbench-records）。
+本机访问票（aud=local-agent，网页敲代理回环口用，0022 乙案）、知识 MCP 令牌（aud=knowbase）、读项目记录的令牌（aud=workbench-records）。
 都带 sub（用户的会合点名）、jti、exp。吊销靠会合点管理通道推 jti，或到期自然失效（F-RELAY-06）。
 签名私钥在工作台配置（Secret）；公钥经 /api/workbench/token-keys（JWKS）给边缘与知识服务。
 """
@@ -101,7 +101,7 @@ class TokenIssuer:
             ttl_seconds,
         )
 
-    def knowledge_token(
+    def knowbase_token(
         self,
         relay_user: str,
         *,
@@ -110,7 +110,7 @@ class TokenIssuer:
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
     ) -> Issued:
         claims: dict[str, Any] = {
-            "aud": "knowledge",
+            "aud": "knowbase",
             "sub": relay_user,
             "sandbox": sandbox,
         }

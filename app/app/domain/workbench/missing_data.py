@@ -17,7 +17,7 @@ EVENT = "data.missing"
 # 数据集名的开头：市场加六位代码，例如 sh600519-financials
 _NAMED = re.compile(r"^(sh|sz|bj)(\d{6})(?!\d)", re.IGNORECASE)
 _CODE = re.compile(r"^\d{6}$")
-# 知识服务答复没有这个数据集时的说法（knowledge-backend 的 dataset_catalog）
+# 知识服务答复没有这个数据集时的说法（knowbase-backend 的 dataset_catalog）
 _UNKNOWN = "unknown dataset"
 
 

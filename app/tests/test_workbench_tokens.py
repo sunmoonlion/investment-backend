@@ -20,15 +20,15 @@ def test_issue_and_verify_three_audiences():
     pub = issuer.public_pem()
     agent = issuer.agent_token("u-abc")
     sandbox = issuer.sandbox_token("u-abc", sandbox="u-abc")
-    knowledge = issuer.knowledge_token("u-abc", sandbox="u-abc", tools=["run_sql"])
+    knowledge = issuer.knowbase_token("u-abc", sandbox="u-abc", tools=["run_sql"])
     a = verify(agent.token, pub, audience="relay", issuer="wb-test")
     assert a["sub"] == "u-abc" and a["role"] == "agent" and a["jti"] == agent.jti
     s = verify(sandbox.token, pub, audience="relay")
     assert s["role"] == "sandbox" and s["sandbox"] == "u-abc"
-    k = verify(knowledge.token, pub, audience="knowledge")
+    k = verify(knowledge.token, pub, audience="knowbase")
     assert k["tools"] == ["run_sql"] and k["sub"] == "u-abc"
     with pytest.raises(ValueError, match="audience"):
-        verify(agent.token, pub, audience="knowledge")
+        verify(agent.token, pub, audience="knowbase")
     with pytest.raises(ValueError, match="issuer"):
         verify(agent.token, pub, audience="relay", issuer="other")
     expired = issuer.agent_token("u-abc", ttl_seconds=-5)

@@ -35,7 +35,7 @@ from core.config import get_settings
 log = logging.getLogger(__name__)
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
-SERVER_INFO = {"name": "sunmoon-workbench", "version": "0.1.0"}
+SERVER_KNOWFEED = {"name": "sunmoon-workbench", "version": "0.1.0"}
 
 _TASK = {
     "type": "string",
@@ -203,7 +203,7 @@ async def handle(
             {
                 "protocolVersion": version,
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": SERVER_INFO,
+                "serverInfo": SERVER_KNOWFEED,
                 "instructions": (
                     "Read-only records of the user's project and the user's library. "
                     "Project tools need the task id from the step instructions; the "

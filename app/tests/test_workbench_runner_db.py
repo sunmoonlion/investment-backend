@@ -146,7 +146,7 @@ class FakeAppServer:
                                 "item": {
                                     "type": "mcpToolCall",
                                     "id": f"mcp-q{n}",
-                                    "server": "sunmoon_knowledge",
+                                    "server": "sunmoon_knowbase",
                                     "tool": "describe_schema",
                                     "status": "failed",
                                     "arguments": {"dataset": name},
@@ -173,7 +173,7 @@ class FakeAppServer:
                         "id": srid,
                         "method": "mcpServer/elicitation/request",
                         "params": {
-                            "message": "sunmoon_knowledge wants to run run_sql",
+                            "message": "sunmoon_knowbase wants to run run_sql",
                             "mode": "form",
                             "requestedSchema": {
                                 "type": "object",
@@ -196,7 +196,7 @@ class FakeAppServer:
                             "item": {
                                 "type": "mcpToolCall",
                                 "id": "mcp-1",
-                                "server": "sunmoon_knowledge",
+                                "server": "sunmoon_knowbase",
                                 "tool": "run_sql",
                                 "status": "completed"
                                 if answer.get("action") == "accept"

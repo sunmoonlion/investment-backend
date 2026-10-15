@@ -16,7 +16,7 @@ from app.domain.workbench.packs import (
     find_pack,
 )
 
-KNOWLEDGE_TOOLS = {
+KNOWBASE_TOOLS = {
     "list_datasets",
     "describe_schema",
     "metric_definitions",
@@ -164,7 +164,7 @@ def test_every_input_was_produced_by_an_earlier_step():
 
 def test_only_knowledge_tools_are_named_and_only_where_data_is_read():
     for s in FIN_REVIEW.workflow:
-        assert set(s.tools) <= KNOWLEDGE_TOOLS, s.step_id
+        assert set(s.tools) <= KNOWBASE_TOOLS, s.step_id
     assert step("scope").tools == () and step("note").tools == ()
     assert "list_datasets" in step("profile").tools
     assert [s.step_id for s in FIN_REVIEW.workflow if "list_datasets" in s.tools] == [

@@ -1,6 +1,6 @@
 """财务分析与预测十题（k8s 仓 tree-build/SDD/modules/0023-fin-forecast.md 第六节）。
 
-数据集是知识服务按 1/20 抽样生成的 Olist 样例（knowledge-backend `scripts/build_olist_dataset.py`）。
+数据集是知识服务按 1/20 抽样生成的 Olist 样例（knowbase-backend `scripts/build_olist_dataset.py`）。
 真值写的是 DuckDB 方言（知识服务开着语义层，专家写的就是这种），所以只在 DuckDB 上跑。
 结果列用口径名作别名，期间列叫 `period`：专家包的方法要求这样写，评测按列名逐字比对。
 不访问网络，不需要数据库。

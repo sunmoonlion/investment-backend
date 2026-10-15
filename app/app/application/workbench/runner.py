@@ -1507,7 +1507,7 @@ class Runner:
         )
         try:
             client = await link.ensure_connected()
-            # environment/info 会按 Codex 的恢复机制连接，不执行用户命令、不调模型。
+            # environment/knowfeed 会按 Codex 的恢复机制连接，不执行用户命令、不调模型。
             await client.request(
                 "environment/info", {"environmentId": env_key}, timeout=10
             )

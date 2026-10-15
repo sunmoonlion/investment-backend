@@ -491,7 +491,7 @@ def tool(name: str, dataset: str | None = None, **arguments: Any) -> dict[str, A
     given = {**({"dataset": dataset} if dataset else {}), **arguments}
     return {
         "type": "mcpToolCall",
-        "server": "sunmoon_knowledge",
+        "server": "sunmoon_knowbase",
         "tool": name,
         "status": "completed",
         "arguments": given,
@@ -574,7 +574,7 @@ def missing_dataset_call(code: str, market: str = "sh") -> dict[str, Any]:
     dataset = f"{market}{code}-financials"
     return {
         "type": "mcpToolCall",
-        "server": "sunmoon_knowledge",
+        "server": "sunmoon_knowbase",
         "tool": "describe_schema",
         "status": "failed",
         "arguments": {"dataset": dataset},

@@ -51,8 +51,8 @@ def test_private_local_or_malformed_endpoints_are_refused(url):
 
 
 def test_mcp_sources_default_to_all_on_and_refuse_unknown_keys():
-    assert normalize_mcp_sources(None) == {"knowledge": True}
-    assert normalize_mcp_sources({"knowledge": False}) == {"knowledge": False}
-    assert normalize_mcp_sources({}) == {"knowledge": True}
+    assert normalize_mcp_sources(None) == {"knowbase": True}
+    assert normalize_mcp_sources({"knowbase": False}) == {"knowbase": False}
+    assert normalize_mcp_sources({}) == {"knowbase": True}
     with pytest.raises(ValueError):
         normalize_mcp_sources({"records": True})

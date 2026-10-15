@@ -14,7 +14,7 @@ _FORBIDDEN_HOSTS = {"localhost", "localhost.localdomain", "0.0.0.0", "::1"}
 _FORBIDDEN_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
 
 # 用户的所有 MCP 来源开关；键不在这里的拒绝
-MCP_SOURCES: tuple[str, ...] = ("knowledge",)
+MCP_SOURCES: tuple[str, ...] = ("knowbase",)
 
 
 def validate_provider_base_url(value: str) -> str:

@@ -2,7 +2,7 @@
 
 需求从哪来：查数据的工具答复没有这个数据集、或专家的某一步交回说没入库时记下的
 `data.missing` 事件（domain/workbench/missing_data）。这里只汇总，由我们决定采不采；
-采集在 info 管理端发起。
+采集在 knowfeed 管理端发起。
 """
 
 from __future__ import annotations

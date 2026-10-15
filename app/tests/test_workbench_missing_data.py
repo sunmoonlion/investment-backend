@@ -37,7 +37,7 @@ def call(dataset="sh600519-financials", status="failed", text=None, error=None, 
     )
     return {
         "type": "mcpToolCall",
-        "server": "knowledge",
+        "server": "knowbase",
         "tool": "run_sql",
         "status": status,
         "arguments": {"dataset": dataset, "sql": "select 1"},

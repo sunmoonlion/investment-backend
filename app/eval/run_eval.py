@@ -43,7 +43,7 @@ from eval.truth import TruthStore  # noqa: E402
 ROOT_DIR = Path(__file__).resolve().parents[1]
 OWNER = str(uuid.uuid4())
 BASELINE_PROMPT = (
-    "You have the MCP server `sunmoon_knowledge` with tools describe_schema, metric_definitions and run_sql "
+    "You have the MCP server `sunmoon_knowbase` with tools describe_schema, metric_definitions and run_sql "
     "over a retail operations dataset. Answer the question below with real numbers from the dataset. "
     "Use the tools; do not invent data. Reply with ONE JSON object only (no fences): "
     '{"sql": ["every SQL statement you ran"], "data_version": "the data_version reported by the tools", '
@@ -86,7 +86,7 @@ def baseline_prompt(dataset_id: str | None) -> str:
     if dataset_id is None:
         return BASELINE_PROMPT
     return (
-        "You have the MCP server `sunmoon_knowledge` with tools list_datasets, "
+        "You have the MCP server `sunmoon_knowbase` with tools list_datasets, "
         "describe_schema, metric_definitions, run_sql and possibly query_metric. "
         f'Use the dataset `{dataset_id}`: pass dataset="{dataset_id}" on every tool '
         "call. Answer the question below with real numbers from the dataset. "

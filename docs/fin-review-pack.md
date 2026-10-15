@@ -45,7 +45,7 @@
 ## 评测：财报体检十三题
 
 案例集 `app/eval/cases/fin_review_13.json`，冻结在数据版本 `sh600009-financials-9fd91db79529e208`
-（info 按数据集自述第二版重建的 600009）。数据集原件在 `app/eval/fixtures/`。
+（knowfeed 按数据集自述第二版重建的 600009）。数据集原件在 `app/eval/fixtures/`。
 
 | 项 | 说明 |
 | --- | --- |

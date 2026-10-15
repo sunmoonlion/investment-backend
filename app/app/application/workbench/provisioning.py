@@ -255,8 +255,8 @@ class SandboxProvisioning:
         sources = normalize_mcp_sources(
             (await self.repo.get_prefs(owner)).get("mcp_sources")
         )
-        if self.issuer is not None and sources.get("knowledge", True):
-            spec["knowledge_mcp_token"] = self.issuer.knowledge_token(
+        if self.issuer is not None and sources.get("knowbase", True):
+            spec["knowbase_mcp_token"] = self.issuer.knowbase_token(
                 identity["relay_user"], sandbox=identity["relay_user"]
             ).token
         if self.issuer is not None:

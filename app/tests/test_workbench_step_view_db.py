@@ -91,7 +91,7 @@ class ToolingAppServer(ScriptedAppServer):
 def query(sql: str, *, ok: bool = True) -> dict:
     return {
         "type": "mcpToolCall",
-        "server": "knowledge",
+        "server": "knowbase",
         "tool": "run_sql",
         "status": "completed" if ok else "failed",
         "arguments": {"dataset": "sh600276-financials-5868ab1a", "sql": sql},
