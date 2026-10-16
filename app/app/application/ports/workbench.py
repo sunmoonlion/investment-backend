@@ -722,6 +722,63 @@ class WorkbenchStore(Protocol):
         """这个人请过的分身，新的在前。"""
         ...
 
+    # ---------- 作为运行方跑分身测试（SDD 0027 §3.4）----------
+    async def actor_for_subject(self, subject: str) -> str | None:
+        """Casdoor 用户 id → 本地 actor id（测试账号用）；没登录过就是 None。"""
+        ...
+
+    async def interaction_token(
+        self, *, session_id: str, interaction_id: str
+    ) -> str | None:
+        """交互的令牌只在 interaction/opened 事件里出现一次：测试代答时从那里取。"""
+        ...
+
+    async def insert_test_run(
+        self, run: dict[str, Any], cases: list[dict[str, Any]]
+    ) -> None: ...
+
+    async def get_test_run(
+        self, run_id: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None: ...
+
+    async def list_test_runs(
+        self, *, statuses: tuple[str, ...]
+    ) -> list[dict[str, Any]]: ...
+
+    async def update_test_run(self, run_id: str, **changes: Any) -> None: ...
+
+    async def list_test_cases(self, run_id: str) -> list[dict[str, Any]]:
+        """按顺序。"""
+        ...
+
+    async def update_test_case(
+        self, run_id: str, case_id: str, **changes: Any
+    ) -> None: ...
+
+    async def get_test_answer(
+        self, run_id: str, question_id: str
+    ) -> dict[str, Any] | None: ...
+
+    async def insert_test_answer(
+        self, run_id: str, question_id: str, answer: dict[str, Any], answered_by: str
+    ) -> None: ...
+
+    async def committed_test_spend(self, since: Any) -> Decimal:
+        """这个月测试已花的与在跑的测试的上限之和（每月测试费用上限用）。"""
+        ...
+
+    async def expired_test_runs(self, now: Any) -> list[dict[str, Any]]:
+        """测试产出保留期满、该删的。"""
+        ...
+
+    async def delete_session_tree(self, session_id: str) -> None:
+        """删一段对话与它下面的一切（只给测试产出到期清理用）。"""
+        ...
+
+    async def purge_test_run(self, run_id: str) -> None:
+        """删掉这次测试建的委托、对话与交回物；测试结果留着。"""
+        ...
+
     # ---------- 知识库（SDD 0011）----------
     async def list_owner_step_artifacts(
         self, *, owner_actor_id: str

@@ -14,6 +14,7 @@ from app.bootstrap.workbench import (
     build_deliverable_check,
     build_machine_sync,
     build_runner,
+    build_test_conductor,
     event_publisher,
 )
 from app.infrastructure.logging.logging import setup_logging
@@ -70,12 +71,23 @@ async def main() -> None:
     syncing = asyncio.create_task(machines.run_forever(stopping)) if machines else None
     if syncing is None:
         logger.warning("machine sync is off: relay admin channel not configured")
+    # 作为运行方跑分身测试（SDD 0027 §3.4）：同一个进程里再起一条线推进在跑的测试
+    tests = build_test_conductor(get_postgres().session_factory, settings)
+    testing = (
+        asyncio.create_task(
+            tests.run_forever(stopping, settings.knowbot_test_poll_seconds)
+        )
+        if tests
+        else None
+    )
     try:
         await runner.run_forever()
     finally:
         stopping.set()
         if syncing is not None:
             await syncing
+        if testing is not None:
+            await testing
         await get_postgres().shutdown()
         await get_redis().shutdown()
 

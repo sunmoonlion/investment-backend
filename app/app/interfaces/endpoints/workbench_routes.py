@@ -30,6 +30,8 @@ from app.application.workbench.agent_service import (
     AgentService,
     AgentServiceUnconfigured,
 )
+from app.application.workbench.interactions import answer_interaction
+from app.application.workbench.interactions import cancel_task as stop_task
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.provisioning import (
     ProvisioningUnavailable,
@@ -757,20 +759,8 @@ async def cancel_task(
 ):
     repo = workbench_store(session)
     try:
-        result = await Ledger(repo).request_cancel(
-            task_id, owner_actor_id=_actor(principal)
-        )
-        if result.get("interrupt"):
-            # 专家正在做某一步（在跑，或卡在等你批准、等你回答）：马上把这一轮停下，不等它自己做完
-            task = await repo.get_task(task_id)
-            talk = await repo.get_session(str(task["session_id"]))
-            async with repo.transaction():
-                await repo.enqueue_command(
-                    session_id=str(task["session_id"]),
-                    sandbox_id=str(talk["sandbox_id"]),
-                    kind="turn.interrupt",
-                    payload={"by": "user", "task_id": task_id},
-                )
+        # 专家正在做某一步（在跑，或卡在等你批准、等你回答）：马上把这一轮停下，不等它自己做完
+        result = await stop_task(repo, task_id, owner_actor_id=_actor(principal))
     except WorkbenchError as exc:
         raise _http(exc) from exc
     await _publish_commands_wakeup()
@@ -1200,38 +1190,16 @@ async def respond_interaction(
         if v is not None
     }
     try:
-        it = await repo.get_interaction(interaction_id)
-        result = await Ledger(repo).respond_interaction(
+        # 消费交互，并排上接着驾驶 / 把答复送到 runner 的命令（与跑分身测试共用）
+        result = await answer_interaction(
+            repo,
             interaction_id,
             token=body.token,
             response=response,
             owner_actor_id=_actor(principal),
             subject_digest=body.subject_digest,
+            decision=body.decision,
         )
-        if it["task_id"] is not None and result.get("state") == "QUEUED":
-            s2 = await repo.get_session(str(it["session_id"]))
-            async with repo.transaction():
-                await repo.enqueue_command(
-                    session_id=str(it["session_id"]),
-                    sandbox_id=str(s2["sandbox_id"]),
-                    kind="task.drive",
-                    payload={"task_id": str(it["task_id"])},
-                )
-        if it["kind"] in ("tool_approval", "question"):
-            # 挂在 app-server 那边的请求还在等：把答复送到正握着连接的 runner
-            s = await repo.get_session(str(it["session_id"]))
-            async with repo.transaction():
-                await repo.enqueue_command(
-                    session_id=str(it["session_id"]),
-                    sandbox_id=str(s["sandbox_id"]),
-                    kind="approval.respond",
-                    payload={
-                        "request_id": it["prompt"]["subject"]["request_id"],
-                        "decision": body.decision
-                        or ("answer" if it["kind"] == "question" else "decline"),
-                        "response": response,
-                    },
-                )
     except WorkbenchError as exc:
         raise _http(exc) from exc
     await _publish_commands_wakeup()

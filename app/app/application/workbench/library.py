@@ -12,7 +12,7 @@ from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
 from app.application.workbench.catalog import (
-    SOURCE_KNOWMART,
+    SNAPSHOT_SOURCES,
     expert_name,
     pack_for_task,
 )
@@ -63,7 +63,7 @@ class Library:
             # 列表行不带分身的整份快照：分身的委托另取一次（内置的按 id 与版本就找得到）
             pack = pack_for_task(
                 await self.repo.get_task(task_id)
-                if first.get("pack_source") == SOURCE_KNOWMART
+                if first.get("pack_source") in SNAPSHOT_SOURCES
                 else first
             )
             steps = [a for a in parts if a["kind"] == "step"]

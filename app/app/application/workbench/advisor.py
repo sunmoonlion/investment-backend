@@ -15,7 +15,7 @@ from typing import Any, Protocol
 
 from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
 from app.application.workbench.acceptance import judge, timed_out
-from app.application.workbench.catalog import SOURCE_KNOWMART, pack_for_task
+from app.application.workbench.catalog import SNAPSHOT_SOURCES, pack_for_task
 from app.application.workbench.deliverable_check import DeliverableCheck, harden
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
@@ -109,7 +109,7 @@ class Advisor:
                     # 专家还在、只是委托绑的那一版已经下架（升版前建的单）：说清楚，别说成不在范围。
                     # 分身的委托自带快照，不会走到这里
                     gone = (
-                        task.get("pack_source") != SOURCE_KNOWMART
+                        task.get("pack_source") not in SNAPSHOT_SOURCES
                         and find_pack(task["profile_id"]) is not None
                     )
                     await led.transition(

@@ -17,6 +17,9 @@ from app.domain.workbench.packs import ExpertPack, find_pack
 
 SOURCE_BUILTIN = "builtin"
 SOURCE_KNOWMART = "knowmart"
+# 测试中的草稿：快照同分身，只在这次测试的委托上（SDD 0027 §3.4）
+SOURCE_TEST = "knowlab-test"
+SNAPSHOT_SOURCES = frozenset({SOURCE_KNOWMART, SOURCE_TEST})
 
 _snapshots: dict[tuple[str, str], ExpertPack] = {}
 
@@ -25,11 +28,12 @@ _snapshots: dict[tuple[str, str], ExpertPack] = {}
 class PinnedPack:
     pack: ExpertPack
     digest: str
+    source: str = SOURCE_KNOWMART
 
     def task_columns(self) -> dict[str, Any]:
         """建委托时写进委托的三列。"""
         return {
-            "pack_source": SOURCE_KNOWMART,
+            "pack_source": self.source,
             "pack_digest": self.digest,
             "pack_snapshot": self.pack.model_dump(mode="json"),
         }
@@ -37,7 +41,7 @@ class PinnedPack:
 
 def pack_for_task(task: dict[str, Any]) -> ExpertPack | None:
     """这件委托用的专家包。分身读委托上的快照（同一份快照只解析一次）。"""
-    if task.get("pack_source") == SOURCE_KNOWMART:
+    if task.get("pack_source") in SNAPSHOT_SOURCES:
         snapshot, digest = task.get("pack_snapshot"), task.get("pack_digest")
         if not isinstance(snapshot, dict) or not digest:
             return None
@@ -52,7 +56,7 @@ def pack_for_task(task: dict[str, Any]) -> ExpertPack | None:
 
 def expert_name(row: dict[str, Any]) -> str:
     """给用户看的专家名字。row 可以是整条委托，也可以是带 pack_source、pack_name 的列表行。"""
-    if row.get("pack_source") == SOURCE_KNOWMART:
+    if row.get("pack_source") in SNAPSHOT_SOURCES:
         if row.get("pack_name"):
             return str(row["pack_name"])
         pack = pack_for_task(row)

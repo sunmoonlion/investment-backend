@@ -75,9 +75,12 @@ def _no_looser_than_platform(policy: ToolPolicy) -> list[str]:
 
 
 def pack_from_manifest(
-    manifest: object, *, knowbot_id: str, version: str
+    manifest: object, *, knowbot_id: str, version: str, profile: str | None = None
 ) -> ExpertPack:
-    """核清单并取出专家包；不合格抛 KnowbotInvalid（只说哪里不对，不回显内容）。"""
+    """核清单并取出专家包；不合格抛 KnowbotInvalid（只说哪里不对，不回显内容）。
+
+    profile：测试中的草稿还没有分身 id，用测试自己的专家 id（test_runs.trial_profile_id）。
+    """
     if not isinstance(manifest, dict):
         raise KnowbotInvalid("the knowbot manifest is not an object")
     problems: list[str] = []
@@ -96,7 +99,7 @@ def pack_from_manifest(
     body = {
         **raw,
         # 身份与给用户看的名字以外层为准：分身的 id 不由清单自己说
-        "profile_id": profile_id(knowbot_id, version),
+        "profile_id": profile or profile_id(knowbot_id, version),
         "name": str(manifest.get("name") or raw.get("name") or ""),
         "tagline": str(manifest.get("tagline") or raw.get("tagline") or ""),
         "internal": False,

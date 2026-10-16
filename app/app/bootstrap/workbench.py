@@ -22,6 +22,11 @@ from app.application.ports.workbench import (
 from app.application.workbench.agent_download import ReleaseStore
 from app.application.workbench.machines import MachineSync
 from app.application.workbench.runner import Runner
+from app.application.workbench.test_runs import (
+    KnowbotTestConductor,
+    KnowbotTestConfig,
+    KnowbotTestService,
+)
 from app.domain.workbench.pricing import PriceList
 from app.infrastructure.external.knowmart_client import KnowmartSummonClient
 from app.infrastructure.workbench.agent_release import S3ReleaseStore
@@ -166,3 +171,26 @@ def build_agent_service(relay_url: str, issuer: TokenIssuer) -> AgentService:
     from app.infrastructure.workbench.agent_service_ws import WsAgentService
 
     return WsAgentService(relay_url, issuer)
+
+
+def test_runtime_config(settings) -> KnowbotTestConfig:
+    return KnowbotTestConfig(
+        subject=settings.knowbot_test_subject,
+        workspace_root=settings.knowbot_test_workspace,
+        monthly_limit=settings.knowbot_test_monthly_limit,
+    )
+
+
+def test_run_service(session: AsyncSession, settings) -> KnowbotTestService:
+    """作为运行方跑分身测试的三个接口（SDD 0027 §3.4）。"""
+    return KnowbotTestService(workbench_store(session), test_runtime_config(settings))
+
+
+def build_test_conductor(
+    session_factory: async_sessionmaker[AsyncSession], settings
+) -> KnowbotTestConductor | None:
+    """没配测试账号与测试电脑就不起这条线。"""
+    config = test_runtime_config(settings)
+    if not config.subject or not config.workspace_root:
+        return None
+    return KnowbotTestConductor(workbench_stores(session_factory), config)

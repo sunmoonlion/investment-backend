@@ -1245,6 +1245,226 @@ class WorkbenchRepository:
         )
         return [dict(m) for m in r.mappings().all()]
 
+    # ---------- 作为运行方跑分身测试（SDD 0027 §3.4）----------
+    async def actor_for_subject(self, subject: str) -> str | None:
+        r = await self.session.execute(
+            text(
+                "select id from auth_user where subject = :s order by created_at limit 1"
+            ),
+            {"s": subject},
+        )
+        found = r.scalar_one_or_none()
+        return None if found is None else str(found)
+
+    async def interaction_token(
+        self, *, session_id: str, interaction_id: str
+    ) -> str | None:
+        r = await self.session.execute(
+            text("""select payload->>'token' from workbench_session_events
+                    where session_id = :s and event_type = 'interaction/opened'
+                      and payload->>'interaction_id' = :i order by cursor limit 1"""),
+            {"s": session_id, "i": interaction_id},
+        )
+        return r.scalar_one_or_none()
+
+    async def insert_test_run(
+        self, run: dict[str, Any], cases: list[dict[str, Any]]
+    ) -> None:
+        cols = list(run)
+        await self.session.execute(
+            text(
+                f"insert into workbench_test_runs ({', '.join(cols)}) values ("
+                + ", ".join(
+                    f"cast(:{c} as jsonb)" if c == "request" else f":{c}" for c in cols
+                )
+                + ")"
+            ),
+            {c: (_j(run[c]) if c == "request" else run[c]) for c in cols},
+        )
+        for case in cases:
+            await self.session.execute(
+                text(
+                    """insert into workbench_test_cases (run_id, case_id, position)
+                       values (:r, :c, :p)"""
+                ),
+                {"r": run["run_id"], "c": case["case_id"], "p": case["position"]},
+            )
+
+    async def get_test_run(
+        self, run_id: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                "select * from workbench_test_runs where run_id = :r"
+                + (" for update" if for_update else "")
+            ),
+            {"r": run_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def list_test_runs(
+        self, *, statuses: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_test_runs where status = any(:s)
+                   order by created_at"""
+            ),
+            {"s": list(statuses)},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def update_test_run(self, run_id: str, **changes: Any) -> None:
+        allowed = {
+            "status",
+            "spent",
+            "waited_seconds",
+            "error",
+            "started_at",
+            "finished_at",
+            "cleanup_after",
+        }
+        assert set(changes) <= allowed, sorted(set(changes) - allowed)
+        sets = ", ".join(f"{k} = :{k}" for k in changes)
+        await self.session.execute(
+            text(f"update workbench_test_runs set {sets} where run_id = :run_id"),
+            {**changes, "run_id": run_id},
+        )
+
+    async def list_test_cases(self, run_id: str) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                "select * from workbench_test_cases where run_id = :r order by position"
+            ),
+            {"r": run_id},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def update_test_case(self, run_id: str, case_id: str, **changes: Any) -> None:
+        allowed = {
+            "project_id",
+            "session_id",
+            "task_id",
+            "result",
+            "waiting_since",
+            "waited_seconds",
+        }
+        assert set(changes) <= allowed, sorted(set(changes) - allowed)
+        sets = ", ".join(
+            f"{k} = cast(:{k} as jsonb)" if k == "result" else f"{k} = :{k}"
+            for k in changes
+        )
+        params = {
+            k: (_j(v) if k == "result" and v is not None else v)
+            for k, v in changes.items()
+        }
+        await self.session.execute(
+            text(
+                f"update workbench_test_cases set {sets}"
+                " where run_id = :run_id and case_id = :case_id"
+            ),
+            {**params, "run_id": run_id, "case_id": case_id},
+        )
+
+    async def get_test_answer(
+        self, run_id: str, question_id: str
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_test_answers
+                   where run_id = :r and question_id = :q"""
+            ),
+            {"r": run_id, "q": question_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def insert_test_answer(
+        self, run_id: str, question_id: str, answer: dict[str, Any], answered_by: str
+    ) -> None:
+        await self.session.execute(
+            text(
+                """insert into workbench_test_answers
+                   (run_id, question_id, answer, answered_by)
+                   values (:r, :q, cast(:a as jsonb), :b)"""
+            ),
+            {"r": run_id, "q": question_id, "a": _j(answer), "b": answered_by},
+        )
+
+    async def committed_test_spend(self, since: Any) -> Decimal:
+        r = await self.session.execute(
+            text(
+                """select coalesce(sum(case when status in ('accepted','running','waiting')
+                                           then budget_limit else spent end), 0)
+                   from workbench_test_runs where created_at >= :since"""
+            ),
+            {"since": since},
+        )
+        return Decimal(str(r.scalar_one()))
+
+    async def expired_test_runs(self, now: Any) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_test_runs
+                   where cleanup_after is not null and cleanup_after <= :n"""
+            ),
+            {"n": now},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
+    async def delete_session_tree(self, session_id: str) -> None:
+        """删一段对话与它下面的一切（只给测试产出到期清理用）。
+
+        交回物、尝试、账、交互随委托级联；事件、交互随对话级联；其余按 session_id 删。
+        """
+        params = {"s": session_id}
+        await self.session.execute(
+            text("update workbench_sessions set active_task_id = null where id = :s"),
+            params,
+        )
+        for table in (
+            "workbench_approval_log",
+            "workbench_tool_grants",
+            "workbench_commands",
+            "workbench_tasks",
+        ):
+            await self.session.execute(
+                text(f"delete from {table} where session_id = :s"), params
+            )
+        await self.session.execute(
+            text("delete from workbench_sessions where id = :s"), params
+        )
+
+    async def purge_test_run(self, run_id: str) -> None:
+        sessions = [
+            str(s)
+            for s in (
+                await self.session.execute(
+                    text(
+                        """select session_id from workbench_test_cases
+                           where run_id = :r and session_id is not null"""
+                    ),
+                    {"r": run_id},
+                )
+            ).scalars()
+        ]
+        for session_id in sessions:
+            await self.delete_session_tree(session_id)
+        await self.session.execute(
+            text(
+                """update workbench_test_cases set session_id = null, task_id = null
+                   where run_id = :r"""
+            ),
+            {"r": run_id},
+        )
+        await self.session.execute(
+            text(
+                "update workbench_test_runs set cleanup_after = null where run_id = :r"
+            ),
+            {"r": run_id},
+        )
+
     # ---------- 知识库（SDD 0011）----------
     async def list_owner_step_artifacts(
         self, *, owner_actor_id: str

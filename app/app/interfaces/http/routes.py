@@ -6,6 +6,9 @@ from app.interfaces.endpoints.agent_onboarding_routes import (
 from app.interfaces.endpoints.agent_onboarding_routes import (
     public_router as agent_onboarding_public_router,
 )
+from app.interfaces.endpoints.knowbot_runtime_routes import (
+    router as knowbot_runtime_router,
+)
 from app.interfaces.endpoints.workbench_routes import router as workbench_router
 from app.interfaces.http.admin.auth import router as admin_auth_router
 from app.interfaces.http.admin.diagnostics import router as admin_diagnostics_router
@@ -44,3 +47,4 @@ router.include_router(workbench_projects_router)
 router.include_router(workbench_expert_router)
 router.include_router(workbench_library_router)
 router.include_router(workbench_mcp_router)
+router.include_router(knowbot_runtime_router)

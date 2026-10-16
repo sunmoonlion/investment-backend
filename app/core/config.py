@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -267,6 +268,20 @@ class Settings(BaseSettings):
     # 我的机器：runner 每隔这么多秒问一次会合点谁在线，登记机器、置在线离线；0 = 不同步（没配会合点管理通道时也不同步）
     workbench_machine_sync_seconds: float = Field(
         default=10.0, ge=0, le=300, validation_alias="WORKBENCH_MACHINE_SYNC_SECONDS"
+    )
+    # 作为运行方跑分身测试（SDD 0027 §3.4）：测试账号的 Casdoor 用户 id、测试电脑上的
+    # 工作区根目录、每月测试费用上限（所有者定 1000 元）。前两项没配，测试接口回 503
+    knowbot_test_subject: str | None = Field(
+        default=None, validation_alias="KNOWBOT_TEST_SUBJECT"
+    )
+    knowbot_test_workspace: str | None = Field(
+        default=None, validation_alias="KNOWBOT_TEST_WORKSPACE"
+    )
+    knowbot_test_monthly_limit: Decimal = Field(
+        default=Decimal("1000"), gt=0, validation_alias="KNOWBOT_TEST_MONTHLY_LIMIT"
+    )
+    knowbot_test_poll_seconds: float = Field(
+        default=5.0, ge=1, le=300, validation_alias="KNOWBOT_TEST_POLL_SECONDS"
     )
     # D10：签发代理/沙箱/知识令牌的 ES256 私钥（PEM）；未配置时退回不透明随机令牌（会合点静态表/管理通道）
     workbench_token_signing_key: str | None = Field(

@@ -195,3 +195,31 @@ class KnowbotUnavailable(WorkbenchError):
 
     code = "knowbot_unavailable"
     http_status = 503
+
+
+class KnowbotTestUnconfigured(WorkbenchError):
+    """跑分身测试要的测试账号、测试电脑还没配好（SDD 0027 §3.4）。"""
+
+    code = "test_runtime_unconfigured"
+    http_status = 503
+
+
+class KnowbotTestConflict(WorkbenchError):
+    """同一个 run_id 不同内容，或同一个问题给了不同的答案。"""
+
+    code = "test_run_conflict"
+    http_status = 409
+
+
+class KnowbotTestBudgetExhausted(WorkbenchError):
+    """这个月的测试费用到上限了（所有者定每月 1000 元）。"""
+
+    code = "test_budget_exhausted"
+    http_status = 409
+
+
+class QuestionNotOpen(WorkbenchError):
+    """这个问题不在等人回答（没有、已经答过、或那条用例已经结束）。"""
+
+    code = "question_not_open"
+    http_status = 409

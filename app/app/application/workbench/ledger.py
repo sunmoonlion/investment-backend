@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
-from app.application.workbench.catalog import pinned_pack
+from app.application.workbench.catalog import PinnedPack, pinned_pack
 from app.domain.workbench.errors import (
     BudgetExhausted,
     EnvironmentOffline,
@@ -67,8 +67,12 @@ class Ledger:
         tenant: str = "default",
         profile_version: str | None = None,
         expert_pack_version: str | None = None,
+        snapshot: PinnedPack | None = None,
     ) -> dict[str, Any]:
-        """F-INTAKE-01/02、F-ADMIT-01、F-WHEEL-01：幂等建单、首事件、wheel=advisor，同一提交。"""
+        """F-INTAKE-01/02、F-ADMIT-01、F-WHEEL-01：幂等建单、首事件、wheel=advisor，同一提交。
+
+        snapshot：调用方已经核好的专家包快照（跑分身测试时是草稿，SDD 0027 §3.4）。
+        """
         digest = req.digest()
         async with self.repo.transaction():
             prior = await self.repo.find_task_by_idempotency(
@@ -115,7 +119,7 @@ class Ledger:
             queued_behind = str(busy["id"]) if busy is not None else None
             # 分身：按这个人钉住的那一版建委托，专家包快照与清单摘要写进委托（SDD 0027 P4）。
             # 别人的、没钉过的分身在这里就是「没有这位专家」
-            pinned = (
+            pinned = snapshot or (
                 await pinned_pack(
                     self.repo, owner_actor_id=owner_actor_id, profile_id=req.profile_id
                 )
