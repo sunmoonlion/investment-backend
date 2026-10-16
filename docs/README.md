@@ -1,6 +1,6 @@
 # Investment Backend 文档说明
 
-当前架构入口为仓库根 `README.md` 与 `k8s/sunmoonai/docs/project-guide/`；
+当前架构入口为仓库根 `README.md` 与 `k8s/docs/project-guide/`；
 部署事实须核对实际 bundle 与运行状态。历史迁移/退役证据按
 `k8s/sunmoonai/docs/legacy-backlog/verification-index.md` 的固定 Git 版本查询。
 

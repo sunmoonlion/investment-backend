@@ -1,6 +1,6 @@
 """工作台（0001-workbench）：Session 与方向盘、Task/Attempt 两层、Interaction、Artifact、预算账、幂等账、事件流。
 
-设计真源：k8s/sunmoonai/docs/dev-investment-agent/tree-build/SDD/architecture/{state-machine,task-contract,wheel,persistence}.md。
+设计真源：k8s/docs/dev-investment-agent/tree-build/SDD/architecture/{state-machine,task-contract,wheel,persistence}.md。
 新表一律以 workbench_ 为前缀，与旧 agent_*（Pilot 链）并存；旧表按 expand → contract 退役，不在本迁移里删。
 """
 

@@ -115,5 +115,5 @@
       "type": "object"
     }
   },
-  "provider": "k8s/sunmoonai/relay-platform/relay/local-permission-v1.json"
+  "provider": "k8s/infrastructure/applications/component-images/relay/local-permission-v1.json"
 }
