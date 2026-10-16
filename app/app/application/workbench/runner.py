@@ -24,13 +24,13 @@ from app.application.ports.workbench import (
     WorkbenchStores,
 )
 from app.application.workbench.advisor import Advisor, TurnResult
+from app.application.workbench.catalog import pack_for_task
 from app.application.workbench.deliverable_check import DeliverableCheck
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
 from app.domain.workbench.deliverables import changed_paths
 from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
-from app.domain.workbench.packs import find_pack
 from app.domain.workbench.pricing import (
     DEFAULT_PRICES,
     PriceList,
@@ -725,7 +725,7 @@ class SandboxLink:
         task = pack = step = None
         if wheel == Wheel.advisor and session.get("active_task_id"):
             task = await repo.get_task(str(session["active_task_id"]))
-            pack = find_pack(task["profile_id"], task["profile_version"])
+            pack = pack_for_task(task)
             step = pack.step(int(task["current_step"])) if pack else None
         return {"wheel": wheel, "task": task, "pack": pack, "step": step}
 

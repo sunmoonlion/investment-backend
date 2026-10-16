@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.application.ports.workbench import (
     AppServerConnector,
     EventPublisher,
+    KnowmartSummoner,
     Provisioner,
     RelayAdmin,
     WorkbenchStore,
@@ -21,6 +23,7 @@ from app.application.workbench.agent_download import ReleaseStore
 from app.application.workbench.machines import MachineSync
 from app.application.workbench.runner import Runner
 from app.domain.workbench.pricing import PriceList
+from app.infrastructure.external.knowmart_client import KnowmartSummonClient
 from app.infrastructure.workbench.agent_release import S3ReleaseStore
 from app.infrastructure.workbench.app_server_client import WsAppServerConnector
 from app.infrastructure.workbench.provisioner import HttpProvisioner, ProvisionerConfig
@@ -41,6 +44,12 @@ def agent_release_store(settings) -> ReleaseStore:
         access_key=storage.access_key.get_secret_value(),
         secret_key=storage.secret_key.get_secret_value(),
     )
+
+
+@lru_cache(maxsize=1)
+def knowmart_summoner() -> KnowmartSummoner:
+    """向 knowmart 取分身清单（令牌缓存在里面，进程内共用）。"""
+    return KnowmartSummonClient()
 
 
 def workbench_store(session: AsyncSession) -> WorkbenchStore:

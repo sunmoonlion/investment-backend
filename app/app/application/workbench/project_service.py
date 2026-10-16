@@ -7,6 +7,7 @@ from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
 from app.application.workbench.agent_service import AgentRefused, AgentService
+from app.application.workbench.catalog import expert_name
 from app.domain.workbench.errors import (
     ProjectArchived,
     ProjectBusy,
@@ -14,7 +15,6 @@ from app.domain.workbench.errors import (
     RootOutsideWhitelist,
     WorkbenchError,
 )
-from app.domain.workbench.packs import find_pack
 from app.domain.workbench.projects import (
     clean_relative_path,
     clean_title,
@@ -270,8 +270,7 @@ class ProjectService:
 
 
 def _expert_name(task: dict[str, Any]) -> str:
-    pack = find_pack(task["profile_id"], task.get("profile_version"))
-    return (pack.name or pack.title) if pack else ""
+    return expert_name(task)
 
 
 def _question(task: dict[str, Any]) -> str | None:

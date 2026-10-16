@@ -11,6 +11,11 @@ from collections import defaultdict
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
+from app.application.workbench.catalog import (
+    SOURCE_KNOWMART,
+    expert_name,
+    pack_for_task,
+)
 from app.application.workbench.expert_desk import ExpertDesk, question_of
 from app.domain.workbench.errors import NotFound
 from app.domain.workbench.library import (
@@ -26,7 +31,6 @@ from app.domain.workbench.library import (
     parse_item_id,
     sha256_of,
 )
-from app.domain.workbench.packs import find_pack
 from app.domain.workbench.states import TASK_TERMINAL, TaskState
 
 
@@ -55,8 +59,13 @@ class Library:
             # 还在做的委托不进知识库：交回了才算资料
             if TaskState(first["state"]) not in TASK_TERMINAL:
                 continue
-            pack = find_pack(first["profile_id"], first["profile_version"])
-            expert = (pack.name or pack.title) if pack else ""
+            expert = expert_name(first)
+            # 列表行不带分身的整份快照：分身的委托另取一次（内置的按 id 与版本就找得到）
+            pack = pack_for_task(
+                await self.repo.get_task(task_id)
+                if first.get("pack_source") == SOURCE_KNOWMART
+                else first
+            )
             steps = [a for a in parts if a["kind"] == "step"]
             drafts = [a for a in parts if a["kind"] == "user_draft"]
             if steps:

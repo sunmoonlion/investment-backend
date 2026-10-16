@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.application.workbench.catalog import pack_for_task
 from app.domain.workbench.deliverables import run_files, run_folder
-from app.domain.workbench.packs import find_pack
 
 
 def task_dossier(task: dict[str, Any]) -> dict[str, Any] | None:
     """{folder, expert, files}；专家包找不到或这位专家不写文件时是 None。"""
-    pack = find_pack(str(task.get("profile_id") or ""), task.get("profile_version"))
+    pack = pack_for_task(task)
     if pack is None or not pack.deliverable_files() or not task.get("created_at"):
         return None
     expert = pack.name or pack.title

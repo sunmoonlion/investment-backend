@@ -1,6 +1,7 @@
 """专家：有哪些专家、请专家、委托的步骤、底稿、等我决定的事（PRD/apps/investment-expert.md）。
 
-方法的原文不出后端：这里的任何接口都不返回它。
+方法的原文不出后端：这里的任何接口都不返回它。专家有两种来源：内置专家包，和用户从 knowmart
+请来、在这里核验钉住的自己的分身（SDD 0027 P4，id 写作 `knowbot:<分身>@<版本>`）。
 """
 
 from __future__ import annotations
@@ -12,12 +13,14 @@ from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.workbench.delegation import (
-    DelegationService,
-    expert_on_view,
+from app.application.workbench.catalog import (
+    my_knowbots,
+    pin_knowbot,
+    viewable_expert,
 )
+from app.application.workbench.delegation import DelegationService
 from app.application.workbench.expert_desk import ExpertDesk
-from app.bootstrap.workbench import workbench_store
+from app.bootstrap.workbench import knowmart_summoner, workbench_store
 from app.domain.security import Principal
 from app.domain.workbench.errors import WorkbenchError
 from app.domain.workbench.pack_view import pack_view
@@ -54,16 +57,32 @@ class Delegate(Strict):
     budget_currency: str = Field(default="CNY", pattern=r"^CNY$")
 
 
+class PinKnowbot(Strict):
+    """从 knowmart「我的分身」选定回来：`<分身>@<版本>`。"""
+
+    knowbot: str = Field(min_length=3, max_length=64)
+
+
+def _view(pack: Any, source: str) -> dict[str, Any]:
+    return {**pack_view(pack), "source": source}
+
+
 @router.get("/packs")
 async def packs(
     principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """有哪些专家：名字、解决什么、不解决什么、每一步的名字与一句白话、不通过时怎么办。"""
+    """有哪些专家：名字、解决什么、不解决什么、每一步的名字与一句白话、不通过时怎么办。
+
+    内置的在前，然后是这个人请过的分身（只有他自己的）。
+    """
+    mine = await my_knowbots(workbench_store(session), owner_actor_id=_actor(principal))
     return {
         "contract_version": CONTRACT_VERSION,
         # 默认预算与币种所有者还没定（W4）：先不给默认值，页面让用户自己填
         "budget": {"currency": "CNY", "default": None},
-        "packs": [pack_view(p) for p in listed_packs()],
+        "packs": [_view(p, "builtin") for p in listed_packs()]
+        + [_view(p, "knowbot") for p in mine],
     }
 
 
@@ -71,12 +90,41 @@ async def packs(
 async def one_pack(
     pack_id: str,
     principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        pack = expert_on_view(pack_id)
+        pack = await viewable_expert(
+            workbench_store(session),
+            owner_actor_id=_actor(principal),
+            profile_id=pack_id,
+        )
     except WorkbenchError as exc:
         raise _http(exc) from exc
-    return {"contract_version": CONTRACT_VERSION, "pack": pack_view(pack)}
+    source = "knowbot" if pack_id.startswith("knowbot:") else "builtin"
+    return {"contract_version": CONTRACT_VERSION, "pack": _view(pack, source)}
+
+
+@router.post("/knowbots/pin")
+async def pin(
+    body: PinKnowbot,
+    principal: Principal = Depends(get_web_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """用户在 knowmart 选定、跳回来：按他的会话向 knowmart 核一次再钉住。
+
+    所有者只取自会话（Casdoor 用户 id），链接里带来的只有 `<分身>@<版本>`；伪造的、别人的都是 404。
+    """
+    try:
+        pack = await pin_knowbot(
+            workbench_store(session),
+            knowmart_summoner(),
+            owner_actor_id=_actor(principal),
+            owner_subject=principal.subject,
+            ref=body.knowbot,
+        )
+    except WorkbenchError as exc:
+        raise _http(exc) from exc
+    return {"contract_version": CONTRACT_VERSION, "pack": _view(pack, "knowbot")}
 
 
 @router.get("/tasks/{task_id}/steps")

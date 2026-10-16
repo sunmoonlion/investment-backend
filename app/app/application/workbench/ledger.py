@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
+from app.application.workbench.catalog import pinned_pack
 from app.domain.workbench.errors import (
     BudgetExhausted,
     EnvironmentOffline,
@@ -22,6 +23,7 @@ from app.domain.workbench.errors import (
     StaleStateVersion,
     WheelHeldByOther,
 )
+from app.domain.workbench.knowbots import is_knowbot
 from app.domain.workbench.models import Budget, HandoverRequest, InteractionPrompt
 from app.domain.workbench.packs import current_pack_version
 from app.domain.workbench.states import (
@@ -111,6 +113,15 @@ class Ledger:
             await self.repo.get_project(str(session["project_id"]), for_update=True)
             busy = await self.repo.active_task_of_project(str(session["project_id"]))
             queued_behind = str(busy["id"]) if busy is not None else None
+            # 分身：按这个人钉住的那一版建委托，专家包快照与清单摘要写进委托（SDD 0027 P4）。
+            # 别人的、没钉过的分身在这里就是「没有这位专家」
+            pinned = (
+                await pinned_pack(
+                    self.repo, owner_actor_id=owner_actor_id, profile_id=req.profile_id
+                )
+                if is_knowbot(req.profile_id)
+                else None
+            )
             task_id = str(uuid.uuid4())
             budget = Budget(currency=req.budget_currency, limit=req.budget_limit)
             client_context = dict(req.client_context)
@@ -125,9 +136,14 @@ class Ledger:
                     "idempotency_key": req.idempotency_key,
                     "request_digest": digest,
                     "profile_id": req.profile_id,
-                    "profile_version": req.profile_version
-                    or profile_version
-                    or current_pack_version(req.profile_id),
+                    "profile_version": pinned.pack.version
+                    if pinned
+                    else (
+                        req.profile_version
+                        or profile_version
+                        or current_pack_version(req.profile_id)
+                    ),
+                    **(pinned.task_columns() if pinned else {}),
                     "expert_pack_version": expert_pack_version,
                     "original_input": {
                         "input": req.original_input,

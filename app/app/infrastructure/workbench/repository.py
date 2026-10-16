@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.application.dto.outbox import OutboxEvent
 from app.domain.workbench.errors import (
+    KnowbotInvalid,
     NotFound,
     ProjectBusy,
     ProjectExists,
@@ -751,6 +752,7 @@ class WorkbenchRepository:
             "execution_policy",
             "budget",
             "rejection",
+            "pack_snapshot",
         }
         values = ", ".join(
             f"cast(:{c} as jsonb)" if c in json_cols else f":{c}" for c in cols
@@ -1183,6 +1185,66 @@ class WorkbenchRepository:
         )
         return [dict(m) for m in r.mappings().all()]
 
+    # ---------- 请来的分身（SDD 0027 P4）----------
+    async def pin_knowbot(
+        self,
+        *,
+        owner_actor_id: str,
+        owner_subject: str,
+        knowbot_id: str,
+        version: str,
+        digest: str,
+        manifest: dict[str, Any],
+    ) -> dict[str, Any]:
+        await self.session.execute(
+            text(
+                """insert into workbench_knowbot_pins
+                   (owner_actor_id, owner_subject, knowbot_id, version, digest, manifest)
+                   values (:o, :s, :k, :v, :d, cast(:m as jsonb))
+                   on conflict (owner_actor_id, knowbot_id, version) do nothing"""
+            ),
+            {
+                "o": owner_actor_id,
+                "s": owner_subject,
+                "k": knowbot_id,
+                "v": version,
+                "d": digest,
+                "m": _j(manifest),
+            },
+        )
+        pin = await self.get_knowbot_pin(
+            owner_actor_id=owner_actor_id, knowbot_id=knowbot_id, version=version
+        )
+        assert pin is not None
+        if pin["digest"] != digest:
+            raise KnowbotInvalid(
+                "this knowbot version changed after it was pinned", knowbot=knowbot_id
+            )
+        return pin
+
+    async def get_knowbot_pin(
+        self, *, owner_actor_id: str, knowbot_id: str, version: str
+    ) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_knowbot_pins
+                   where owner_actor_id = :o and knowbot_id = :k and version = :v"""
+            ),
+            {"o": owner_actor_id, "k": knowbot_id, "v": version},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
+    async def list_knowbot_pins(self, *, owner_actor_id: str) -> list[dict[str, Any]]:
+        r = await self.session.execute(
+            text(
+                """select * from workbench_knowbot_pins where owner_actor_id = :o
+                   order by created_at desc, knowbot_id, version"""
+            ),
+            {"o": owner_actor_id},
+        )
+        return [dict(m) for m in r.mappings().all()]
+
     # ---------- 知识库（SDD 0011）----------
     async def list_owner_step_artifacts(
         self, *, owner_actor_id: str
@@ -1192,7 +1254,8 @@ class WorkbenchRepository:
                 """select a.id, a.task_id, a.name, a.version, a.kind, a.digest, a.created_at,
                           length(a.content::text) as size_bytes,
                           t.project_id, t.session_id, t.profile_id, t.profile_version, t.state,
-                          t.original_input, t.created_at as task_created_at
+                          t.original_input, t.created_at as task_created_at,
+                          t.pack_source, t.pack_snapshot->>'name' as pack_name
                    from workbench_artifacts a join workbench_tasks t on t.id = a.task_id
                    where t.owner_actor_id = :o and a.kind in ('step', 'user_draft')
                    order by a.created_at"""

@@ -181,3 +181,17 @@ class ExpertNotReady(WorkbenchError):
 
     code = "expert_not_ready"
     http_status = 409
+
+
+class KnowbotInvalid(WorkbenchError):
+    """请来的分身清单工作台跑不了：格式不对、运行方不是这里、越权的工具或审批（SDD 0027 P4）。"""
+
+    code = "knowbot_invalid"
+    http_status = 422
+
+
+class KnowbotUnavailable(WorkbenchError):
+    """knowmart 暂时取不到：只影响新的「请」，在跑的委托读自己钉住的那份。"""
+
+    code = "knowbot_unavailable"
+    http_status = 503

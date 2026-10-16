@@ -700,6 +700,28 @@ class WorkbenchStore(Protocol):
         self, *, session_id: str, request_id: str
     ) -> dict[str, Any] | None: ...
 
+    # ---------- 请来的分身（SDD 0027 P4）----------
+    async def pin_knowbot(
+        self,
+        *,
+        owner_actor_id: str,
+        owner_subject: str,
+        knowbot_id: str,
+        version: str,
+        digest: str,
+        manifest: dict[str, Any],
+    ) -> dict[str, Any]:
+        """钉住一版：已有同一版就原样返回（摘要不同抛 KnowbotInvalid），只插不改。"""
+        ...
+
+    async def get_knowbot_pin(
+        self, *, owner_actor_id: str, knowbot_id: str, version: str
+    ) -> dict[str, Any] | None: ...
+
+    async def list_knowbot_pins(self, *, owner_actor_id: str) -> list[dict[str, Any]]:
+        """这个人请过的分身，新的在前。"""
+        ...
+
     # ---------- 知识库（SDD 0011）----------
     async def list_owner_step_artifacts(
         self, *, owner_actor_id: str
@@ -723,6 +745,18 @@ class WorkbenchStore(Protocol):
     ) -> None:
         """改名（title 给非 None）或拿掉 / 放回（deleted 给非 None）。"""
         ...
+
+
+class KnowmartSummoner(Protocol):
+    """向 knowmart 取这个所有者的这一版分身清单（服务身份 knowmart:summon，SDD 0027 P4）。
+
+    返回 {"manifest", "digest", "name", "tagline"}。没有、不是他的、停用的、运行方不是这里的，
+    都抛 NoSuchExpert；knowmart 不可达或没配好抛 KnowbotUnavailable。
+    """
+
+    async def summon(
+        self, *, owner_subject: str, knowbot_id: str, version: str
+    ) -> dict[str, Any]: ...
 
 
 class WorkbenchStores(Protocol):

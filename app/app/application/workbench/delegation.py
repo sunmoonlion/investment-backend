@@ -10,34 +10,20 @@ from decimal import Decimal
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
+from app.application.workbench.catalog import (
+    builtin_on_offer,
+    builtin_on_view,
+    offerable_expert,
+)
 from app.application.workbench.ledger import Ledger
 from app.application.workbench.session_service import SessionService
-from app.domain.workbench.errors import (
-    ExpertNotReady,
-    IdempotencyConflict,
-    NoSuchExpert,
-)
+from app.domain.workbench.errors import IdempotencyConflict
 from app.domain.workbench.models import HandoverRequest
-from app.domain.workbench.packs import ExpertPack, find_pack
 from app.domain.workbench.projects import default_title
 
-
-def expert_on_view(profile_id: str) -> ExpertPack:
-    """能看的专家：清单里的都能看，包括筹备中的。"""
-    pack = find_pack(profile_id)
-    if pack is None or pack.internal:
-        raise NoSuchExpert("no such expert", profile_id=profile_id)
-    return pack
-
-
-def expert_on_offer(profile_id: str) -> ExpertPack:
-    """能请的专家：筹备中的看得见、请不了（所有者 2026-10-13 定先占位）。"""
-    pack = expert_on_view(profile_id)
-    if pack.status != "ready":
-        raise ExpertNotReady(
-            "this expert is still being prepared", profile_id=profile_id
-        )
-    return pack
+# 只看内置专家的老入口（同步、不认分身），保留给已有的调用方
+expert_on_view = builtin_on_view
+expert_on_offer = builtin_on_offer
 
 
 class DelegationService:
@@ -56,7 +42,10 @@ class DelegationService:
         idempotency_key: str,
         tenant: str = "default",
     ) -> dict[str, Any]:
-        pack = expert_on_offer(profile_id)
+        # 内置专家，或这个人请来并钉住的分身（SDD 0027 P4）
+        pack = await offerable_expert(
+            self.repo, owner_actor_id=owner_actor_id, profile_id=profile_id
+        )
 
         def request(session_id: str) -> HandoverRequest:
             return HandoverRequest(

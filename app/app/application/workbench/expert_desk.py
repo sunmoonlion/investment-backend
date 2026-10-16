@@ -10,10 +10,11 @@ from decimal import Decimal
 from typing import Any
 
 from app.application.ports.workbench import WorkbenchStore
+from app.application.workbench.catalog import pack_for_task
 from app.domain.workbench.dossier_view import dossier_markdown, dossier_view
 from app.domain.workbench.errors import NotFound
 from app.domain.workbench.now_view import now_view
-from app.domain.workbench.packs import ExpertPack, find_pack
+from app.domain.workbench.packs import ExpertPack
 from app.domain.workbench.review_view import review_view
 from app.domain.workbench.states import TASK_TERMINAL, TaskState
 from app.domain.workbench.step_view import (
@@ -65,7 +66,7 @@ class ExpertDesk:
         self, task_id: str, owner_actor_id: str
     ) -> tuple[dict[str, Any], ExpertPack | None, list[dict[str, Any]]]:
         task = await self.repo.get_task(task_id, owner_actor_id=owner_actor_id)
-        pack = find_pack(task["profile_id"], task["profile_version"])
+        pack = pack_for_task(task)
         attempts = await self.repo.list_attempts(task_id)
         return task, pack, attempts
 
@@ -335,7 +336,7 @@ class ExpertDesk:
         running: list[dict[str, Any]] = []
         returned: list[dict[str, Any]] = []
         for task in await self.repo.list_tasks(owner_actor_id=owner_actor_id):
-            pack = find_pack(task["profile_id"], task["profile_version"])
+            pack = pack_for_task(task)
             ended = task["state"] in TASK_TERMINAL
             if ended and len(returned) >= recent:
                 continue

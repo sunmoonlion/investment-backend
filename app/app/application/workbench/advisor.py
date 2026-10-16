@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
 from app.application.workbench.acceptance import judge, timed_out
+from app.application.workbench.catalog import SOURCE_KNOWMART, pack_for_task
 from app.application.workbench.deliverable_check import DeliverableCheck, harden
 from app.application.workbench.ledger import Ledger
 from app.domain.workbench import missing_data
@@ -103,10 +104,14 @@ class Advisor:
                 await led.transition(task_id, TaskState.VALIDATING)
                 task = await repo.get_task(task_id)
             if task["state"] == TaskState.VALIDATING:
-                pack = find_pack(task["profile_id"], task["profile_version"])
+                pack = pack_for_task(task)
                 if pack is None:
-                    # 专家还在、只是委托绑的那一版已经下架（升版前建的单）：说清楚，别说成不在范围
-                    gone = find_pack(task["profile_id"]) is not None
+                    # 专家还在、只是委托绑的那一版已经下架（升版前建的单）：说清楚，别说成不在范围。
+                    # 分身的委托自带快照，不会走到这里
+                    gone = (
+                        task.get("pack_source") != SOURCE_KNOWMART
+                        and find_pack(task["profile_id"]) is not None
+                    )
                     await led.transition(
                         task_id,
                         TaskState.REJECTED,
@@ -159,7 +164,7 @@ class Advisor:
                         task_id, TaskState.CANCELLED, reason={"by": "user"}
                     )
                 )["state"]
-            pack = find_pack(task["profile_id"], task["profile_version"])
+            pack = pack_for_task(task)
             assert pack is not None
             step = pack.step(int(task["current_step"]))
             if step is None:
