@@ -38,6 +38,7 @@ from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
 from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
 from app.domain.workbench.projects import NO_DETOUR
+from app.domain.workbench.records import one_line
 from app.domain.workbench.states import (
     TASK_TERMINAL,
     AttemptState,
@@ -50,6 +51,9 @@ log = logging.getLogger(__name__)
 
 # 专家每一步的时限（一个 turn）。到点还没做完就停下，按验收不过走返工、退回或交人
 STEP_TIMEOUT_SECONDS = 900
+# 重做时列出上一次没过的几条，每条最多这么多字
+REWORK_FAILURES_SHOWN = 10
+REWORK_FAILURE_CHARS = 400
 
 
 @dataclass
@@ -283,11 +287,24 @@ class Advisor:
             folder = run_folder(
                 str(task["session_id"]), task["created_at"], pack.name or pack.title
             )
+            # 重做：把上一次没过的各条告诉专家（所有者 2026-10-17 定），不然它不知道该改哪里
+            rejected = (
+                [
+                    e["payload"]
+                    for e in await repo.list_task_events(
+                        task_id, types=("step/rejected",)
+                    )
+                    if e["payload"].get("step_id") == step.step_id
+                ]
+                if reworks
+                else []
+            )
             text = self.compose(
                 step,
                 question,
                 inputs,
                 reworks,
+                rework_failures=rejected[-1].get("failures") if rejected else None,
                 folder=folder,
                 records_task=task_id if self.records else None,
                 data_task=(
@@ -791,6 +808,7 @@ class Advisor:
         inputs: dict[str, Any],
         reworks: int,
         *,
+        rework_failures: list[str] | None = None,
         records_task: str | None = None,
         data_task: str | None = None,
         ask_before_answers: dict[str, Any] | None = None,
@@ -902,4 +920,9 @@ class Advisor:
                 "",
                 f"## Note: this is rework #{reworks}; the previous attempt failed acceptance. Follow the output shape exactly.",
             ]
+            if rework_failures:
+                parts += ["What failed last time (fix these):"] + [
+                    f"- {one_line(str(f), REWORK_FAILURE_CHARS)}"
+                    for f in rework_failures[:REWORK_FAILURES_SHOWN]
+                ]
         return "\n".join(parts)

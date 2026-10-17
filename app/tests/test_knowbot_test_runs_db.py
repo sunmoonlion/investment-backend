@@ -664,6 +664,9 @@ async def test_computed_numbers_are_recorded_and_checked_on_the_real_store(db):
         ]
         assert computed == [("step/rejected", False), ("step/accepted", True)]
         assert any("read_my_table" in t and "compute_id" in t for t in fake.turn_inputs)
+        assert any(
+            "says 201 but computed 200" in t for t in fake.turn_inputs
+        )  # 重做提示里有
         [rejected] = [e for e in judged if e["type"] == "step/rejected"]
         assert any(
             "says 201 but computed 200" in c["detail"]

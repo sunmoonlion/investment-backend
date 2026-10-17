@@ -234,6 +234,11 @@ async def test_rework_once_then_succeed(db):
                 "0.03"
             )
         assert "rework #1" in fake.turn_inputs[1]
+        # 上一次没过的各条带进重做的提示（所有者 2026-10-17）：这里是「不是 JSON」
+        assert (
+            "What failed last time (fix these):\n- json_object:" in fake.turn_inputs[1]
+        )
+        assert "What failed last time" not in fake.turn_inputs[0]
         await close(runner)
     finally:
         await fake.close()
