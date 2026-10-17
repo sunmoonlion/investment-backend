@@ -206,7 +206,8 @@ WINDOWS_CONSOLE_NOTE = (
 # 的双引号；在 Windows 上把 apply_patch 当成一个程序去调；脚本经管道交给 python，中文成了问号（代理侧另修）。
 # 专家步骤的成稿有 WRITE_FILE_RULES，普通的工作对话没有，所以在能改文件的情形里把这几条写死
 WINDOWS_WORK_NOTE = (
-    " There is no bash and no apply_patch program on this Windows machine. To create "
+    " This Windows machine has no bash, and apply_patch is not a program on it (or on "
+    "any machine): it is a command form Codex itself catches. To create "
     "or change a file, run one shell command that is exactly `apply_patch <<'EOF'`, a "
     "newline, the patch text, a newline, `EOF`, with nothing before or after it in the "
     "same command; Codex catches that command itself. To run anything longer than one "
