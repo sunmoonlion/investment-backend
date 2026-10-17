@@ -1,6 +1,6 @@
 """作为运行方跑分身测试的内部接口（SDD 0027 §3.4，契约 knowbot-test-run/v1）。
 
-只接受 knowlab 的服务身份（关系 testrun，`investment:testrun`），身份先于数据库会话核。
+只接受 knowlab 的服务身份（关系 testrun，`knowbench:testrun`），身份先于数据库会话核。
 入口统一在 `/api/internal/v1/knowbot-runtime`（traefik service-access 的内部入口）。
 """
 

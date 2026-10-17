@@ -4,13 +4,13 @@ from app.infrastructure.messaging.celery_producer import (
     CeleryNotConfiguredError,
     get_celery_producer,
 )
-from app.interfaces.http.middleware.auth import require_investment_admin
+from app.interfaces.http.middleware.auth import require_knowbench_admin
 from core.config import get_settings
 
 router = APIRouter(
     prefix="/admin/v1/diagnostics/tasks",
     tags=["Admin diagnostics"],
-    dependencies=[Depends(require_investment_admin)],
+    dependencies=[Depends(require_knowbench_admin)],
 )
 
 

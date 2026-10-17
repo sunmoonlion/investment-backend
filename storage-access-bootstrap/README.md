@@ -1,7 +1,7 @@
-# storage-access-bootstrap (investment-backend)
+# storage-access-bootstrap (knowbench-backend)
 
 This directory declares and provisions standard S3 access for
-`investment-backend`.
+`knowbench-backend`.
 
 It is disabled by default. Enable it only when this Backend owns a distinct
 set of object data inside the App domain.
@@ -17,8 +17,8 @@ The declaration contains no credentials. The Data Platform provisioner creates
 an IAM identity and writes these resources to the target Namespace:
 
 ```text
-Secret:    investment-backend-s3
-ConfigMap: investment-backend-s3
+Secret:    knowbench-backend-s3
+ConfigMap: knowbench-backend-s3
 ```
 
 The Backend Deployment should reference both resources with `envFrom`. Architecture v2
@@ -29,8 +29,8 @@ If a generated deployment exposes equivalent object-storage resource-name inputs
 them to:
 
 ```text
-INVESTMENT_BACKEND_OBJECT_STORAGE_CONFIGMAP_NAME=investment-backend-s3
-INVESTMENT_BACKEND_OBJECT_STORAGE_SECRET_NAME=investment-backend-s3
+KNOWBENCH_BACKEND_OBJECT_STORAGE_CONFIGMAP_NAME=knowbench-backend-s3
+KNOWBENCH_BACKEND_OBJECT_STORAGE_SECRET_NAME=knowbench-backend-s3
 ```
 
 ## Commands

@@ -1,5 +1,5 @@
 """凭据列表的字段集合是网页契约的一部分（网页用 strict 校验，多一个字段整页列表就空；KIND 2026-09-26 踩过）。
-改这里的字段，要同时改 investment-web-frontend 的 contracts/workbench.ts credentialSchema。"""
+改这里的字段，要同时改 knowbench-web-frontend 的 contracts/workbench.ts credentialSchema。"""
 
 from __future__ import annotations
 

@@ -10,15 +10,15 @@ LEGACY_INFRASTRUCTURE_NAMES = (
 )
 
 
-def test_access_declarations_use_unified_investment_backend_identity() -> None:
+def test_access_declarations_use_unified_knowbench_backend_identity() -> None:
     for relative_path in (
         "search-access-bootstrap/config/access.json",
         "storage-access-bootstrap/config/access.json",
     ):
         declaration = json.loads((BACKEND_ROOT / relative_path).read_text())
-        assert declaration["metadata"]["name"] == "investment-backend"
-        assert declaration["spec"]["app"] == "investment-app"
-        assert declaration["spec"]["backend"] == "investment-backend"
+        assert declaration["metadata"]["name"] == "knowbench-backend"
+        assert declaration["spec"]["app"] == "knowbench-app"
+        assert declaration["spec"]["backend"] == "knowbench-backend"
 
 
 def test_database_bootstrap_has_no_legacy_identity_or_committed_password() -> None:
@@ -37,6 +37,6 @@ def test_database_bootstrap_has_no_legacy_identity_or_committed_password() -> No
 
 def test_build_uses_unified_backend_identity() -> None:
     build_conf = (BACKEND_ROOT / "mybuild" / "build.conf").read_text()
-    assert 'BACKEND_IMAGE="investment-backend"' in build_conf
+    assert 'BACKEND_IMAGE="knowbench-backend"' in build_conf
     assert 'BACKEND_TAG="architecture-v2-dev"' in build_conf
     assert "ADMIN_BACKEND_IMAGE" not in build_conf

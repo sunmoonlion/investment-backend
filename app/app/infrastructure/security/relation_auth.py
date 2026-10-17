@@ -1,9 +1,9 @@
 """按关系校验其他应用的服务令牌（SDD 0027 §3.4；机制同 knowmart 的 relation_auth）。
 
-investment 作为运行方接受一种关系：knowlab 来跑分身测试（testrun）。一种关系可以有多个
+knowbench 作为运行方接受一种关系：knowlab 来跑分身测试（testrun）。一种关系可以有多个
 调用方：`SERVICE_AUTH_<关系>_CALLERS` 列出调用方，每个调用方一组
 `SERVICE_AUTH_<关系>_<调用方>_AUDIENCE`（调用方的 client_id）、`_SUBJECT_ALLOWLIST`
-（`admin/<调用方服务应用>`）、`_REQUIRED_SCOPE`（`investment:<关系>`），都由部署从调用方
+（`admin/<调用方服务应用>`）、`_REQUIRED_SCOPE`（`knowbench:<关系>`），都由部署从调用方
 配置推出来（`common/backend/service-client`）。一组都没配就是这种关系没开，一律拒绝。
 签名、签发方、有效期用模板的 OIDC 客户端核。
 """
@@ -71,7 +71,7 @@ def relation_bindings(
             if s.strip()
         )
         scope = env.get(prefix + "REQUIRED_SCOPE", "").strip()
-        if audience and subjects and scope == f"investment:{relation}":
+        if audience and subjects and scope == f"knowbench:{relation}":
             bindings.append(
                 RelationBinding(relation, caller, audience, subjects, scope)
             )

@@ -2,7 +2,7 @@
 
 这里是工作台这一侧的解析模型与纯函数：收到的请求怎么读、用例的期望怎么判、一条用例的
 结果怎么从步骤轨算出来。契约的真源在 knowlab（`knowlab-app/contracts/knowbot-test-run/v1/`），
-本仓只持锁（`investment-app/contracts/knowlab-test-run-lock.json`），测试核样例合提供方 schema。
+本仓只持锁（`knowbench-app/contracts/knowlab-test-run-lock.json`），测试核样例合提供方 schema。
 
 有人值守：跑到要人决定的地方（工作台的「待人回答」交互）就报成待回答的问题，knowlab 那边
 运营答跑法、用户答投资判断，答完接着跑。结果只有运行正确与否，不含分析内容（C-L5）。

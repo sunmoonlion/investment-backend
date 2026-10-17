@@ -32,7 +32,7 @@ def test_a_good_manifest_becomes_the_owners_expert_pack() -> None:
 @pytest.mark.parametrize(
     ("change", "says"),
     [
-        ({"runtime": "elsewhere"}, "runtime must be investment"),
+        ({"runtime": "elsewhere"}, "runtime must be knowbench"),
         ({"schema": "x"}, "schema must be"),
         ({"version": "2"}, "version differs"),
         ({"pack": None}, "pack must be an object"),

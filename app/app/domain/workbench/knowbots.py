@@ -24,7 +24,7 @@ from app.domain.workbench.tool_policy import TIER_ORDER, ToolPolicy
 
 PREFIX = "knowbot:"
 MANIFEST_SCHEMA = "knowbot-manifest/v1"
-RUNTIME = "investment"
+RUNTIME = "knowbench"
 KNOWBOT_ID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 VERSION = r"[1-9][0-9]{0,5}"
 REF = re.compile(rf"^({KNOWBOT_ID})@({VERSION})$")

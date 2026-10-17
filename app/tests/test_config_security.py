@@ -38,8 +38,8 @@ def test_one_settings_root_exposes_isolated_browser_profiles() -> None:
     assert admin.client_secret != web.client_secret
     assert admin.redirect_uri.endswith("/api/auth/admin/callback")
     assert web.redirect_uri.endswith("/api/auth/web/callback")
-    assert admin.session_cookie_name == "sunmoonai_investment_admin_sid"
-    assert web.session_cookie_name == "sunmoonai_investment_web_sid"
+    assert admin.session_cookie_name == "sunmoonai_knowbench_admin_sid"
+    assert web.session_cookie_name == "sunmoonai_knowbench_web_sid"
     assert admin.session_key_prefix != web.session_key_prefix
     assert settings.frontend_origin_list == (
         "https://admin.example.test",
@@ -142,12 +142,12 @@ def test_service_identity_bindings_are_explicit_and_fail_closed() -> None:
     settings = production_settings(
         service_auth_audience="knowbase-internal",
         service_auth_subject_bindings_json=(
-            '{"investment-agent-worker":["knowbase:retrieve"]}'
+            '{"knowbench-agent-worker":["knowbase:retrieve"]}'
         ),
     )
     settings.require_service_identity()
     assert settings.service_auth_subject_bindings == {
-        "investment-agent-worker": frozenset({"knowbase:retrieve"})
+        "knowbench-agent-worker": frozenset({"knowbase:retrieve"})
     }
 
     with pytest.raises(ValueError, match="valid JSON"):

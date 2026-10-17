@@ -21,10 +21,10 @@ def settings() -> Settings:
     return Settings(
         _env_file=None,
         env="test",
-        downstream_base_url="http://investment-data-provider:8000",
+        downstream_base_url="http://knowbench-data-provider:8000",
         downstream_client_id="tpl-service",
         downstream_client_secret="test-only-secret",
-        downstream_scope="investment:runs:read",
+        downstream_scope="knowbench:runs:read",
         downstream_allowed_path_prefixes="/api/internal/v1",
     )
 
@@ -60,12 +60,12 @@ async def test_downstream_uses_service_identity_and_route_allowlist() -> None:
 def test_downstream_configuration_is_complete_and_origin_only() -> None:
     with pytest.raises(ValueError, match="missing"):
         Settings(
-            _env_file=None, downstream_base_url="http://investment-data-provider:8000"
+            _env_file=None, downstream_base_url="http://knowbench-data-provider:8000"
         ).require_downstream_identity()
     with pytest.raises(ValueError, match="origin"):
         Settings(
             _env_file=None,
-            downstream_base_url="http://investment-data-provider:8000/api",
+            downstream_base_url="http://knowbench-data-provider:8000/api",
             downstream_client_id="client",
             downstream_client_secret="secret",
             downstream_scope="scope",

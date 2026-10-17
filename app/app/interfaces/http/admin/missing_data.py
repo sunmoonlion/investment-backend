@@ -1,4 +1,4 @@
-"""管理端：缺数据的需求（账 56）。要求 investment 管理员。
+"""管理端：缺数据的需求（账 56）。要求 knowbench 管理员。
 
 用户在对话里查不到数据的公司汇总在这里：代码、几次、几个人、最近一次、被查的数据集。
 只汇总，不说是谁查的。采集在 knowfeed 管理端的「证券采集」发起，这里不发起。
@@ -16,12 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.workbench.demand import LIMIT, Demand
 from app.bootstrap.workbench import workbench_store
 from app.infrastructure.storage.postgres import get_db_session
-from app.interfaces.http.middleware.auth import require_investment_admin
+from app.interfaces.http.middleware.auth import require_knowbench_admin
 
 router = APIRouter(
     prefix="/admin/v1/workbench/missing-data",
     tags=["Admin missing data"],
-    dependencies=[Depends(require_investment_admin)],
+    dependencies=[Depends(require_knowbench_admin)],
 )
 
 

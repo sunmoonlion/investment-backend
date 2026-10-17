@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 def _key(identity: str, seconds: int, now: int) -> str:
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     bucket = now // seconds
-    return f"investment:agent-onboarding:{seconds}:{digest}:{bucket}"
+    return f"knowbench:agent-onboarding:{seconds}:{digest}:{bucket}"
 
 
 async def consume_window(

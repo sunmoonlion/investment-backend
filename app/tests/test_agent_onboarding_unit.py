@@ -26,19 +26,19 @@ from core.config import Settings
 
 def test_pairing_verify_url_points_at_the_settings_computer_anchor():
     assert (
-        pairing_verify_url("https://investment.example/")
-        == "https://investment.example/zh-CN/workbench/settings/computer#computer"
+        pairing_verify_url("https://knowbench.example/")
+        == "https://knowbench.example/zh-CN/workbench/settings/computer#computer"
     )
     assert (
-        pairing_verify_url("https://investment.example")
-        == "https://investment.example/zh-CN/workbench/settings/computer#computer"
+        pairing_verify_url("https://knowbench.example")
+        == "https://knowbench.example/zh-CN/workbench/settings/computer#computer"
     )
 
 
 def test_pairing_verify_url_carries_the_code_so_the_user_only_confirms():
     assert (
-        pairing_verify_url("https://investment.example", "AB3D-7K9Q")
-        == "https://investment.example/zh-CN/workbench/settings/computer?code=AB3D-7K9Q#computer"
+        pairing_verify_url("https://knowbench.example", "AB3D-7K9Q")
+        == "https://knowbench.example/zh-CN/workbench/settings/computer?code=AB3D-7K9Q#computer"
     )
 
 

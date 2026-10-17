@@ -30,7 +30,7 @@ def _schema(lock: dict, name: str) -> dict:
         else PARENT.parent / "knowlab-app" / lock["schemas"][name]["path"]
     )
     if not path.exists():
-        pytest.skip("knowlab-app is not checked out next to investment-app")
+        pytest.skip("knowlab-app is not checked out next to knowbench-app")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -40,7 +40,7 @@ def test_every_pinned_schema_matches_the_provider() -> None:
     for name, pinned in lock["schemas"].items():
         path = PARENT.parent / "knowlab-app" / pinned["path"]
         if not path.exists():
-            pytest.skip("knowlab-app is not checked out next to investment-app")
+            pytest.skip("knowlab-app is not checked out next to knowbench-app")
         assert hashlib.sha256(path.read_bytes()).hexdigest() == pinned["sha256"], name
 
 

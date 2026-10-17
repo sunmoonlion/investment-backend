@@ -1,11 +1,11 @@
-# investment-backend 镜像构建
+# knowbench-backend 镜像构建
 
 ## 架构
 
-- **构建上下文**：子模块根目录（`investment-backend/`）
+- **构建上下文**：子模块根目录（`knowbench-backend/`）
 - **源码位置**：`app/` 子目录（pyproject.toml、uv.lock、应用代码）
 - **构建方式**：多阶段构建（python:slim 安装依赖 → python:slim 运行时）
-- **镜像名称**：`investment-backend:architecture-v2-dev`（本地）；CI 使用 git SHA tag
+- **镜像名称**：`knowbench-backend:architecture-v2-dev`（本地）；CI 使用 git SHA tag
 
 ## 文件说明
 
@@ -23,7 +23,7 @@
 # 在子模块根目录执行
 docker build -f mybuild/Dockerfile \
   --build-arg REGISTRY=harbor.sunmoonai.com:30443/k8s-images \
-  -t investment-backend:architecture-v2-dev .
+  -t knowbench-backend:architecture-v2-dev .
 ```
 
 ## 使用脚本构建
@@ -42,7 +42,7 @@ cd mybuild
 --dockerfile    mybuild/Dockerfile
 --context       <子模块根目录>
 --build-arg     REGISTRY=harbor.sunmoonai.com:30443/k8s-images
---destination   harbor.sunmoonai.com:30443/app-images/investment-backend:<git-sha>
+--destination   harbor.sunmoonai.com:30443/app-images/knowbench-backend:<git-sha>
 ```
 
 ## 注意事项

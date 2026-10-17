@@ -131,13 +131,13 @@ class Settings(BaseSettings):
 
     env: str = "development"
     log_level: str = "INFO"
-    service_name: str = "investment-backend"
+    service_name: str = "knowbench-backend"
     deployment_id: str = "local"
-    app_slug: str = "investment"
+    app_slug: str = "knowbench"
 
     # 跨应用跳转（app/domain/cross_app.py）。都可不配：不配就是不带人来、也不带人去。
     # 哪些应用可以把用户带到这里，各自的回跳地址。回跳地址只从这里取，从不从链接里取。
-    #   {"investment": {"return_url": "https://…/zh-CN/workbench?ref={ref}"},
+    #   {"knowbench": {"return_url": "https://…/zh-CN/workbench?ref={ref}"},
     #    "knowbase": {}}
     cross_app_sources_json: str = "{}"
     # 这个应用会把用户带去哪些应用，各自网页端的地址。
@@ -145,7 +145,7 @@ class Settings(BaseSettings):
     cross_app_targets_json: str = "{}"
 
     database_url: str = (
-        "postgresql+asyncpg://investment:investment@localhost:5432/investment"
+        "postgresql+asyncpg://knowbench:knowbench@localhost:5432/knowbench"
     )
     migration_database_url: str | None = None
 
@@ -169,8 +169,8 @@ class Settings(BaseSettings):
     admin_casdoor_client_id: str = ""
     admin_casdoor_client_secret: str = ""
     admin_casdoor_redirect_uri: str = ""
-    admin_casdoor_application: str = "sunmoonai-investment-admin"
-    admin_auth_policy_version: str = "investment-admin-v2"
+    admin_casdoor_application: str = "sunmoonai-knowbench-admin"
+    admin_auth_policy_version: str = "knowbench-admin-v2"
     admin_auth_role_allowlist: str = ""
     admin_auth_scope_allowlist: str = ""
     admin_frontend_base_url: str = "http://localhost:5173"
@@ -181,8 +181,8 @@ class Settings(BaseSettings):
     web_casdoor_client_id: str = ""
     web_casdoor_client_secret: str = ""
     web_casdoor_redirect_uri: str = ""
-    web_casdoor_application: str = "sunmoonai-investment-web"
-    web_auth_policy_version: str = "investment-web-v2"
+    web_casdoor_application: str = "sunmoonai-knowbench-web"
+    web_auth_policy_version: str = "knowbench-web-v2"
     web_auth_role_allowlist: str = ""
     web_auth_scope_allowlist: str = ""
     web_frontend_base_url: str = "http://localhost:3000"
@@ -223,7 +223,7 @@ class Settings(BaseSettings):
         default=None, validation_alias="CELERY_BROKER_URL"
     )
     celery_queue: str = Field(
-        default="investment.default",
+        default="knowbench.default",
         validation_alias=AliasChoices("CELERY_QUEUE", "CELERY_TASK_DEFAULT_QUEUE"),
     )
     celery_result_backend: str | None = Field(
@@ -237,7 +237,7 @@ class Settings(BaseSettings):
     # 工作台（0001-workbench）：网页接口与 runner 角色的开关
     workbench_enabled: bool = Field(default=False, validation_alias="WORKBENCH_ENABLED")
     workbench_redis_key_prefix: str = Field(
-        default="investment:workbench", validation_alias="WORKBENCH_REDIS_KEY_PREFIX"
+        default="knowbench:workbench", validation_alias="WORKBENCH_REDIS_KEY_PREFIX"
     )
     workbench_runner_id: str = Field(
         default="runner-local", validation_alias="WORKBENCH_RUNNER_ID"

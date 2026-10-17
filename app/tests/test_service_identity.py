@@ -27,7 +27,7 @@ def settings() -> Settings:
         casdoor_endpoint="https://identity.example.test",
         service_auth_audience="knowbase-internal",
         service_auth_subject_bindings_json=(
-            '{"investment-agent-worker":["knowbase:retrieve","profile:read"]}'
+            '{"knowbench-agent-worker":["knowbase:retrieve","profile:read"]}'
         ),
     )
 
@@ -36,7 +36,7 @@ def claims(**overrides: object) -> dict[str, object]:
     now = int(time.time())
     result: dict[str, object] = {
         "iss": "https://identity.example.test",
-        "sub": "investment-agent-worker",
+        "sub": "knowbench-agent-worker",
         "aud": "knowbase-internal",
         "iat": now,
         "exp": now + 300,
@@ -55,7 +55,7 @@ async def test_service_identity_enforces_subject_and_scope_binding() -> None:
     )
     assert principal.actor_type == "service"
     assert principal.surface == "internal"
-    assert principal.subject == "investment-agent-worker"
+    assert principal.subject == "knowbench-agent-worker"
     assert fake.audience == "knowbase-internal"
 
 

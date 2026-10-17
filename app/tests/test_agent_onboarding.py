@@ -86,7 +86,7 @@ async def test_onboarding_mutations_require_web_session_origin_and_csrf(
         body = {"expected_revision": "a" * 64} if path.endswith("rotate") else {}
         url = "/api/workbench" + path
         assert (await client.post(url, json=body)).status_code == 401
-        client.cookies.set("sunmoonai_investment_web_sid", "onboarding-member")
+        client.cookies.set("sunmoonai_knowbench_web_sid", "onboarding-member")
         for headers in [
             {},
             {

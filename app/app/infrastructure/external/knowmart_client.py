@@ -1,6 +1,6 @@
 """向 knowmart 取分身清单（SDD 0027 P4，服务身份 knowmart:summon）。
 
-所有者由调用方从用户自己的登录会话里取来；knowmart 只给这个所有者的、运行方是 investment 的、
+所有者由调用方从用户自己的登录会话里取来；knowmart 只给这个所有者的、运行方是 knowbench 的、
 没停用的版本，别的一律 404。环境变量见 service_client.py（`KNOWMART_INTERNAL_URL`、
 `KNOWMART_SUMMON_SERVICE_*`），由部署从后端 config 的 service_clients 生成。
 """

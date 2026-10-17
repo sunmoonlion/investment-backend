@@ -30,7 +30,7 @@ def _provider_schema(lock: dict) -> Path:
         else PARENT.parent / "knowmart-app" / lock["schema"]
     )
     if not path.exists():
-        pytest.skip("knowmart-app is not checked out next to investment-app")
+        pytest.skip("knowmart-app is not checked out next to knowbench-app")
     return path
 
 

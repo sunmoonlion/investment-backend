@@ -428,7 +428,7 @@ async def test_the_records_tools_are_given_to_the_sandbox_only_when_configured(
     assert "records_mcp_url" not in fake_api.specs[0]
     assert "records_mcp_token" not in fake_api.specs[0]
 
-    address = "http://investment-api.svc/api/mcp/workbench"
+    address = "http://knowbench-api.svc/api/mcp/workbench"
     monkeypatch.setattr(workbench_routes, "records_mcp_url", lambda: address)
     assert (await http.post("/api/workbench/sandboxes/provision")).status_code == 200
     spec = fake_api.specs[1]

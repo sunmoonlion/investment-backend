@@ -1,4 +1,4 @@
-# Investment Backend 文档说明
+# Knowbench Backend 文档说明
 
 当前架构入口为仓库根 `README.md` 与 `k8s/docs/project-guide/`；
 部署事实须核对实际 bundle 与运行状态。历史迁移/退役证据按
@@ -6,9 +6,9 @@
 
 `mooc-manus-v4-*`（3 份）与 `adr/`（18 份）是 2026-07 那套智能体运行时的历史设计与交付记录，
 已于 2026-09-29 按所有者的决定删除。要查原文，看提交 `0c1a030` 及更早的 Git 历史。
-文中出现过的 `research-app`、`research-admin-backend`、`research-web-frontend` 是 Investment 改名前的名字。
+文中出现过的 `research-app`、`research-admin-backend`、`research-web-frontend` 是 Knowbench 改名前的名字。
 
-当前唯一活动领域名为 `investment-app`，唯一 Backend 为 `investment-backend`。未来如果创建
+当前唯一活动领域名为 `knowbench-app`，唯一 Backend 为 `knowbench-backend`。未来如果创建
 新的通用 `research-app`，必须从最新模板独立实例化，不复用这里的历史身份、数据库或运行资源。
 
 ## 2026-09-29：旧运行时已删除

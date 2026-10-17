@@ -151,7 +151,7 @@ def test_bindings_are_read_from_the_manifest() -> None:
 
 ENV = {
     "KNOWLAB_INTERNAL_URL": "https://knowlab-tls.ns.svc.cluster.local/api/internal/v1/knowlab",
-    "KNOWLAB_READ_SERVICE_CLIENT_ID": "sunmoon-investment-knowlab-read",
+    "KNOWLAB_READ_SERVICE_CLIENT_ID": "sunmoon-knowbench-knowlab-read",
     "KNOWLAB_READ_SERVICE_CLIENT_SECRET": "not-a-real-secret",
     "KNOWLAB_READ_SERVICE_SCOPE": "knowlab:read",
     "KNOWLAB_READ_SERVICE_DISCOVERY_URL": "https://casdoor.example.test/.well-known/openid-configuration",

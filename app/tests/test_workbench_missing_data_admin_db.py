@@ -14,7 +14,7 @@ from app.application.workbench.demand import Demand
 from app.bootstrap.api import create_app
 from app.infrastructure.storage.postgres import get_db_session
 from app.infrastructure.workbench.repository import WorkbenchRepository
-from app.interfaces.http.middleware.auth import require_investment_admin
+from app.interfaces.http.middleware.auth import require_knowbench_admin
 from core.config import Settings
 
 URL = "/api/admin/v1/workbench/missing-data"
@@ -115,7 +115,7 @@ async def test_the_admin_page_reads_it_and_nobody_else(db):
     ) as http:
         # 没有管理端的登录：进不来
         assert (await http.get(URL)).status_code == 401
-        app.dependency_overrides[require_investment_admin] = lambda: principal(
+        app.dependency_overrides[require_knowbench_admin] = lambda: principal(
             str(uuid.uuid4())
         )
         got = await http.get(URL)

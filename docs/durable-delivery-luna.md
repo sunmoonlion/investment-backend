@@ -1,4 +1,4 @@
-# Investment 公共可靠投递开发候选
+# Knowbench 公共可靠投递开发候选
 
 > **2026-09-29：本文讲的 Agent 投递代码已经删除**（旧运行时退役，所有者定）。
 > `AgentDelivery`、`app/tasks/agent_delivery.py`、`scripts/agent_delivery_admin.py` 都不在了，下面的命令不能再执行。

@@ -33,7 +33,7 @@
   `endpoint`（HTTPS）、`region`、`ca_file`、`access_key`、`secret_key`。
   只给 API 角色该桶的 GetObject 身份，禁止上传和管理权限；不从默认 AWS 凭据链或代理环境取值。
   Kubernetes 配置真源及操作说明在 k8s 的
-  `gitops/components/app-platform/investment-app/investment-backend/agent-releases/`。
+  `gitops/components/app-platform/knowbench-app/knowbench-backend/agent-releases/`。
 
 ### 转发接口
 

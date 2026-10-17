@@ -27,7 +27,7 @@ DIGEST = hashlib.sha256(PAYLOAD).hexdigest()
 FORWARD = RELEASE | dict(
     mode="object-storage",
     object_key="windows-x64/0.2.1/agent.zip",
-    url="https://investment.example/api/workbench/agent/package",
+    url="https://knowbench.example/api/workbench/agent/package",
     zip_sha256=DIGEST,
     size_bytes=len(PAYLOAD),
 )
@@ -42,7 +42,7 @@ STORAGE = dict(
 
 def configured():
     return Settings(
-        web_frontend_base_url="https://investment.example",
+        web_frontend_base_url="https://knowbench.example",
         WORKBENCH_AGENT_DOWNLOAD=FORWARD,
         WORKBENCH_AGENT_RELEASE_STORAGE=STORAGE,
     )
@@ -93,7 +93,7 @@ def test_invalid_ranges(value):
 def test_storage_config_fail_closed(patch):
     with pytest.raises(ValidationError):
         Settings(
-            web_frontend_base_url="https://investment.example",
+            web_frontend_base_url="https://knowbench.example",
             WORKBENCH_AGENT_DOWNLOAD=FORWARD | patch,
             WORKBENCH_AGENT_RELEASE_STORAGE=STORAGE,
         )
@@ -112,7 +112,7 @@ def test_storage_config_fail_closed(patch):
 def test_credentials_and_tls_required(patch):
     with pytest.raises(ValidationError):
         Settings(
-            web_frontend_base_url="https://investment.example",
+            web_frontend_base_url="https://knowbench.example",
             WORKBENCH_AGENT_DOWNLOAD=FORWARD,
             WORKBENCH_AGENT_RELEASE_STORAGE=STORAGE | patch,
         )

@@ -2,23 +2,23 @@
   "apiVersion": "storage.sunmoonai.com/v1alpha1",
   "kind": "ObjectStorageAccess",
   "metadata": {
-    "name": "investment-backend"
+    "name": "knowbench-backend"
   },
   "spec": {
     "provider": "platform-s3",
     "environment": "development",
-    "app": "investment-app",
-    "backend": "investment-backend",
+    "app": "knowbench-app",
+    "backend": "knowbench-backend",
     "namespace": "app-platform-dev",
-    "secretName": "investment-backend-s3",
-    "configMapName": "investment-backend-s3",
+    "secretName": "knowbench-backend-s3",
+    "configMapName": "knowbench-backend-s3",
     "region": "us-east-1",
     "forcePathStyle": true,
     "useTLS": false,
     "deletionPolicy": "Retain",
     "buckets": [
       {
-        "name": "development-investment-assets",
+        "name": "development-knowbench-assets",
         "permissions": ["read", "write", "delete", "list"],
         "versioning": true,
         "objectLock": false

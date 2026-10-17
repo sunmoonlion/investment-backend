@@ -30,7 +30,7 @@ def manifest(version: str = "1", **pack_overrides: Any) -> dict[str, Any]:
         "name": "我的方法",
         "tagline": "按我的口径看一家公司",
         "version": version,
-        "runtime": "investment",
+        "runtime": "knowbench",
         "pack": pack,
         "data_bindings": [],
         "rule_sources": [{"rule": "口径", "source": "user_text", "ref": "第 4 问"}],

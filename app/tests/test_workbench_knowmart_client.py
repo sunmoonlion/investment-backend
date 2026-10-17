@@ -12,7 +12,7 @@ from app.infrastructure.external.knowmart_client import KnowmartSummonClient
 
 ENV = {
     "KNOWMART_INTERNAL_URL": "https://knowmart-tls.ns.svc.cluster.local/api/internal/v1/knowmart",
-    "KNOWMART_SUMMON_SERVICE_CLIENT_ID": "sunmoon-investment-knowmart-summon",
+    "KNOWMART_SUMMON_SERVICE_CLIENT_ID": "sunmoon-knowbench-knowmart-summon",
     "KNOWMART_SUMMON_SERVICE_CLIENT_SECRET": "not-a-real-secret",
     "KNOWMART_SUMMON_SERVICE_SCOPE": "knowmart:summon",
     "KNOWMART_SUMMON_SERVICE_DISCOVERY_URL": "https://casdoor.example.test/.well-known/openid-configuration",

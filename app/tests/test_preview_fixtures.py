@@ -1,4 +1,4 @@
-"""给网页端的预览造样例（investment-web-frontend `preview/fixtures/`）。
+"""给网页端的预览造样例（knowbench-web-frontend `preview/fixtures/`）。
 
 各种状态由真的 runner、真的账、真的接口造出来；对面是重放磁带的假 app-server。
 平时它就是一个测试：造得出来、每个接口都答得上。要把样例写进网页端的仓库：
