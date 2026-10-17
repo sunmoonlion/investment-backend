@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.domain.workbench.errors import UserDataUnavailable
 from app.infrastructure.external.knowlab_data_client import KnowlabDataClient
 
 PARENT = Path(__file__).resolve().parents[3]
@@ -71,7 +72,7 @@ async def test_the_requests_we_send_fit_the_contract(purpose) -> None:
         ENV, oidc_client=FakeOidc(), transport=httpx.MockTransport(handler)
     )
     await client.list(purpose)
-    with pytest.raises(Exception):  # 回来的编号不是问的那一份：按契约外处理
+    with pytest.raises(UserDataUnavailable):  # 回来的编号不是问的那一份：按契约外处理
         await client.read(purpose, "0b8a6c3e-1f2d-4c5b-9a7e-6d5c4b3a2f11", 2)
     jsonschema.validate(sent[0], _schema(lock, "data-list-request.schema.json"))
     jsonschema.validate(sent[1], _schema(lock, "data-read-request.schema.json"))
