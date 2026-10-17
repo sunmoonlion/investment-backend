@@ -196,9 +196,25 @@ def mode_of(
 WINDOWS_CONSOLE_NOTE = (
     " The machine runs Windows and its console code page is not UTF-8, so raw "
     "PowerShell or cmd output reaches you garbled. Start every PowerShell "
-    "-Command script with `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;` "
+    "-Command script with `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+    "$OutputEncoding=New-Object System.Text.UTF8Encoding($false);` "
     "and every cmd /c command with `chcp 65001>nul &`; prefer PowerShell. Do "
     "this from the first command, do not wait to see garbled text."
+)
+
+# 2026-10-17 所有者的工作对话生成 pptx，四次才成：没先看 python-pptx 装没装；把大段 Python 塞进 PowerShell
+# 的双引号；在 Windows 上把 apply_patch 当成一个程序去调；脚本经管道交给 python，中文成了问号（代理侧另修）。
+# 专家步骤的成稿有 WRITE_FILE_RULES，普通的工作对话没有，所以在能改文件的情形里把这几条写死
+WINDOWS_WORK_NOTE = (
+    " There is no bash and no apply_patch program on this Windows machine. To create "
+    "or change a file, run one shell command that is exactly `apply_patch <<'EOF'`, a "
+    "newline, the patch text, a newline, `EOF`, with nothing before or after it in the "
+    "same command; Codex catches that command itself. To run anything longer than one "
+    "line (a Python script, for example), first write it to a file that way, then run "
+    "the file (`python make_slides.py`); never put a long script inside quotes and never "
+    "pipe a script into an interpreter. Before you use a library or a program, check "
+    'that it is there (for example `python -c "import pptx"`); if it is missing, tell '
+    "the user what is missing and ask before installing anything."
 )
 
 
@@ -210,6 +226,11 @@ def windows_console_note(directory: str | None) -> str:
     实测每次第一条命令都花）。代理侧的根治见账 88；这里先明说给模型。
     """
     return WINDOWS_CONSOLE_NOTE if directory and is_windows_root(directory) else ""
+
+
+def windows_work_note(directory: str | None) -> str:
+    """能改文件的情形（工作、专家）在 Windows 机器上：怎么写文件、怎么跑长脚本、先看依赖在不在。"""
+    return WINDOWS_WORK_NOTE if directory and is_windows_root(directory) else ""
 
 
 def mode_note(mode: Mode | str, *, directory: str | None) -> str:
@@ -247,6 +268,7 @@ def mode_note(mode: Mode | str, *, directory: str | None) -> str:
         "project directory. Anything outside the project directory is off limits. "
         + NO_DETOUR
         + windows_console_note(directory)
+        + windows_work_note(directory)
     )
 
 

@@ -368,3 +368,18 @@ def test_mode_note_tells_windows_machines_to_switch_console_to_utf8() -> None:
     assert "chcp 65001" in mode_note("expert", directory="\\\\nas\\share")
     assert "chcp 65001" not in mode_note("work", directory="/home/zym/proj")
     assert "chcp 65001" not in mode_note("chat", directory=None)
+
+
+def test_windows_work_notes_say_how_to_write_files_and_run_scripts() -> None:
+    """2026-10-17 生成 pptx 四次才成：Windows 上怎么写文件、跑长脚本、先看依赖，在能改文件的情形里写明。"""
+    work = mode_note("work", directory="C:\\Users\\zym\\proj")
+    assert "apply_patch <<'EOF'" in work and "no apply_patch program" in work
+    assert "never pipe a script into an interpreter" in work
+    assert "import pptx" in work and "ask before installing" in work
+    assert "$OutputEncoding" in work
+    assert "no apply_patch program" in mode_note("expert", directory="D:/data")
+    # 只读的项目里聊天不能改文件，不给写文件的办法；POSIX 机器不加
+    assert "no apply_patch program" not in mode_note(
+        "chat_in_project", directory="D:/data"
+    )
+    assert "no apply_patch program" not in mode_note("work", directory="/home/zym/proj")
