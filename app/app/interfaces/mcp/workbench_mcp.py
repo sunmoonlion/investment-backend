@@ -1,11 +1,11 @@
 """工作台的工具服务：专家读本项目里别的对话与底稿（PRD/apps/investment.md 7.4），
-分身读用户自己绑定的数据（SDD 0027 §3.5）。
+分身读用户自己绑定的数据（SDD 0027 §3.5）、按格子读与计算（SDD 0030 §3.1、§3.2）。
 
 Streamable HTTP，只用 JSON 响应，不开流。和知识服务的工具并列，由沙箱里的 Codex 调用。
 - 鉴权：`Authorization: Bearer <令牌>`，令牌由工作台签发、工作台自己验，绑定用户；
 - 每个工具都要带 `task`（委托编号，专家每一步的说明里给）。能读哪个项目、现在能不能读，
   每次调用按这个委托重新核对；
-- 只读：没有任何写的工具。
+- 只读：没有改用户东西的工具。`compute` 只把算过的记进委托的计算记录（数值验收按它回查）。
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.workbench.knowbot_compute import KnowbotCompute
 from app.application.workbench.knowbot_data import KnowbotData
 from app.application.workbench.library import Library
 from app.application.workbench.records import ProjectRecords
@@ -152,6 +153,61 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    # 按格子读与计算（0030）：每个算出来的数都由 compute 算，输入按格子地址取，模型不抄数
+    "read_my_table": {
+        "description": (
+            "Read one sheet of a CSV or Excel dataset as labelled cells: `columns` are "
+            "the header labels (dates as YYYY-MM-DD), each row has its `label` (first "
+            "column; a repeated label gets #2, #3) and its values. Use it to write cell "
+            "addresses for compute: <dataset_id>:<sheet>!<row label>@<column label>, "
+            "e.g. 3f…:利润表!营业收入@2024-06-30. Paged like read_my_data."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": _TASK,
+                "dataset": {"type": "string", "description": "Id from list_my_data."},
+                "sheet": {
+                    "type": "string",
+                    "description": "Sheet name from `sheets`; the first sheet if omitted.",
+                },
+                "page": {"type": "integer", "minimum": 1, "default": 1},
+            },
+            "required": ["task", "dataset"],
+            "additionalProperties": False,
+        },
+    },
+    "compute": {
+        "description": (
+            "Compute one number exactly (decimal) and record it. `inputs` maps short "
+            "names to cell addresses, to the id of an earlier computation of this task "
+            "(e.g. c17), or to a list of them. `expression` uses only those names, "
+            "numbers, + - * / ( ) and sum avg median min max abs (these take lists). "
+            "You cannot pass numbers as inputs. Returns {id, value, formula, inputs}: "
+            "put the id as compute_id next to every computed number you hand back. "
+            "A zero denominator is refused: report the figure as not applicable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": _TASK,
+                "name": {"type": "string", "maxLength": 200},
+                "expression": {"type": "string", "maxLength": 500},
+                "inputs": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ]
+                    },
+                },
+                "round": {"type": "integer", "minimum": 0, "maximum": 10},
+            },
+            "required": ["task", "name", "expression", "inputs"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -220,6 +276,21 @@ async def call(records: ProjectRecords, name: str, args: dict[str, Any]) -> Any:
         return await KnowbotData(records, knowbot_data_source()).read(
             args.get("task"), args.get("dataset"), args.get("page", 1)
         )
+    if name == "read_my_table":
+        return await KnowbotData(records, knowbot_data_source()).table(
+            args.get("task"),
+            args.get("dataset"),
+            args.get("sheet"),
+            args.get("page", 1),
+        )
+    if name == "compute":
+        return await KnowbotCompute(records, knowbot_data_source()).compute(
+            args.get("task"),
+            args.get("name"),
+            args.get("expression"),
+            args.get("inputs"),
+            args.get("round"),
+        )
     if name == "list_project_conversations":
         return await records.list_conversations(args.get("task"))
     if name == "read_project_conversation":
@@ -246,9 +317,9 @@ async def handle(
                 "serverInfo": SERVER_KNOWFEED,
                 "instructions": (
                     "Read-only records of the user's project, the user's library and "
-                    "the user's own data bound to this expert. Project and data tools "
-                    "need the task id from the step instructions; the library tools "
-                    "work without it."
+                    "the user's own data bound to this expert, and exact computation "
+                    "on that data. Project, data and compute tools need the task id "
+                    "from the step instructions; the library tools work without it."
                 ),
             },
         )

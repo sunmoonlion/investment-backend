@@ -129,6 +129,7 @@ def build_runner(
         records=records,
         prices=prices,
         deliverables=deliverables,
+        data=knowbot_data_source(),
     )
 
 

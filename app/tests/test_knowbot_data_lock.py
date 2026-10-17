@@ -76,3 +76,45 @@ async def test_the_requests_we_send_fit_the_contract(purpose) -> None:
         await client.read(purpose, "0b8a6c3e-1f2d-4c5b-9a7e-6d5c4b3a2f11", 2)
     jsonschema.validate(sent[0], _schema(lock, "data-list-request.schema.json"))
     jsonschema.validate(sent[1], _schema(lock, "data-read-request.schema.json"))
+
+
+@pytest.mark.parametrize("purpose", PURPOSES)
+async def test_table_and_cell_requests_fit_the_contract(purpose) -> None:
+    """按格子读（0030 §3.1）：请求合提供方的 schema；回来的格子和问的对不上就按契约外处理。"""
+    lock = _lock()
+    jsonschema = pytest.importorskip("jsonschema")
+    dataset = "0b8a6c3e-1f2d-4c5b-9a7e-6d5c4b3a2f11"
+    ref = {
+        "dataset_id": dataset,
+        "sheet": "利润表",
+        "row": "营业收入",
+        "column": "2024-06-30",
+    }
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if request.url.path.endswith("/table"):
+            return httpx.Response(
+                200,
+                json={"contract": "knowbot-data/v1", "dataset_id": dataset, "rows": []},
+            )
+        cell = {**body["cells"][0], "found": True, "number": "1", "version": "1"}
+        if len(sent) > 2:
+            cell["row"] = "营业成本"
+        return httpx.Response(
+            200, json={"contract": "knowbot-data/v1", "cells": [cell]}
+        )
+
+    from test_workbench_knowbot_data import ENV, FakeOidc
+
+    client = KnowlabDataClient(
+        ENV, oidc_client=FakeOidc(), transport=httpx.MockTransport(handler)
+    )
+    assert (await client.table(purpose, dataset, "利润表", 1))["rows"] == []
+    assert (await client.cells(purpose, [ref]))[0]["number"] == "1"
+    with pytest.raises(UserDataUnavailable):
+        await client.cells(purpose, [ref])
+    jsonschema.validate(sent[0], _schema(lock, "data-table-request.schema.json"))
+    jsonschema.validate(sent[1], _schema(lock, "data-cells-request.schema.json"))

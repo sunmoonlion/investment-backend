@@ -36,6 +36,10 @@ class AcceptanceRule(Strict):
         "all_equal",  # path 处是列表，每一项的 field 都等于 equals
         "list_empty",  # path 处是列表，而且是空的
         "blank",  # path 处没有内容：缺失、null 或空白字符串
+        # 数值类（0030 §3.3）：要查计算记录、向 knowlab 取格子，由工作台应用层判，不在 judge 里
+        "computed",  # path 处每项带 compute_id 与 value：记录里有这一次计算，结果一致
+        "identity",  # path 处每项带 left_id 与 right_id：两次计算的结果在容差内相等
+        "sourced",  # path 处每项带 address 与 value：重新取这一格，与 value 一致
     ]
     keys: tuple[str, ...] = ()
     path: str | None = None
@@ -43,8 +47,21 @@ class AcceptanceRule(Strict):
     max_chars: int = 20000
     field: str | None = None
     equals: str | int | float | bool | None = None
+    tolerance: float = Field(default=0, ge=0)  # 数值类：差的绝对值不超过它算一致
+    expression: str | None = None  # computed：记录里的算式必须就是这个（比语法树）
     message: str = ""  # 不通过时的说明
     label: str = ""  # 这条验收的名字，通过时也显示
+
+    @model_validator(mode="after")
+    def _numeric_rules_name_a_path(self) -> AcceptanceRule:
+        if self.kind in NUMERIC_RULES and not self.path:
+            raise ValueError(f"acceptance {self.kind} needs a path")
+        if self.expression is not None and self.kind != "computed":
+            raise ValueError("only a computed acceptance can require an expression")
+        return self
+
+
+NUMERIC_RULES = frozenset({"computed", "identity", "sourced"})
 
 
 class MissingData(Strict):

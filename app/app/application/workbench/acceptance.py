@@ -1,4 +1,8 @@
-"""确定性验收（F-ACCEPT-01 的第一层）：纯函数，输入交回物文本与规则，输出 pass/fail 与原因。不调模型。"""
+"""确定性验收（F-ACCEPT-01 的第一层）：纯函数，输入交回物文本与规则，输出 pass/fail 与原因。不调模型。
+
+数值类三种（computed、identity、sourced，0030 §3.3）要查计算记录与用户数据，不在这里判：
+judge 跳过它们，由 acceptance_numbers 在工作台应用层接着判。
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.workbench.packs import AcceptanceRule
+from app.domain.workbench.packs import NUMERIC_RULES, AcceptanceRule
 
 # F-POS-04：对具体证券的评级、目标价、买卖建议措辞，云端确定性拦截并留痕
 _POSITIONING = re.compile(
@@ -49,7 +53,7 @@ def _extract_json(text: str) -> Any:
     raise ValueError("no JSON object found")
 
 
-def _get(obj: Any, path: str | None) -> Any:
+def value_at(obj: Any, path: str | None) -> Any:
     if not path:
         return obj
     cur = obj
@@ -167,6 +171,8 @@ def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
             return v
     v.parsed = parsed
     for r in rules:
+        if r.kind in NUMERIC_RULES:
+            continue
         ok, detail = True, ""
         if r.kind == "json_object":
             ok = isinstance(parsed, dict)
@@ -174,26 +180,26 @@ def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
             missing = [k for k in r.keys if k not in parsed]
             ok, detail = not missing, f"missing {missing}" if missing else ""
         elif r.kind == "non_empty":
-            val = _get(parsed, r.path)
+            val = value_at(parsed, r.path)
             ok = bool(val) and (not isinstance(val, str) or val.strip() != "")
         elif r.kind == "list_min":
-            val = _get(parsed, r.path)
+            val = value_at(parsed, r.path)
             ok = isinstance(val, list) and len(val) >= r.min_items
             detail = f"len={len(val) if isinstance(val, list) else 'n/a'}"
         elif r.kind == "no_positioning_advice":
-            val = _get(parsed, r.path)
+            val = value_at(parsed, r.path)
             hit = _POSITIONING.search(_text_of(val))
             ok, detail = hit is None, (hit.group(0) if hit else "")
         elif r.kind == "max_chars":
             ok = len(text or "") <= r.max_chars
         elif r.kind == "all_equal":
-            ok, detail = _all_equal(_get(parsed, r.path), r.field, r.equals)
+            ok, detail = _all_equal(value_at(parsed, r.path), r.field, r.equals)
         elif r.kind == "list_empty":
-            val = _get(parsed, r.path)
+            val = value_at(parsed, r.path)
             ok = isinstance(val, list) and not val
             detail = f"len={len(val)}" if isinstance(val, list) else "not a list"
         elif r.kind == "blank":
-            val = _get(parsed, r.path)
+            val = value_at(parsed, r.path)
             ok = val is None or (isinstance(val, str) and val.strip() == "")
             detail = "" if ok else "has content"
         v.checks.append(

@@ -833,6 +833,18 @@ class KnowbotDataSource(Protocol):
         self, purpose: dict[str, Any], dataset_id: str, page: int
     ) -> dict[str, Any]: ...
 
+    async def table(
+        self, purpose: dict[str, Any], dataset_id: str, sheet: str | None, page: int
+    ) -> dict[str, Any]:
+        """一张表的行标签、列标签与原文（0030 §3.1）；不是表格抛 UserDataUnavailable。"""
+        ...
+
+    async def cells(
+        self, purpose: dict[str, Any], cells: list[dict[str, str]]
+    ) -> list[dict[str, Any]]:
+        """按（dataset_id、sheet、row、column）取格子，按次序回 found、raw、number、version、sha256。"""
+        ...
+
 
 class WorkbenchStores(Protocol):
     def __call__(self) -> AbstractAsyncContextManager[WorkbenchStore]:

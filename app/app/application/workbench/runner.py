@@ -20,6 +20,7 @@ from app.application.ports.workbench import (
     AppServerConnector,
     AppServerError,
     EventPublisher,
+    KnowbotDataSource,
     WorkbenchStore,
     WorkbenchStores,
 )
@@ -1178,9 +1179,11 @@ class Runner:
         records: bool = False,
         prices: PriceList | None = None,
         deliverables: DeliverableCheck | None = None,
+        data: KnowbotDataSource | None = None,
     ):
         self.records = records
         self.deliverables = deliverables
+        self.data = data
         self.prices = prices or DEFAULT_PRICES
         self.stores = stores
         self.connector = connector
@@ -1547,7 +1550,11 @@ class Runner:
 
     async def _drive(self, task_id: str, link: SandboxLink) -> None:
         advisor = Advisor(
-            self.stores, link, records=self.records, deliverables=self.deliverables
+            self.stores,
+            link,
+            records=self.records,
+            deliverables=self.deliverables,
+            data=self.data,
         )
         try:
             state = await advisor.drive(task_id)

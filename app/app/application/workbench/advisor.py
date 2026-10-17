@@ -13,8 +13,13 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
 
-from app.application.ports.workbench import WorkbenchStore, WorkbenchStores
+from app.application.ports.workbench import (
+    KnowbotDataSource,
+    WorkbenchStore,
+    WorkbenchStores,
+)
 from app.application.workbench.acceptance import judge, timed_out
+from app.application.workbench.acceptance_numbers import judge_numbers
 from app.application.workbench.catalog import SNAPSHOT_SOURCES, pack_for_task
 from app.application.workbench.deliverable_check import DeliverableCheck, harden
 from app.application.workbench.ledger import Ledger
@@ -86,6 +91,7 @@ class Advisor:
         *,
         records: bool = False,
         deliverables: DeliverableCheck | None = None,
+        data: KnowbotDataSource | None = None,
     ):
         self.stores = stores  # 每次调用开一个工作单元
         self.driver = driver
@@ -93,6 +99,8 @@ class Advisor:
         self.records = records
         # 成稿硬检查（0022 段 4）：没配就只有软检查
         self.deliverables = deliverables
+        # 数值验收 sourced 要重新取用户的数（0030 §3.3）：没配就判不过，不放行
+        self.data = data
 
     # ---------------- 入口 ----------------
     async def drive(self, task_id: str) -> str:
@@ -423,7 +431,13 @@ class Advisor:
             verdict = (
                 timed_out(STEP_TIMEOUT_SECONDS // 60, step.acceptance)
                 if result.timed_out
-                else judge(result.final_text, step.acceptance)
+                else await judge_numbers(
+                    judge(result.final_text, step.acceptance),
+                    step.acceptance,
+                    repo=repo,
+                    task=task,
+                    source=self.data,
+                )
             )
             # 成稿文件写了没有：先认这一轮报过的 fileChange；没见到就经会合点问代理那个文件在不在
             # （0022 段 4）：在 → 认；明确不在 → 验收不过；问不到 → 只记事件、不填路径（软检查）
@@ -853,6 +867,15 @@ class Advisor:
                 "the data does not contain what this step needs, say so instead of "
                 "guessing.",
             ]
+            if {"read_my_table", "compute"} & set(step.tools):
+                # 0030：算出来的数由平台算，取出来的数写地址；数值验收按编号与地址回查
+                parts += [
+                    "Read tables with read_my_table to see the cell addresses. Compute "
+                    "every derived number with compute, never in your head; put its id "
+                    "as compute_id next to the number. For a number taken from the data "
+                    "as is, write its cell address next to it. Do not copy numbers by "
+                    "hand.",
+                ]
         if step.output_file:
             # 成稿是项目里的文件，给用户看的唯一一份（0015 §3.3）；JSON 仍回正文做机器验收
             parts += [

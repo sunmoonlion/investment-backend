@@ -230,3 +230,10 @@ class QuestionNotOpen(WorkbenchError):
 
     code = "question_not_open"
     http_status = 409
+
+
+class ComputeRefused(WorkbenchError):
+    """分身的计算不成立：算式不合白名单、地址不合写法、格子没有或不是数、分母为零（0030 §3.2）。"""
+
+    code = "compute_refused"
+    http_status = 422

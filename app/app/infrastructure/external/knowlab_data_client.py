@@ -16,6 +16,11 @@ from app.infrastructure.external.service_client import ServiceClient, service_re
 
 CONTRACT = "knowbot-data/v1"
 DATA = "/knowbot-data"  # 接在 knowlab 入口 /api/internal/v1/knowlab 后面
+# 按格子读时 knowlab 的 422：给模型看的话照实说，不带 knowlab 的原文
+TABLE_REFUSALS = {
+    "knowbot_data_not_a_table": "this data cannot be read as a table; use read_my_data",
+    "knowbot_data_no_sheet": "there is no such sheet in this data",
+}
 
 
 class KnowlabDataClient:
@@ -40,6 +45,8 @@ class KnowlabDataClient:
         except BadGatewayError as exc:
             if exc.code == "knowbot_data_not_found":
                 raise NotFound("data not found") from None
+            if exc.code in TABLE_REFUSALS:
+                raise UserDataUnavailable(TABLE_REFUSALS[exc.code]) from None
             raise UserDataUnavailable("knowlab refused to read the data") from None
         except ServiceUnavailableError:
             raise UserDataUnavailable("the user's data is unavailable now") from None
@@ -66,3 +73,39 @@ class KnowlabDataClient:
             raise UserDataUnavailable("knowlab answered outside the contract")
         answer.pop("contract", None)
         return answer
+
+    async def table(
+        self, purpose: dict[str, Any], dataset_id: str, sheet: str | None, page: int
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "purpose": purpose,
+            "dataset_id": dataset_id,
+            "page": page,
+        }
+        if sheet:
+            body["sheet"] = sheet
+        answer = await self._post("/table", body)
+        if answer.get("dataset_id") != dataset_id or not isinstance(
+            answer.get("rows"), list
+        ):
+            raise UserDataUnavailable("knowlab answered outside the contract")
+        answer.pop("contract", None)
+        return answer
+
+    async def cells(
+        self, purpose: dict[str, Any], cells: list[dict[str, str]]
+    ) -> list[dict[str, Any]]:
+        answer = await self._post("/cells", {"purpose": purpose, "cells": cells})
+        found = answer.get("cells")
+        if (
+            not isinstance(found, list)
+            or len(found) != len(cells)
+            or not all(isinstance(c, dict) for c in found)
+            or any(
+                (c.get("dataset_id"), c.get("sheet"), c.get("row"), c.get("column"))
+                != (r["dataset_id"], r["sheet"], r["row"], r["column"])
+                for c, r in zip(found, cells, strict=True)
+            )
+        ):
+            raise UserDataUnavailable("knowlab answered outside the contract")
+        return found

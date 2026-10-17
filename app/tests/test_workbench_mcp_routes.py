@@ -89,11 +89,20 @@ async def test_the_handshake_and_the_list_of_tools(served):
             "read_library_item",
             "list_my_data",
             "read_my_data",
+            "read_my_table",
+            "compute",
         ]
-        # 只读：没有任何写的工具；项目与用户数据的工具都要带委托编号，知识库的两个不用（聊天里也能读）
+        # 只读：除了 compute（只记计算记录）没有写的工具；项目、用户数据与计算都要带委托编号，
+        # 知识库的两个不用（聊天里也能读）
         for spec in listed["result"]["tools"]:
-            assert spec["name"].startswith(("list_", "read_"))
-            if "project" in spec["name"] or "my_data" in spec["name"]:
+            assert (
+                spec["name"].startswith(("list_", "read_")) or spec["name"] == "compute"
+            )
+            if (
+                "project" in spec["name"]
+                or "my_" in spec["name"]
+                or spec["name"] == "compute"
+            ):
                 assert "task" in spec["inputSchema"]["required"]
             else:
                 assert "task" not in spec["inputSchema"].get("required", [])

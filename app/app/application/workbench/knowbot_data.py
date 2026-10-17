@@ -1,6 +1,7 @@
 """分身读用户自己的数据（SDD 0027 §3.5）：工作台这一道核，核过再转给 knowlab 读。
 
-工具是 `list_my_data` 与 `read_my_data`，挂在读项目记录的同一个工具服务上，每次带委托编号：
+工具是 `list_my_data`、`read_my_data` 与按格子读的 `read_my_table`（0030 §3.1），挂在读项目记录的
+同一个工具服务上，每次带委托编号：
 - 委托是令牌里这个用户的、没结束、方向盘在专家手里（同读项目记录）；
 - 委托的专家是用户请来的分身，或 knowlab 测试中的草稿；
 - 要读的数据在这一版清单的 `data_bindings` 里：分身看钉表里的清单（摘要要和委托上的一样），
@@ -12,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.application.ports.workbench import KnowbotDataSource
+from app.application.ports.workbench import KnowbotDataSource, WorkbenchStore
 from app.application.workbench.catalog import SOURCE_KNOWMART, SOURCE_TEST
 from app.application.workbench.records import ProjectRecords, as_id
 from app.application.workbench.test_runs import ACTIVE
@@ -30,7 +31,7 @@ class KnowbotData:
 
     async def list(self, task: Any) -> dict[str, Any]:
         working, purpose, bound = await self._scope(task)
-        found = [d for d in await self.source.list(purpose) if _same(d, bound)]
+        found = [d for d in await self.source.list(purpose) if same_binding(d, bound)]
         await self.records._noted(working, "list_my_data")
         return {"datasets": found}
 
@@ -44,9 +45,33 @@ class KnowbotData:
         except (TypeError, ValueError):
             number = 1
         result = await self.source.read(purpose, dataset_id, number)
-        if not _same(result.get("citation") or {}, bound):
+        if not same_binding(result.get("citation") or {}, bound):
             raise NotFound("data not found")
         await self.records._noted(working, "read_my_data", item=dataset_id, page=number)
+        return result
+
+    async def table(
+        self, task: Any, dataset: Any, sheet: Any = None, page: Any = 1
+    ) -> dict[str, Any]:
+        working, purpose, bound = await self._scope(task)
+        dataset_id = as_id(dataset, "data")
+        if dataset_id not in bound:
+            raise NotFound("data not found")
+        name = str(sheet)[:512] if isinstance(sheet, str) and sheet else None
+        try:
+            number = max(1, int(page or 1))
+        except (TypeError, ValueError):
+            number = 1
+        result = await self.source.table(purpose, dataset_id, name, number)
+        if not same_binding(result.get("citation") or {}, bound):
+            raise NotFound("data not found")
+        await self.records._noted(
+            working,
+            "read_my_table",
+            item=dataset_id,
+            sheet=result.get("sheet"),
+            page=number,
+        )
         return result
 
     async def _scope(
@@ -54,40 +79,51 @@ class KnowbotData:
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, tuple[str, str]]]:
         """（委托，给 knowlab 的用途，这一版能读的数据）。"""
         working = await self.records._working(task)
-        source = working.get("pack_source")
-        if source == SOURCE_KNOWMART:
-            ref = knowbots.parse_profile(working.get("profile_id"))
-            pin = (
-                await self.repo.get_knowbot_pin(
-                    owner_actor_id=self.records.owner, knowbot_id=ref[0], version=ref[1]
-                )
-                if ref
-                else None
-            )
-            if pin is None or pin["digest"] != working.get("pack_digest"):
-                raise RecordsRefused(NO_DATA)
-            purpose = {
-                "kind": "knowbot",
-                "owner_subject": pin["owner_subject"],
-                "knowbot_id": ref[0] if ref else "",
-                "version": ref[1] if ref else "",
-                "digest": pin["digest"],
-            }
-            bound = knowbots.data_bindings(pin["manifest"])
-        elif source == SOURCE_TEST:
-            run = await self.repo.test_run_for_task(str(working["id"]))
-            if run is None or run["status"] not in ACTIVE:
-                raise RecordsRefused(NO_DATA)
-            purpose = {"kind": "test", "run_id": run["run_id"]}
-            bound = knowbots.data_bindings((run["request"] or {}).get("manifest"))
-        else:
-            raise RecordsRefused(NO_DATA)
-        if not bound:
-            raise RecordsRefused(NO_DATA)
+        purpose, bound = await data_scope(self.repo, self.records.owner, working)
         return working, purpose, bound
 
 
-def _same(entry: dict[str, Any], bound: dict[str, tuple[str, str]]) -> bool:
+async def data_scope(
+    repo: WorkbenchStore, owner: str, working: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, tuple[str, str]]]:
+    """这个委托能读哪些数据：（给 knowlab 的用途，数据 id → （版本，sha256））。
+
+    委托本身该不该读（是不是这个用户的、方向盘在不在专家手里）由调用方先核。
+    """
+    source = working.get("pack_source")
+    if source == SOURCE_KNOWMART:
+        ref = knowbots.parse_profile(working.get("profile_id"))
+        pin = (
+            await repo.get_knowbot_pin(
+                owner_actor_id=owner, knowbot_id=ref[0], version=ref[1]
+            )
+            if ref
+            else None
+        )
+        if pin is None or pin["digest"] != working.get("pack_digest"):
+            raise RecordsRefused(NO_DATA)
+        purpose = {
+            "kind": "knowbot",
+            "owner_subject": pin["owner_subject"],
+            "knowbot_id": ref[0] if ref else "",
+            "version": ref[1] if ref else "",
+            "digest": pin["digest"],
+        }
+        bound = knowbots.data_bindings(pin["manifest"])
+    elif source == SOURCE_TEST:
+        run = await repo.test_run_for_task(str(working["id"]))
+        if run is None or run["status"] not in ACTIVE:
+            raise RecordsRefused(NO_DATA)
+        purpose = {"kind": "test", "run_id": run["run_id"]}
+        bound = knowbots.data_bindings((run["request"] or {}).get("manifest"))
+    else:
+        raise RecordsRefused(NO_DATA)
+    if not bound:
+        raise RecordsRefused(NO_DATA)
+    return purpose, bound
+
+
+def same_binding(entry: dict[str, Any], bound: dict[str, tuple[str, str]]) -> bool:
     """knowlab 给回来的就是清单里绑的那一份：数据 id、版本、sha256 都一样。"""
     found = bound.get(str(entry.get("dataset_id")))
     return found is not None and found == (

@@ -472,6 +472,21 @@ class FakeDataSource:
         citation = {**self.binding, "sha256": self.sha, "page": page, "pages": 1}
         return {"dataset_id": dataset_id, "text": "营收,100", "citation": citation}
 
+    async def cells(self, purpose, cells):
+        """每一格都是 100（0030 §3.1）。"""
+        self.purposes.append(purpose)
+        return [
+            {
+                **ref,
+                "found": True,
+                "raw": "100",
+                "number": "100",
+                "version": "1",
+                "sha256": self.sha,
+            }
+            for ref in cells
+        ]
+
 
 async def test_a_test_reads_its_bound_data_only_while_it_runs(db):
     """测试中的草稿经工作台读用户数据：委托在跑才转给 knowlab，结束了就拒（0027 §3.5）。"""
@@ -552,6 +567,108 @@ async def test_a_test_reads_its_bound_data_only_while_it_runs(db):
         async with db() as s:
             with pytest.raises(RecordsRefused):  # 委托结束了：不再转发
                 await data(s).list(task_id)
+    finally:
+        await close(runner)
+        await fake.close()
+
+
+async def test_computed_numbers_are_recorded_and_checked_on_the_real_store(db):
+    """0030：测试中的草稿用 compute 算数，记进计算记录；交回的数对不上就退回重做，对上了才过。"""
+    from app.application.workbench.knowbot_compute import COMPUTE_EVENT, KnowbotCompute
+    from app.application.workbench.records import ProjectRecords
+    from app.domain.workbench import compute as calc
+
+    binding = {"dataset_id": str(uuid.uuid4()), "version": "1", "sha256": "a" * 64}
+    doc = asking()
+    doc["data_bindings"] = [binding]
+    for step in doc["pack"]["workflow"]:
+        step["tools"] = ["list_my_data", "read_my_table", "compute"]
+    last = doc["pack"]["workflow"][-1]
+    last["acceptance"] = [
+        *last["acceptance"],
+        {
+            "kind": "computed",
+            "path": "figures",
+            "expression": "a + b",
+            "message": "数要由 compute 算",
+            "label": "算出来的数",
+        },
+    ]
+    last["max_reworks"] = 1
+    source = FakeDataSource(binding)
+    fake = ScriptedAppServer([])
+    await fake.start()
+    runner = runner_for(db, records=True)
+    try:
+        await setup_test_computer(db, fake)
+        await accept(db, request("knowlab-run-0050", doc=doc))
+        conductor = KnowbotTestConductor(workbench_stores(db), CONFIG)
+        await conductor.tick()
+        await drive(runner)
+        async with db() as s:
+            task_id = str(
+                (await s.execute(text("select id from workbench_tasks"))).scalar()
+            )
+        cell = calc.address(binding["dataset_id"], "利润表", "营业收入", "2024-06-30")
+        async with db() as s:
+            tool = KnowbotCompute(
+                ProjectRecords(WorkbenchRepository(s), owner_actor_id=OWNER), source
+            )
+            done = await tool.compute(task_id, "合计", "a + b", {"a": cell, "b": cell})
+            await s.commit()
+        assert done["value"] == "200"
+        async with db() as s:
+            events = await WorkbenchRepository(s).list_task_events(
+                task_id, types=(COMPUTE_EVENT,)
+            )
+        assert [f"c{e['cursor']}" for e in events] == [done["id"]]
+        assert events[0]["payload"]["inputs"][0]["ref"] == cell
+
+        def answer_with(value):
+            return json.dumps(
+                {
+                    **json.loads(ANSWER),
+                    "figures": [{"compute_id": done["id"], "value": value}],
+                }
+            )
+
+        fake.replies += [PLAN, answer_with(201), answer_with("200")]
+        [q] = (await status(db, "knowlab-run-0050"))["questions"]
+        await answer(
+            db,
+            "knowlab-run-0050",
+            {
+                "answers": [
+                    {
+                        "question_id": q["question_id"],
+                        "option_id": "3y",
+                        "answered_by": "user",
+                    }
+                ]
+            },
+        )
+        await conductor.tick()
+        await drive(runner)
+        await conductor.tick()
+        await conductor.tick()
+        assert (await status(db, "knowlab-run-0050"))["status"] == "passed"
+        async with db() as s:
+            judged = await WorkbenchRepository(s).list_task_events(
+                task_id, types=("step/rejected", "step/accepted")
+            )
+        computed = [
+            (e["type"], c["pass"])
+            for e in judged
+            for c in e["payload"]["checks"]
+            if c["rule"] == "computed"
+        ]
+        assert computed == [("step/rejected", False), ("step/accepted", True)]
+        assert any("read_my_table" in t and "compute_id" in t for t in fake.turn_inputs)
+        [rejected] = [e for e in judged if e["type"] == "step/rejected"]
+        assert any(
+            "says 201 but computed 200" in c["detail"]
+            for c in rejected["payload"]["checks"]
+        )
     finally:
         await close(runner)
         await fake.close()

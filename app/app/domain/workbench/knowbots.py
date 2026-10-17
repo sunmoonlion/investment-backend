@@ -29,8 +29,10 @@ KNOWBOT_ID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 VERSION = r"[1-9][0-9]{0,5}"
 REF = re.compile(rf"^({KNOWBOT_ID})@({VERSION})$")
 PROFILE = re.compile(rf"^{PREFIX}({KNOWBOT_ID})@({VERSION})$")
-# 分身能用的工具：只有读用户自己数据的这两个（0027 §3.5）
-DATA_TOOLS: frozenset[str] = frozenset({"list_my_data", "read_my_data"})
+# 分身能用的工具：读用户自己的数据（0027 §3.5）、按格子读与计算（0030 §3.1、§3.2）
+DATA_TOOLS: frozenset[str] = frozenset(
+    {"list_my_data", "read_my_data", "read_my_table", "compute"}
+)
 KNOWBOT_TOOLS: frozenset[str] = DATA_TOOLS
 _PLATFORM = ToolPolicy()
 
@@ -138,5 +140,8 @@ def data_bindings(manifest: object) -> dict[str, tuple[str, str]]:
     found: dict[str, tuple[str, str]] = {}
     for item in raw if isinstance(raw, list) else []:
         if isinstance(item, dict) and isinstance(item.get("dataset_id"), str):
-            found[item["dataset_id"]] = (str(item.get("version")), str(item.get("sha256")))
+            found[item["dataset_id"]] = (
+                str(item.get("version")),
+                str(item.get("sha256")),
+            )
     return found
