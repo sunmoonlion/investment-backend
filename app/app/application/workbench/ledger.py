@@ -854,7 +854,22 @@ class Ledger:
                         expected_version=int(task["state_version"]),
                         active_interaction_id=None,
                     )
-                    if response.get("decision") == "stop":
+                    if response.get("decision") == "stop" and (
+                        (it.get("prompt") or {}).get("subject") or {}
+                    ).get("out_of_scope"):
+                        # 专家说不归它、用户也说不做了：这件委托是取消，不是失败（账 130）
+                        result.update(
+                            await self.transition(
+                                str(task["id"]),
+                                TaskState.CANCELLED,
+                                reason={
+                                    "interaction": interaction_id,
+                                    "by": "user",
+                                    "code": "out_of_scope",
+                                },
+                            )
+                        )
+                    elif response.get("decision") == "stop":
                         result.update(
                             await self.transition(
                                 str(task["id"]),

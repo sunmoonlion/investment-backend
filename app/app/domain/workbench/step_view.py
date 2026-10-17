@@ -48,6 +48,8 @@ def reason_text(state: str, reason: dict[str, Any] | None) -> str:
         return "这段对话还没有准备好"
     if reason.get("code") == "missing_input":
         return "前面步骤的交回物缺了，做不下去"
+    if reason.get("code") == "out_of_scope":
+        return "专家看这个问题不归它，你选择了不做；可以直接在对话里问"
     if state == TaskState.CANCELLED:
         return "你取消了这个委托"
     if reason.get("by") == "user stopped":

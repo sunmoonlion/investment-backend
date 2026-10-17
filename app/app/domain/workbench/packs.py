@@ -118,6 +118,17 @@ class StepContract(Strict):
     output_file: str | None = None
 
 
+class Scope(Strict):
+    """这位专家接什么、不接什么。第一步先按它判问题是不是给这位专家的（受理关口，账 130）。
+
+    不写就从六问的「解决什么」「不解决什么」里取，六问没写的再用名字与一句话介绍：分身的清单不用改也有这道关口。
+    """
+
+    does: str  # 接什么：一两句白话
+    does_not: str = ""  # 明确不接的
+    elsewhere: str = ""  # 不接的去哪里问
+
+
 class DossierBlock(Strict):
     """底稿里的一块：取哪个交回物的哪一项，画成什么。"""
 
@@ -162,6 +173,18 @@ class ExpertPack(Strict):
     tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     answers: dict[str, str] = Field(default_factory=dict)  # 六问
     requires_tools: bool = False
+    scope: Scope | None = None
+
+    def intake_scope(self) -> Scope | None:
+        """受理时按什么判。只给我们自己测机制用的专家不设关口（所有者 2026-10-17：演示时问了无关问题，模型报错）。"""
+        if self.internal:
+            return None
+        if self.scope is not None:
+            return self.scope
+        does = self.answers.get("解决什么") or "；".join(
+            part for part in (self.name or self.title, self.tagline) if part
+        )
+        return Scope(does=does, does_not=self.answers.get("不解决什么", ""))
 
     @model_validator(mode="after")
     def _steps_only_stricter(self) -> ExpertPack:

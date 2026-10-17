@@ -18,7 +18,7 @@ from app.application.ports.workbench import (
     WorkbenchStore,
     WorkbenchStores,
 )
-from app.application.workbench.acceptance import judge, timed_out
+from app.application.workbench.acceptance import judge, out_of_scope, timed_out
 from app.application.workbench.acceptance_numbers import judge_numbers
 from app.application.workbench.catalog import SNAPSHOT_SOURCES, pack_for_task
 from app.application.workbench.deliverable_check import DeliverableCheck, harden
@@ -36,7 +36,7 @@ from app.domain.workbench.deliverables import (
 from app.domain.workbench.errors import BudgetExhausted
 from app.domain.workbench.memory import memory_note
 from app.domain.workbench.models import InteractionPrompt
-from app.domain.workbench.packs import ExpertPack, StepContract, find_pack
+from app.domain.workbench.packs import ExpertPack, Scope, StepContract, find_pack
 from app.domain.workbench.projects import NO_DETOUR
 from app.domain.workbench.records import one_line
 from app.domain.workbench.states import (
@@ -181,9 +181,10 @@ class Advisor:
             step = pack.step(int(task["current_step"]))
             if step is None:
                 return await self._finish(led, repo, task, pack)
+            attempts = await repo.list_attempts(task_id)
             reworks = sum(
                 1
-                for a in await repo.list_attempts(task_id)
+                for a in attempts
                 if a["step_id"] == step.step_id
                 and a["status"] == AttemptState.FAILED
                 and a["failure_code"] == "acceptance"
@@ -283,6 +284,14 @@ class Advisor:
                     it["interaction_id"],
                 )
                 return TaskState.WAITING
+            # 受理关口（账 130）：第一步先判问题归不归这位专家。做过一步的、用户说了照做的，不再判
+            intake = (
+                pack.intake_scope()
+                if step.step_id == pack.workflow[0].step_id
+                and not answered["proceed"]
+                and not any(a["status"] == AttemptState.COMPLETED for a in attempts)
+                else None
+            )
             # 这一次委托的底稿放在自己那一格，不覆盖别的对话与前几次（所有者 2026-10-14）
             folder = run_folder(
                 str(task["session_id"]), task["created_at"], pack.name or pack.title
@@ -322,6 +331,7 @@ class Advisor:
                     )
                 ),
                 last_step=pack.workflow[-1].step_id == step.step_id,
+                intake=intake,
             )
 
         result = await self.driver.run_turn(
@@ -432,6 +442,11 @@ class Advisor:
                         task_id, TaskState.FAILED, reason={"error": result.error}
                     )
                 )["state"]
+            declined = out_of_scope(result.final_text) if intake else None
+            if declined is not None:
+                return await self._out_of_scope(
+                    led, repo, task, pack, step, attempt_id, result, declined
+                )
             budget = task["budget"]
             # 用户给了上限才有「超了」这回事。不给上限的，花多少记多少，停不停由用户看着定
             limit = budget.get("limit")
@@ -644,7 +659,11 @@ class Advisor:
         self, repo: WorkbenchStore, task: dict[str, Any], step: StepContract
     ) -> dict[str, Any]:
         """这一步已经问过用户、用户答过的：开步前的问题，和停下 / 返工时附的要求。"""
-        out: dict[str, Any] = {"ask_before": None, "change_request": None}
+        out: dict[str, Any] = {
+            "ask_before": None,
+            "change_request": None,
+            "proceed": False,
+        }
         consumed = [
             it
             for it in await repo.list_interactions(
@@ -675,8 +694,10 @@ class Advisor:
                 elif isinstance(answer, str):
                     note = answer
                 note = note or subject.get("note")
-                if note and response.get("decision") == "rework":
+                if note and response.get("decision") in ("rework", "proceed"):
                     out["change_request"] = str(note)
+                if subject.get("out_of_scope") and response.get("decision") != "stop":
+                    out["proceed"] = True
         return out
 
     async def _no_data(
@@ -721,6 +742,64 @@ class Advisor:
             waiting_reason=WaitingReason.INPUT,
             attempt_id=attempt_id,
         )
+        return TaskState.WAITING
+
+    async def _out_of_scope(
+        self,
+        led: Ledger,
+        repo: WorkbenchStore,
+        task: dict[str, Any],
+        pack: ExpertPack,
+        step: StepContract,
+        attempt_id: str,
+        result: TurnResult,
+        declined: dict[str, str],
+    ) -> str:
+        """专家说这个问题不归它：这一步不算做过、不算返工，停下问用户照做还是不做（账 130）。"""
+        task_id = str(task["id"])
+        await led.attempt_transition(
+            attempt_id,
+            AttemptState.CANCELLED,
+            consumed=result.cost or Decimal("0"),
+            tokens=result.tokens,
+            failure_code="out_of_scope",
+        )
+        await repo.append_event(
+            session_id=str(task["session_id"]),
+            kind="task",
+            event_type="step/out_of_scope",
+            payload={"step_id": step.step_id, **declined},
+            task_id=task_id,
+            attempt_id=attempt_id,
+        )
+        await repo.commit()
+        name = pack.name or pack.title
+        await led.open_interaction(
+            task_id,
+            kind="input",
+            prompt=InteractionPrompt(
+                title=f"这个问题看起来不归「{name}」",
+                question="\n".join(
+                    line
+                    for line in (
+                        declined["reason"],
+                        f"建议：{declined['suggestion']}"
+                        if declined["suggestion"]
+                        else "",
+                        "要专家照做，还是不做了？",
+                    )
+                    if line
+                ),
+                options=[
+                    {"id": "proceed", "label": "照做"},
+                    {"id": "stop", "label": "不做了"},
+                ],
+                subject={"step_id": step.step_id, "out_of_scope": True, **declined},
+            ),
+            waiting_reason=WaitingReason.INPUT,
+            attempt_id=attempt_id,
+        )
+        log.info("task %s declined as out of scope at %s", task_id, step.step_id)
         return TaskState.WAITING
 
     async def _requeue(self, led: Ledger, task_id: str) -> bool:
@@ -816,6 +895,7 @@ class Advisor:
         user_facts: str | None = None,
         last_step: bool = False,
         folder: str | None = None,
+        intake: Scope | None = None,
     ) -> str:
         parts = [
             f"# Advisor step: {step.title} ({step.step_id}, v{step.step_version})",
@@ -824,6 +904,23 @@ class Advisor:
             "## The user's question",
             json.dumps(question, ensure_ascii=False),
             "",
+        ]
+        if intake:
+            parts += [
+                "## First: is this question for this expert?",
+                f"This expert does: {intake.does}",
+                *([f"It does not do: {intake.does_not}"] if intake.does_not else []),
+                *([f"Elsewhere: {intake.elsewhere}"] if intake.elsewhere else []),
+                "If the question is clearly unrelated to what this expert does (small "
+                "talk, general knowledge, coding, or a different kind of task), do not do "
+                "this step and call no tools: reply with ONE JSON object only, "
+                '{"out_of_scope": true, "reason": "<one sentence>", "suggestion": '
+                '"<where or how to ask instead>"}, written in the language of the '
+                "question. A vague, broad or partly covered question is NOT out of "
+                "scope: do the step and ask or state assumptions as the method says.",
+                "",
+            ]
+        parts += [
             "## Method for this step",
             step.method_text,
             "",

@@ -131,6 +131,23 @@ def timed_out(minutes: int, rules: tuple[AcceptanceRule, ...]) -> Verdict:
     )
 
 
+OUT_OF_SCOPE_CHARS = 500
+
+
+def out_of_scope(text: str | None) -> dict[str, str] | None:
+    """受理关口的回答（账 130）：专家说这个问题不归它，回 {reason, suggestion}；别的回答都回 None。"""
+    try:
+        reply = _extract_json(text or "")
+    except ValueError:
+        return None
+    if not isinstance(reply, dict) or reply.get("out_of_scope") is not True:
+        return None
+    return {
+        "reason": _text_of(reply.get("reason")).strip()[:OUT_OF_SCOPE_CHARS],
+        "suggestion": _text_of(reply.get("suggestion")).strip()[:OUT_OF_SCOPE_CHARS],
+    }
+
+
 def judge(text: str | None, rules: tuple[AcceptanceRule, ...]) -> Verdict:
     v = Verdict(ok=True)
     parsed: Any = None

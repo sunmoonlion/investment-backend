@@ -22,10 +22,23 @@ KIND_WORDS = {
 }
 
 
+OUT_OF_SCOPE = "问题不归这位专家"
+
+
 def consequence(
-    option: str, kind: str, *, reserve: str | None, done: int | None
+    option: str,
+    kind: str,
+    *,
+    reserve: str | None,
+    done: int | None,
+    out_of_scope: bool = False,
 ) -> str:
     """选了会怎样。包括要不要再花钱。"""
+    if out_of_scope:  # 受理关口（账 130）：还一步没做
+        if option == "proceed":
+            return "专家不再判归不归它，照着它的步骤做。要花钱，花了多少顶部实时显示"
+        if option == "stop":
+            return "委托取消，不再花钱。这个问题可以直接在对话里问"
     finished = "做完的部分" if done is None else f"做完的 {done} 步"
     if kind == "resource":
         if option == "topup":
@@ -58,7 +71,10 @@ def why(
     *,
     missing: bool = False,
     backs: int = 0,
+    out_of_scope: bool = False,
 ) -> str:
+    if out_of_scope:
+        return "专家看这个问题不归它，还没开始做，先停下来问你"
     if kind == "resource":
         return "预算不够做下一步了。专家不会超出你给的上限"
     if kind == "tool_approval":
@@ -96,6 +112,7 @@ def review_view(
     prompt = interaction.get("prompt") or {}
     kind = str(interaction["kind"])
     subject = dict(prompt.get("subject") or {})
+    declined = bool(subject.get("out_of_scope"))
     last = (step or {}).get("attempts") or []
     failed = [
         {"label": c["label"], "message": c["message"]}
@@ -128,7 +145,7 @@ def review_view(
         "step": None
         if step is None
         else {"index": step["index"], "title": step["title"]},
-        "about": KIND_WORDS.get(kind, kind),
+        "about": OUT_OF_SCOPE if declined else KIND_WORDS.get(kind, kind),
     }
     view: dict[str, Any] = {
         "interaction_id": str(interaction["id"]),
@@ -141,6 +158,7 @@ def review_view(
             len([a for a in last if a["outcome"] == "rejected"]),
             missing=bool(subject.get("missing_data")),
             backs=int(subject.get("backs") or 0),
+            out_of_scope=declined,
         ),
         "failed": failed,
         # 停在「没有数据」：页面在这里放「没有数据」卡片
@@ -159,7 +177,11 @@ def review_view(
                 "id": option.get("id"),
                 "label": option.get("label"),
                 "consequence": consequence(
-                    str(option.get("id")), kind, reserve=reserve, done=done
+                    str(option.get("id")),
+                    kind,
+                    reserve=reserve,
+                    done=done,
+                    out_of_scope=declined,
                 ),
                 "needs_amount": kind == "resource" and option.get("id") == "topup",
             }
