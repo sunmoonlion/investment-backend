@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.application.ports.workbench import (
     AppServerConnector,
     EventPublisher,
+    KnowbotDataSource,
     KnowmartSummoner,
     Provisioner,
     RelayAdmin,
@@ -28,6 +29,7 @@ from app.application.workbench.test_runs import (
     KnowbotTestService,
 )
 from app.domain.workbench.pricing import PriceList
+from app.infrastructure.external.knowlab_data_client import KnowlabDataClient
 from app.infrastructure.external.knowmart_client import KnowmartSummonClient
 from app.infrastructure.workbench.agent_release import S3ReleaseStore
 from app.infrastructure.workbench.app_server_client import WsAppServerConnector
@@ -55,6 +57,12 @@ def agent_release_store(settings) -> ReleaseStore:
 def knowmart_summoner() -> KnowmartSummoner:
     """向 knowmart 取分身清单（令牌缓存在里面，进程内共用）。"""
     return KnowmartSummonClient()
+
+
+@lru_cache(maxsize=1)
+def knowbot_data_source() -> KnowbotDataSource:
+    """向 knowlab 读分身绑定的用户数据（0027 §3.5；令牌缓存在里面，进程内共用）。"""
+    return KnowlabDataClient()
 
 
 def workbench_store(session: AsyncSession) -> WorkbenchStore:

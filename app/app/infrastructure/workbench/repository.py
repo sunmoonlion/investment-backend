@@ -1332,6 +1332,18 @@ class WorkbenchRepository:
             {**changes, "run_id": run_id},
         )
 
+    async def test_run_for_task(self, task_id: str) -> dict[str, Any] | None:
+        r = await self.session.execute(
+            text(
+                """select r.* from workbench_test_runs r
+                   join workbench_test_cases c on c.run_id = r.run_id
+                   where c.task_id = :t"""
+            ),
+            {"t": task_id},
+        )
+        row = r.mappings().first()
+        return dict(row) if row else None
+
     async def list_test_cases(self, run_id: str) -> list[dict[str, Any]]:
         r = await self.session.execute(
             text(

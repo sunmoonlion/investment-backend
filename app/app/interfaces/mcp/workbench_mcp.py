@@ -1,4 +1,5 @@
-"""工作台的工具服务：专家读本项目里别的对话与底稿（PRD/apps/investment.md 7.4）。
+"""工作台的工具服务：专家读本项目里别的对话与底稿（PRD/apps/investment.md 7.4），
+分身读用户自己绑定的数据（SDD 0027 §3.5）。
 
 Streamable HTTP，只用 JSON 响应，不开流。和知识服务的工具并列，由沙箱里的 Codex 调用。
 - 鉴权：`Authorization: Bearer <令牌>`，令牌由工作台签发、工作台自己验，绑定用户；
@@ -20,10 +21,11 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.workbench.knowbot_data import KnowbotData
 from app.application.workbench.library import Library
 from app.application.workbench.records import ProjectRecords
 from app.application.workbench.tokens import TokenIssuer
-from app.bootstrap.workbench import workbench_store
+from app.bootstrap.workbench import knowbot_data_source, workbench_store
 from app.domain.workbench.errors import WorkbenchError
 from app.infrastructure.storage.postgres import get_db_session
 from app.interfaces.endpoints.workbench_routes import (
@@ -118,6 +120,38 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    # 分身读用户自己的数据（0027 §3.5）：只有这一版清单绑定的那几份，经 knowlab 读出文字
+    "list_my_data": {
+        "description": (
+            "List the user's own data bound to this expert: dataset_id, name, "
+            "content_type, size_bytes, version, sha256. Only these can be read."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task": _TASK},
+            "required": ["task"],
+            "additionalProperties": False,
+        },
+    },
+    "read_my_data": {
+        "description": (
+            "Read one of the user's datasets as text (CSV as is; Excel as CSV per "
+            "sheet; PDF page by page). Paged; ask for the next page when `pages` is "
+            "greater than `page`. Quote the citation {dataset_id, version, sha256, "
+            "page} for every number you take from it. If `note` says the text was "
+            "cut or has no readable text, say so instead of guessing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": _TASK,
+                "dataset": {"type": "string", "description": "Id from list_my_data."},
+                "page": {"type": "integer", "minimum": 1, "default": 1},
+            },
+            "required": ["task", "dataset"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -180,6 +214,12 @@ async def _library_call(
 async def call(records: ProjectRecords, name: str, args: dict[str, Any]) -> Any:
     if name in ("list_library", "read_library_item"):
         return await _library_call(records, name, args)
+    if name == "list_my_data":
+        return await KnowbotData(records, knowbot_data_source()).list(args.get("task"))
+    if name == "read_my_data":
+        return await KnowbotData(records, knowbot_data_source()).read(
+            args.get("task"), args.get("dataset"), args.get("page", 1)
+        )
     if name == "list_project_conversations":
         return await records.list_conversations(args.get("task"))
     if name == "read_project_conversation":
@@ -205,9 +245,10 @@ async def handle(
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_KNOWFEED,
                 "instructions": (
-                    "Read-only records of the user's project and the user's library. "
-                    "Project tools need the task id from the step instructions; the "
-                    "library tools work without it."
+                    "Read-only records of the user's project, the user's library and "
+                    "the user's own data bound to this expert. Project and data tools "
+                    "need the task id from the step instructions; the library tools "
+                    "work without it."
                 ),
             },
         )

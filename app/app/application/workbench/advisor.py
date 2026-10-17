@@ -18,7 +18,7 @@ from app.application.workbench.acceptance import judge, timed_out
 from app.application.workbench.catalog import SNAPSHOT_SOURCES, pack_for_task
 from app.application.workbench.deliverable_check import DeliverableCheck, harden
 from app.application.workbench.ledger import Ledger
-from app.domain.workbench import missing_data
+from app.domain.workbench import knowbots, missing_data
 from app.domain.workbench.deliverables import (
     DELIVERABLE_RULES,
     HANDBACK_FILE,
@@ -282,6 +282,13 @@ class Advisor:
                 reworks,
                 folder=folder,
                 records_task=task_id if self.records else None,
+                data_task=(
+                    task_id
+                    if self.records
+                    and task.get("pack_source") in SNAPSHOT_SOURCES
+                    and knowbots.DATA_TOOLS & set(step.tools)
+                    else None
+                ),
                 ask_before_answers=answered["ask_before"],
                 change_request=answered["change_request"],
                 user_facts=memory_note(
@@ -771,6 +778,7 @@ class Advisor:
         reworks: int,
         *,
         records_task: str | None = None,
+        data_task: str | None = None,
         ask_before_answers: dict[str, Any] | None = None,
         change_request: str | None = None,
         user_facts: str | None = None,
@@ -832,6 +840,18 @@ class Advisor:
                 "in the project directory: read them there. Use these only when the "
                 "question refers to earlier work in this project. They never replace "
                 "the data tools: numbers still come from the data tools of this step.",
+            ]
+        if data_task:
+            # 分身读用户自己绑定的数据（0027 §3.5）：步骤的工具里列了数据工具才说
+            parts += [
+                "",
+                "## The user's own data",
+                "The user bound their own data to this expert. List it with "
+                "list_my_data and read it with read_my_data; pass "
+                f'task="{data_task}" on every call. Numbers come only from this data '
+                "and the inputs above: quote the citation of each number you use. If "
+                "the data does not contain what this step needs, say so instead of "
+                "guessing.",
             ]
         if step.output_file:
             # 成稿是项目里的文件，给用户看的唯一一份（0015 §3.3）；JSON 仍回正文做机器验收

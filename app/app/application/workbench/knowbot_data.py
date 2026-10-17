@@ -1,0 +1,96 @@
+"""分身读用户自己的数据（SDD 0027 §3.5）：工作台这一道核，核过再转给 knowlab 读。
+
+工具是 `list_my_data` 与 `read_my_data`，挂在读项目记录的同一个工具服务上，每次带委托编号：
+- 委托是令牌里这个用户的、没结束、方向盘在专家手里（同读项目记录）；
+- 委托的专家是用户请来的分身，或 knowlab 测试中的草稿；
+- 要读的数据在这一版清单的 `data_bindings` 里：分身看钉表里的清单（摘要要和委托上的一样），
+  测试看测试请求里的清单。
+knowlab 那边按自己的草稿与交付记录再核一次。委托一结束，这里就不再转发。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.application.ports.workbench import KnowbotDataSource
+from app.application.workbench.catalog import SOURCE_KNOWMART, SOURCE_TEST
+from app.application.workbench.records import ProjectRecords, as_id
+from app.application.workbench.test_runs import ACTIVE
+from app.domain.workbench import knowbots
+from app.domain.workbench.errors import NotFound, RecordsRefused
+
+NO_DATA = "this expert has no data of the user to read"
+
+
+class KnowbotData:
+    def __init__(self, records: ProjectRecords, source: KnowbotDataSource) -> None:
+        self.records = records
+        self.repo = records.repo
+        self.source = source
+
+    async def list(self, task: Any) -> dict[str, Any]:
+        working, purpose, bound = await self._scope(task)
+        found = [d for d in await self.source.list(purpose) if _same(d, bound)]
+        await self.records._noted(working, "list_my_data")
+        return {"datasets": found}
+
+    async def read(self, task: Any, dataset: Any, page: Any = 1) -> dict[str, Any]:
+        working, purpose, bound = await self._scope(task)
+        dataset_id = as_id(dataset, "data")
+        if dataset_id not in bound:
+            raise NotFound("data not found")
+        try:
+            number = max(1, int(page or 1))
+        except (TypeError, ValueError):
+            number = 1
+        result = await self.source.read(purpose, dataset_id, number)
+        if not _same(result.get("citation") or {}, bound):
+            raise NotFound("data not found")
+        await self.records._noted(working, "read_my_data", item=dataset_id, page=number)
+        return result
+
+    async def _scope(
+        self, task: Any
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, tuple[str, str]]]:
+        """（委托，给 knowlab 的用途，这一版能读的数据）。"""
+        working = await self.records._working(task)
+        source = working.get("pack_source")
+        if source == SOURCE_KNOWMART:
+            ref = knowbots.parse_profile(working.get("profile_id"))
+            pin = (
+                await self.repo.get_knowbot_pin(
+                    owner_actor_id=self.records.owner, knowbot_id=ref[0], version=ref[1]
+                )
+                if ref
+                else None
+            )
+            if pin is None or pin["digest"] != working.get("pack_digest"):
+                raise RecordsRefused(NO_DATA)
+            purpose = {
+                "kind": "knowbot",
+                "owner_subject": pin["owner_subject"],
+                "knowbot_id": ref[0] if ref else "",
+                "version": ref[1] if ref else "",
+                "digest": pin["digest"],
+            }
+            bound = knowbots.data_bindings(pin["manifest"])
+        elif source == SOURCE_TEST:
+            run = await self.repo.test_run_for_task(str(working["id"]))
+            if run is None or run["status"] not in ACTIVE:
+                raise RecordsRefused(NO_DATA)
+            purpose = {"kind": "test", "run_id": run["run_id"]}
+            bound = knowbots.data_bindings((run["request"] or {}).get("manifest"))
+        else:
+            raise RecordsRefused(NO_DATA)
+        if not bound:
+            raise RecordsRefused(NO_DATA)
+        return working, purpose, bound
+
+
+def _same(entry: dict[str, Any], bound: dict[str, tuple[str, str]]) -> bool:
+    """knowlab 给回来的就是清单里绑的那一份：数据 id、版本、sha256 都一样。"""
+    found = bound.get(str(entry.get("dataset_id")))
+    return found is not None and found == (
+        str(entry.get("version")),
+        str(entry.get("sha256")),
+    )

@@ -5,7 +5,8 @@
 委托上的是这一版的包快照与摘要，之后编排、底稿、验收都读快照，knowmart 停了也不影响在跑的。
 
 分身是用户的方法，不是我们的：工具与审批只能比平台默认更严，不许自带命令放行前缀；
-不许用数据线的工具（`C-L2`：分身运行时只读用户自己的数据，读数据的工具 P5 才有）。
+不许用数据线的工具（`C-L2`：分身运行时只读用户自己的数据）。读用户数据只有两个工具，
+`list_my_data` 与 `read_my_data`，经工作台转到 knowlab，只读这一版清单 `data_bindings` 里的（0027 §3.5）。
 """
 
 from __future__ import annotations
@@ -28,8 +29,9 @@ KNOWBOT_ID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 VERSION = r"[1-9][0-9]{0,5}"
 REF = re.compile(rf"^({KNOWBOT_ID})@({VERSION})$")
 PROFILE = re.compile(rf"^{PREFIX}({KNOWBOT_ID})@({VERSION})$")
-# 分身能用的工具。现在一个都没有：读用户数据的 sunmoon_knowlab 工具在 P5 加进来
-KNOWBOT_TOOLS: frozenset[str] = frozenset()
+# 分身能用的工具：只有读用户自己数据的这两个（0027 §3.5）
+DATA_TOOLS: frozenset[str] = frozenset({"list_my_data", "read_my_data"})
+KNOWBOT_TOOLS: frozenset[str] = DATA_TOOLS
 _PLATFORM = ToolPolicy()
 
 
@@ -123,8 +125,18 @@ def pack_from_manifest(
         extra = set(step.tools) - KNOWBOT_TOOLS
         if extra:
             problems.append(f"step {step.step_id} uses tools a knowbot cannot use")
-    if pack.requires_tools and not KNOWBOT_TOOLS:
-        problems.append("a knowbot cannot require data tools yet")
+    if pack.requires_tools:
+        problems.append("a knowbot cannot use the platform's data")
     if problems:
         raise KnowbotInvalid("; ".join(problems), knowbot=knowbot_id)
     return pack
+
+
+def data_bindings(manifest: object) -> dict[str, tuple[str, str]]:
+    """清单里这一版能读的用户数据：数据 id → （版本，sha256）。"""
+    raw = manifest.get("data_bindings") if isinstance(manifest, dict) else None
+    found: dict[str, tuple[str, str]] = {}
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("dataset_id"), str):
+            found[item["dataset_id"]] = (str(item.get("version")), str(item.get("sha256")))
+    return found

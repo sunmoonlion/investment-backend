@@ -121,9 +121,13 @@ async def setup_test_computer(db, fake) -> None:
             )
 
 
-def runner_for(db):
+def runner_for(db, records=False):
     return build_runner(
-        db, publisher=RedisPublisher(None, "t"), runner_id="r", poll_seconds=0.05
+        db,
+        publisher=RedisPublisher(None, "t"),
+        runner_id="r",
+        poll_seconds=0.05,
+        records=records,
     )
 
 
@@ -447,5 +451,107 @@ async def test_a_mid_step_approval_is_answered_through_knowlab(db):
         for task in drivers:
             task.cancel()
         await asyncio.gather(*drivers, return_exceptions=True)
+        await close(runner)
+        await fake.close()
+
+
+class FakeDataSource:
+    """假的 knowlab：记下用途，按清单的绑定回数据（0027 §3.5）。"""
+
+    def __init__(self, binding: dict) -> None:
+        self.binding = binding
+        self.purposes: list[dict] = []
+        self.sha = binding["sha256"]
+
+    async def list(self, purpose):
+        self.purposes.append(purpose)
+        return [{**self.binding, "name": "年报.csv", "sha256": self.sha}]
+
+    async def read(self, purpose, dataset_id, page):
+        self.purposes.append(purpose)
+        citation = {**self.binding, "sha256": self.sha, "page": page, "pages": 1}
+        return {"dataset_id": dataset_id, "text": "营收,100", "citation": citation}
+
+
+async def test_a_test_reads_its_bound_data_only_while_it_runs(db):
+    """测试中的草稿经工作台读用户数据：委托在跑才转给 knowlab，结束了就拒（0027 §3.5）。"""
+    from app.application.workbench.knowbot_data import KnowbotData
+    from app.application.workbench.records import ProjectRecords
+    from app.domain.workbench.errors import NotFound, RecordsRefused
+
+    binding = {"dataset_id": str(uuid.uuid4()), "version": "1", "sha256": "a" * 64}
+    doc = asking()
+    doc["data_bindings"] = [binding]
+    for step in doc["pack"]["workflow"]:
+        step["tools"] = ["list_my_data", "read_my_data"]
+    source = FakeDataSource(binding)
+    fake = ScriptedAppServer([PLAN, ANSWER])
+    await fake.start()
+    runner = runner_for(db, records=True)  # 沙箱里配了工作台的工具服务
+    try:
+        await setup_test_computer(db, fake)
+        await accept(db, request("knowlab-run-0040", doc=doc))
+        conductor = KnowbotTestConductor(workbench_stores(db), CONFIG)
+        await conductor.tick()
+        await drive(runner)
+        assert (await status(db, "knowlab-run-0040"))["status"] == "waiting"
+        async with db() as s:
+            task_id = str(
+                (await s.execute(text("select id from workbench_tasks"))).scalar()
+            )
+
+        def data(s, owner=OWNER):
+            return KnowbotData(
+                ProjectRecords(WorkbenchRepository(s), owner_actor_id=owner), source
+            )
+
+        async with db() as s:
+            listed = await data(s).list(task_id)
+            assert [d["dataset_id"] for d in listed["datasets"]] == [
+                binding["dataset_id"]
+            ]
+            read = await data(s).read(task_id, binding["dataset_id"])
+            assert read["text"] == "营收,100"
+            with pytest.raises(NotFound):
+                await data(s).read(
+                    task_id, str(uuid.uuid4())
+                )  # 没绑定的：不去问 knowlab
+            await s.commit()
+        assert source.purposes == [{"kind": "test", "run_id": "knowlab-run-0040"}] * 2
+        source.sha = "b" * 64  # knowlab 回来的不是绑定的那一份：不给
+        async with db() as s:
+            assert (await data(s).list(task_id))["datasets"] == []
+            with pytest.raises(NotFound):
+                await data(s).read(task_id, binding["dataset_id"])
+        source.sha = binding["sha256"]
+        async with db() as s:
+            with pytest.raises(NotFound):  # 别人的委托
+                await data(s, owner=str(uuid.uuid4())).list(task_id)
+        [q] = (await status(db, "knowlab-run-0040"))["questions"]
+        await answer(
+            db,
+            "knowlab-run-0040",
+            {
+                "answers": [
+                    {
+                        "question_id": q["question_id"],
+                        "option_id": "3y",
+                        "answered_by": "user",
+                    }
+                ]
+            },
+        )
+        await conductor.tick()
+        await drive(runner)
+        await conductor.tick()
+        await conductor.tick()
+        assert (await status(db, "knowlab-run-0040"))["status"] == "passed"
+        assert any(
+            "## The user's own data" in t and task_id in t for t in fake.turn_inputs
+        )
+        async with db() as s:
+            with pytest.raises(RecordsRefused):  # 委托结束了：不再转发
+                await data(s).list(task_id)
+    finally:
         await close(runner)
         await fake.close()

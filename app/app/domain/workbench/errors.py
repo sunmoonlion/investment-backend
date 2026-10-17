@@ -190,6 +190,13 @@ class KnowbotInvalid(WorkbenchError):
     http_status = 422
 
 
+class UserDataUnavailable(WorkbenchError):
+    """分身绑定的用户数据暂时读不到：knowlab 不可达或没配好（0027 §3.5）。"""
+
+    code = "user_data_unavailable"
+    http_status = 503
+
+
 class KnowbotUnavailable(WorkbenchError):
     """knowmart 暂时取不到：只影响新的「请」，在跑的委托读自己钉住的那份。"""
 

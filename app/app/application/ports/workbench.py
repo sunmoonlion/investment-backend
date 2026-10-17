@@ -722,6 +722,10 @@ class WorkbenchStore(Protocol):
         """这个人请过的分身，新的在前。"""
         ...
 
+    async def test_run_for_task(self, task_id: str) -> dict[str, Any] | None:
+        """这件委托是哪一次分身测试的（没有就是 None）。"""
+        ...
+
     # ---------- 作为运行方跑分身测试（SDD 0027 §3.4）----------
     async def actor_for_subject(self, subject: str) -> str | None:
         """Casdoor 用户 id → 本地 actor id（测试账号用）；没登录过就是 None。"""
@@ -813,6 +817,20 @@ class KnowmartSummoner(Protocol):
 
     async def summon(
         self, *, owner_subject: str, knowbot_id: str, version: str
+    ) -> dict[str, Any]: ...
+
+
+class KnowbotDataSource(Protocol):
+    """读分身绑定的用户数据（knowlab，服务身份 knowlab:read，契约 knowbot-data/v1，0027 §3.5）。
+
+    purpose 是契约里的用途：`{"kind": "knowbot", ...}` 或 `{"kind": "test", "run_id"}`。
+    knowlab 按自己的记录再核一次，不符抛 NotFound；不可达或没配好抛 UserDataUnavailable。
+    """
+
+    async def list(self, purpose: dict[str, Any]) -> list[dict[str, Any]]: ...
+
+    async def read(
+        self, purpose: dict[str, Any], dataset_id: str, page: int
     ) -> dict[str, Any]: ...
 
 
